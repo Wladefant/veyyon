@@ -219,10 +219,12 @@ function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFileStem(sessionFile) : null;
 }
 
-const NATIVE_OWNER_SUFFIX = ".active-owner";
-const NATIVE_OWNER_LOCK = `${NATIVE_OWNER_SUFFIX}.lock`;
+const NATIVE_OWNER_LOCK = ".lock";
 const NATIVE_OWNER_TRANSITION = `${NATIVE_OWNER_LOCK}.transition`;
 const nativeRelocationGate = (directory: string): string => `${directory}.native-relocation`;
+// Keep leases outside the artifact tree. Close can retire its lease without
+// the relocation gate, and a concurrent move cannot carry off a retiring lease.
+const nativeOwnerDirectory = (directory: string): string => `${directory}.native-owners`;
 
 async function canonicalArtifactDirectory(directory: string): Promise<string> {
 	return fs.promises.realpath(directory).catch(async error => {
@@ -231,23 +233,29 @@ async function canonicalArtifactDirectory(directory: string): Promise<string> {
 	});
 }
 
+function nativeOwnerLockNames(directory: string): Promise<string[]> {
+	return fs.promises
+		.readdir(directory)
+		.then(names => names.filter(name => name.endsWith(NATIVE_OWNER_LOCK) || name.endsWith(NATIVE_OWNER_TRANSITION)))
+		.catch(error => {
+			if (!isEnoent(error)) throw error;
+			return [];
+		});
+}
+
 async function assertNoNativeOwners(directory: string): Promise<void> {
-	const names = await fs.promises.readdir(directory).catch(error => {
-		if (!isEnoent(error)) throw error;
-		return [];
-	});
-	// Native children share their root's artifact directory. Use the owner lock's
-	// stale-owner rules rather than treating a dead child as a permanent move veto.
+	const owners = nativeOwnerDirectory(directory);
+	const names = await nativeOwnerLockNames(owners);
+	// Let the lock utility retire dead owners; never unlink a lease ourselves.
 	for (const name of names) {
-		const suffix = name.endsWith(NATIVE_OWNER_LOCK)
-			? NATIVE_OWNER_LOCK
-			: name.endsWith(NATIVE_OWNER_TRANSITION)
-				? NATIVE_OWNER_TRANSITION
-				: undefined;
-		if (!suffix) continue;
+		const suffix = name.endsWith(NATIVE_OWNER_TRANSITION) ? NATIVE_OWNER_TRANSITION : NATIVE_OWNER_LOCK;
 		const transcript = name.slice(0, -suffix.length);
-		const owner = await tryWithFileLock(path.join(directory, `${transcript}${NATIVE_OWNER_SUFFIX}`), async () => {});
+		const owner = await tryWithFileLock(path.join(owners, transcript), async () => {});
 		if (!owner.acquired) throw new Error(`Cannot move session: active native transcript ${transcript}.`);
+	}
+	// Acquisition can succeed even if lock retirement later reports an error.
+	if (names.length && (await nativeOwnerLockNames(owners)).length) {
+		throw new Error(`Cannot move session: active native transcript in ${directory}.`);
 	}
 }
 
@@ -504,7 +512,7 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
-	#exclusiveOwner: { handle: FileLockHandle; gate: string; closing?: Promise<void> } | undefined;
+	#exclusiveOwner: { handle: FileLockHandle; closing?: Promise<void> } | undefined;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
 	#diskTail: Promise<void> = Promise.resolve();
 	#diskFailure: Error | undefined;
@@ -3180,10 +3188,14 @@ export class SessionManager {
 					const target = await canonicalArtifactDirectory(sessionFileStem(nextFile));
 					if (target === source) return this.#moveTo(resolvedCwd, nextSessionDir);
 					// Fail fast rather than deadlock with a competing move in the opposite direction.
-					return withFileLock(nativeRelocationGate(target), () => this.#moveTo(resolvedCwd, nextSessionDir), {
-						retries: 1,
-						queueWaitMs: 1,
-					});
+					return withFileLock(
+						nativeRelocationGate(target),
+						async () => {
+							await assertNoNativeOwners(target);
+							await this.#moveTo(resolvedCwd, nextSessionDir);
+						},
+						{ retries: 1, queueWaitMs: 1 },
+					);
 				});
 			}
 		}
@@ -3593,7 +3605,7 @@ export class SessionManager {
 		const owner = this.#exclusiveOwner;
 		if (!owner) return this.#close();
 		if (!owner.closing) {
-			owner.closing = this.#close().finally(() => withFileLock(owner.gate, () => owner.handle.release()));
+			owner.closing = this.#close().finally(() => owner.handle.release());
 		}
 		return owner.closing;
 	}
@@ -4653,18 +4665,20 @@ export class SessionManager {
 			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
 			throw error;
 		});
-		// Reserve the journal under the directory gate so a concurrent move
-		// cannot rename the marker after checking for active owners.
-		const gate = nativeRelocationGate(path.dirname(transcript));
-		const handle = await withFileLock(gate, () =>
-			acquireFileLock(`${transcript}${NATIVE_OWNER_SUFFIX}`, { retries: 1, queueWaitMs: 1 }),
-		);
+		// Publish under the gate so relocation cannot pass its owner check and
+		// then race a new open. The lease itself never enters the moved tree.
+		const directory = path.dirname(transcript);
+		const owners = nativeOwnerDirectory(directory);
+		const handle = await withFileLock(nativeRelocationGate(directory), async () => {
+			await fs.promises.mkdir(owners, { recursive: true });
+			return acquireFileLock(path.join(owners, path.basename(transcript)), { retries: 1, queueWaitMs: 1 });
+		});
 		try {
 			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
-			manager.#exclusiveOwner = { handle, gate };
+			manager.#exclusiveOwner = { handle };
 			return manager;
 		} catch (error) {
-			await withFileLock(gate, () => handle.release());
+			await handle.release();
 			throw error;
 		}
 	}
