@@ -6,11 +6,9 @@
 
 - Refresh the foreground conversation's Herdr resume command while Veyyon runs. This lets Veyyon replace a lost command before Herdr restarts.
 - Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
-- Batch native lane heartbeats into one ledger write per cadence and skip a tick if the previous write is still pending ([#1208](https://github.com/Wladefant/veyyon/issues/1208)).
-- Log the cause and duration of each failed lane release attempt without paths or lease tokens ([#1200](https://github.com/Wladefant/veyyon/issues/1200)).
-- Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Replace the shared lane ledger and its CLI with a 100-lane limit per Veyyon process, so native spawns, wakes, and exits do not wait for a ledger lock.
+- Reject concurrent opens of the same native transcript without blocking other transcripts.
 - Retry the current Codex model once after a replay-safe WebSocket close before switching models ([Refs #1203](https://github.com/Wladefant/veyyon/issues/1203)).
-- Give new lane admissions a bounded wait when another process holds the host ledger lock ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 
 ## [1.12.0] - 2026-11-18
 

@@ -16,6 +16,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@veyyon/utils";
+import { acquireFileLock, type FileLockHandle, tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { ArtifactManager } from "./artifacts";
@@ -218,6 +219,46 @@ function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFileStem(sessionFile) : null;
 }
 
+const NATIVE_OWNER_LOCK = ".lock";
+const NATIVE_OWNER_TRANSITION = `${NATIVE_OWNER_LOCK}.transition`;
+const nativeRelocationGate = (directory: string): string => `${directory}.native-relocation`;
+// Keep leases outside the artifact tree. Close can retire its lease without
+// the relocation gate, and a concurrent move cannot carry off a retiring lease.
+const nativeOwnerDirectory = (directory: string): string => `${directory}.native-owners`;
+
+async function canonicalArtifactDirectory(directory: string): Promise<string> {
+	return fs.promises.realpath(directory).catch(async error => {
+		if (!isEnoent(error)) throw error;
+		return path.join(await fs.promises.realpath(path.dirname(directory)), path.basename(directory));
+	});
+}
+
+function nativeOwnerLockNames(directory: string): Promise<string[]> {
+	return fs.promises
+		.readdir(directory)
+		.then(names => names.filter(name => name.endsWith(NATIVE_OWNER_LOCK) || name.endsWith(NATIVE_OWNER_TRANSITION)))
+		.catch(error => {
+			if (!isEnoent(error)) throw error;
+			return [];
+		});
+}
+
+async function assertNoNativeOwners(directory: string): Promise<void> {
+	const owners = nativeOwnerDirectory(directory);
+	const names = await nativeOwnerLockNames(owners);
+	// Let the lock utility retire dead owners; never unlink a lease ourselves.
+	for (const name of names) {
+		const suffix = name.endsWith(NATIVE_OWNER_TRANSITION) ? NATIVE_OWNER_TRANSITION : NATIVE_OWNER_LOCK;
+		const transcript = name.slice(0, -suffix.length);
+		const owner = await tryWithFileLock(path.join(owners, transcript), async () => {});
+		if (!owner.acquired) throw new Error(`Cannot move session: active native transcript ${transcript}.`);
+	}
+	// Acquisition can succeed even if lock retirement later reports an error.
+	if (names.length && (await nativeOwnerLockNames(owners)).length) {
+		throw new Error(`Cannot move session: active native transcript in ${directory}.`);
+	}
+}
+
 /**
  * Resolve a breadcrumb's recorded session file to its interactive root. Agent
  * (and other artifact) sessions live inside a parent session's artifacts dir —
@@ -331,6 +372,13 @@ export interface SessionManagerNoticeOptions {
 	operatorNotices?: OperatorNotices;
 	/** Canonical granularity controlling additive session telemetry. */
 	instrumentation?: InstrumentationLevel;
+}
+
+interface SessionOpenOptions extends SessionManagerNoticeOptions {
+	initialCwd?: string;
+	suppressBreadcrumb?: boolean;
+	/** Reserve this transcript until close. The caller must not switch to another transcript. */
+	exclusiveOwner?: boolean;
 }
 
 export interface SessionManagerStateSnapshot {
@@ -464,6 +512,7 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
+	#exclusiveOwner: { handle: FileLockHandle; closing?: Promise<void> } | undefined;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
 	#diskTail: Promise<void> = Promise.resolve();
 	#diskFailure: Error | undefined;
@@ -3123,6 +3172,37 @@ export class SessionManager {
 					? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
 					: computeDefaultSessionDir(resolvedCwd, this.#storage));
 
+		if (this.#persist && this.#sessionFile && this.#storage instanceof FileSessionStorage) {
+			const nextFile = path.join(nextSessionDir, path.basename(this.#sessionFile));
+			const sourceDir = sessionFileStem(this.#sessionFile);
+			const relocating = nextFile !== this.#sessionFile;
+			if (relocating && this.#exclusiveOwner) throw new Error("Cannot move an active native transcript.");
+			if (relocating && sourceDir !== this.#sessionFile) {
+				await fs.promises.mkdir(path.dirname(sourceDir), { recursive: true });
+				const source = await canonicalArtifactDirectory(sourceDir);
+				// The gate is outside the tree being moved. Hold it across the scan,
+				// rename and header rewrite, including storage rollback on rewrite failure.
+				return withFileLock(nativeRelocationGate(source), async () => {
+					await assertNoNativeOwners(source);
+					await fs.promises.mkdir(nextSessionDir, { recursive: true });
+					const target = await canonicalArtifactDirectory(sessionFileStem(nextFile));
+					if (target === source) return this.#moveTo(resolvedCwd, nextSessionDir);
+					// Fail fast rather than deadlock with a competing move in the opposite direction.
+					return withFileLock(
+						nativeRelocationGate(target),
+						async () => {
+							await assertNoNativeOwners(target);
+							await this.#moveTo(resolvedCwd, nextSessionDir);
+						},
+						{ retries: 1, queueWaitMs: 1 },
+					);
+				});
+			}
+		}
+		return this.#moveTo(resolvedCwd, nextSessionDir);
+	}
+
+	async #moveTo(resolvedCwd: string, nextSessionDir: string): Promise<void> {
 		let sessionFileExisted = false;
 		const previousCwd = this.#cwd;
 		const previousSessionDir = this.#sessionDir;
@@ -3521,7 +3601,16 @@ export class SessionManager {
 	}
 
 	/** Flush, then close the append writer. */
-	async close(): Promise<void> {
+	close(): Promise<void> {
+		const owner = this.#exclusiveOwner;
+		if (!owner) return this.#close();
+		if (!owner.closing) {
+			owner.closing = this.#close().finally(() => owner.handle.release());
+		}
+		return owner.closing;
+	}
+
+	async #close(): Promise<void> {
 		this.#endLifecycle("closed");
 		if (!this.#persist) return;
 		// A fault latched earlier in the session leaves entries that reached memory and
@@ -4566,12 +4655,39 @@ export class SessionManager {
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: {
-			initialCwd?: string;
-			suppressBreadcrumb?: boolean;
-			operatorNotices?: OperatorNotices;
-			instrumentation?: InstrumentationLevel;
-		},
+		options?: SessionOpenOptions,
+	): Promise<SessionManager> {
+		if (!options?.exclusiveOwner) return SessionManager.#open(filePath, sessionDir, storage, options);
+		const resolved = path.resolve(filePath);
+		const parent = path.dirname(resolved);
+		await fs.promises.mkdir(parent, { recursive: true });
+		const transcript = await fs.promises.realpath(resolved).catch(async error => {
+			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
+			throw error;
+		});
+		// Publish under the gate so relocation cannot pass its owner check and
+		// then race a new open. The lease itself never enters the moved tree.
+		const directory = path.dirname(transcript);
+		const owners = nativeOwnerDirectory(directory);
+		const handle = await withFileLock(nativeRelocationGate(directory), async () => {
+			await fs.promises.mkdir(owners, { recursive: true });
+			return acquireFileLock(path.join(owners, path.basename(transcript)), { retries: 1, queueWaitMs: 1 });
+		});
+		try {
+			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
+			manager.#exclusiveOwner = { handle };
+			return manager;
+		} catch (error) {
+			await handle.release();
+			throw error;
+		}
+	}
+
+	static async #open(
+		filePath: string,
+		sessionDir: string | undefined,
+		storage: SessionStorage,
+		options: SessionOpenOptions | undefined,
 	): Promise<SessionManager> {
 		await assertNotTerminalOwned(filePath);
 		const loaded = await loadSessionFile(filePath, storage, {
@@ -4609,9 +4725,9 @@ export class SessionManager {
 	/**
 	 * Lock-free peek for cold agent revival: returns the recorded working
 	 * directory (session header) and the latest `session_init` contract (system
-	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
-	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
-	 * null when the file can't be read, and reports it first unless the file is
+	 * prompt / tools / output schema) without reserving exclusive ownership. The
+	 * caller must open the transcript exclusively before it attaches a native agent.
+	 * Returns null when the file can't be read, and reports it first unless the file is
 	 * simply absent, so an unreadable session is not silently a missing one;
 	 * `init` is null for files written before `session_init` was recorded (no
 	 * faithful contract to rebuild from).
