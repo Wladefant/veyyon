@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-20
+
 ### Fixed
 
 - Share one file lock across a synchronous burst of session journal appends without delaying their visibility ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).

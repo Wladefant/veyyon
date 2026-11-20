@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-20
+
 ### Added
 
 - Expose a synchronous advisory lock handle for session journal append batches ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
@@ -11,8 +13,6 @@
 ### Fixed
 
 - Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
-### Fixed
-
 - Queue same-process Windows file-lock contenders, retry sharing errors at release, and recover failed releases from the owning process.
 - Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
 - File-lock release warnings now keep the underlying Windows access error when cleanup stays blocked.

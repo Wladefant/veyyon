@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-20
+
 ### Fixed
 
 - Refresh the foreground conversation's Herdr resume command while Veyyon runs. This lets Veyyon replace a lost command before Herdr restarts.
