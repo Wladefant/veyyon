@@ -373,11 +373,9 @@ function closeObservedInfoSync(fd: number | undefined): void {
 }
 
 /**
- * Tokens of locks this process acquired and then failed to remove. The owner record still names
- * this live process, so liveness alone can never prove them abandoned: before this set existed one
- * failed release (a Windows sharing violation while another participant read the owner record)
- * blocked every later acquire in the same process until it exited. The owner gave the lock up, so
- * its own process may reap it; no other process can observe or forge membership.
+ * Tokens of locks this process published, then failed to hand off or remove. The live PID alone
+ * cannot prove that these locks are abandoned. Only this process can record that it gave up a
+ * lease and recover that lock without waiting for the process to exit.
  */
 const abandonedOwnTokens = new Set<string>();
 
@@ -754,29 +752,33 @@ function prepareCandidateSync(lockPath: string): {
 	}
 }
 
-async function withdrawCandidate(lockPath: string, candidatePath: string, expected: LockObservation): Promise<void> {
+async function withdrawCandidate(lockPath: string, candidatePath: string, expected: LockObservation): Promise<boolean> {
 	const parentIdentity = await inspectParent(lockPath);
 	const current = await inspectLockDirectory(lockPath);
-	if (current === null || !sameObservationIdentity(current, expected)) return;
+	if (current === null || !sameObservationIdentity(current, expected)) return false;
 	try {
 		await assertParentIdentity(lockPath, parentIdentity);
 		await fs.rename(lockPath, candidatePath);
 		await assertParentIdentity(lockPath, parentIdentity);
+		return true;
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
+		return false;
 	}
 }
 
-function withdrawCandidateSync(lockPath: string, candidatePath: string, expected: LockObservation): void {
+function withdrawCandidateSync(lockPath: string, candidatePath: string, expected: LockObservation): boolean {
 	const parentIdentity = inspectParentSync(lockPath);
 	const current = inspectLockDirectorySync(lockPath);
-	if (current === null || !sameObservationIdentity(current, expected)) return;
+	if (current === null || !sameObservationIdentity(current, expected)) return false;
 	try {
 		assertParentIdentitySync(lockPath, parentIdentity);
 		fsSync.renameSync(lockPath, candidatePath);
 		assertParentIdentitySync(lockPath, parentIdentity);
+		return true;
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
+		return false;
 	}
 }
 
@@ -817,6 +819,7 @@ async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 	const candidate = await prepareCandidate(lockPath);
 	if (candidate === null) return null;
 	let published = false;
+	let handedOff = false;
 	try {
 		await assertParentIdentity(lockPath, candidate.parentIdentity);
 		if ((await inspectLockDirectory(getTransitionPath(lockPath))) !== null) return null;
@@ -837,21 +840,29 @@ async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 		published = true;
 		await assertParentIdentity(lockPath, candidate.parentIdentity);
 		const current = await inspectLockDirectory(lockPath);
-		if (current === null || !sameObservationIdentity(current, candidate.observation)) return null;
+		if (current === null || !removalIsAuthorized(current, { kind: "owner", lease: candidate.lease })) return null;
 		if ((await inspectLockDirectory(getTransitionPath(lockPath))) !== null) {
-			await withdrawCandidate(lockPath, candidate.path, candidate.observation);
-			published = false;
+			published = !(await withdrawCandidate(lockPath, candidate.path, candidate.observation));
 			return null;
 		}
+		handedOff = true;
 		return candidate.lease;
 	} finally {
-		if (!published) await discardCandidate(candidate.path, candidate.observation);
+		if (!published) {
+			await discardCandidate(candidate.path, candidate.observation);
+		} else if (!handedOff) {
+			// Rename succeeded, but no callback received the lease. If cleanup still
+			// cannot read the owner record, a later acquire can recover our own token.
+			abandonedOwnTokens.add(candidate.lease.token);
+			await releaseLock(lockPath, candidate.lease);
+		}
 	}
 }
 
 function tryAcquireLockSync(lockPath: string): LockLease | null {
 	const candidate = prepareCandidateSync(lockPath);
 	let published = false;
+	let handedOff = false;
 	try {
 		assertParentIdentitySync(lockPath, candidate.parentIdentity);
 		if (inspectLockDirectorySync(getTransitionPath(lockPath)) !== null) return null;
@@ -872,15 +883,20 @@ function tryAcquireLockSync(lockPath: string): LockLease | null {
 		published = true;
 		assertParentIdentitySync(lockPath, candidate.parentIdentity);
 		const current = inspectLockDirectorySync(lockPath);
-		if (current === null || !sameObservationIdentity(current, candidate.observation)) return null;
+		if (current === null || !removalIsAuthorized(current, { kind: "owner", lease: candidate.lease })) return null;
 		if (inspectLockDirectorySync(getTransitionPath(lockPath)) !== null) {
-			withdrawCandidateSync(lockPath, candidate.path, candidate.observation);
-			published = false;
+			published = !withdrawCandidateSync(lockPath, candidate.path, candidate.observation);
 			return null;
 		}
+		handedOff = true;
 		return candidate.lease;
 	} finally {
-		if (!published) discardCandidateSync(candidate.path, candidate.observation);
+		if (!published) {
+			discardCandidateSync(candidate.path, candidate.observation);
+		} else if (!handedOff) {
+			abandonedOwnTokens.add(candidate.lease.token);
+			releaseLockSync(lockPath, candidate.lease);
+		}
 	}
 }
 
