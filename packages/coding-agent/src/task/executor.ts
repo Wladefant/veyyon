@@ -4,7 +4,6 @@
  * Runs each agent on the main thread and forwards AgentEvents for progress tracking.
  */
 
-import * as fs from "node:fs/promises";
 import path from "node:path";
 import { type AgentIdentity, type AgentTelemetryConfig, recordHandoff, resolveTelemetry } from "@veyyon/agent-core";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";

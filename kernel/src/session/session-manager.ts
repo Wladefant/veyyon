@@ -3533,7 +3533,8 @@ export class SessionManager {
 	close(): Promise<void> {
 		const owner = this.#exclusiveOwner;
 		if (!owner) return this.#close();
-		return (owner.closing ??= this.#close().finally(() => owner.handle.release()));
+		owner.closing ??= this.#close().finally(() => owner.handle.release());
+		return owner.closing;
 	}
 
 	async #close(): Promise<void> {
@@ -4585,9 +4586,10 @@ export class SessionManager {
 	): Promise<SessionManager> {
 		if (!options?.exclusiveOwner) return SessionManager.#open(filePath, sessionDir, storage, options);
 		const resolved = path.resolve(filePath);
-		await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
-		const transcript = await fs.promises.realpath(resolved).catch(error => {
-			if (isEnoent(error)) return resolved;
+		const parent = path.dirname(resolved);
+		await fs.promises.mkdir(parent, { recursive: true });
+		const transcript = await fs.promises.realpath(resolved).catch(async error => {
+			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
 			throw error;
 		});
 		// This marker covers a running session, not individual append transactions. A peer

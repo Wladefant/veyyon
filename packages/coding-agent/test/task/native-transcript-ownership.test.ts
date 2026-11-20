@@ -1,5 +1,6 @@
 import { expect, it } from "bun:test";
 import { execFile } from "node:child_process";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -23,7 +24,9 @@ const probe = `
 it("rejects a second owner of the same native transcript without blocking an unrelated transcript", async () => {
 	const dir = TempDir.createSync("native-transcript-ownership-");
 	const { env, cleanup } = hermeticSpawnEnv();
-	const file = path.join(dir.path(), "agent.jsonl");
+	const alias = path.join(dir.path(), "alias");
+	const actual = path.join(dir.path(), "actual");
+	const file = path.join(alias, "agent.jsonl");
 	const otherFile = path.join(dir.path(), "other-agent.jsonl");
 	const options = { initialCwd: dir.path(), exclusiveOwner: true };
 	const openFromAnotherProcess = async (filePath: string) => {
@@ -32,9 +35,12 @@ it("rejects a second owner of the same native transcript without blocking an unr
 	};
 	let owner: SessionManager | undefined;
 	try {
+		await fs.mkdir(actual);
+		await fs.symlink(actual, alias, process.platform === "win32" ? "junction" : "dir");
 		owner = await SessionManager.open(file, undefined, undefined, options);
 		await owner.ensureOnDisk();
 		expect(await openFromAnotherProcess(file)).toContain("Failed to acquire lock");
+		expect(await openFromAnotherProcess(path.join(actual, "agent.jsonl"))).toContain("Failed to acquire lock");
 		expect(await openFromAnotherProcess(otherFile)).toBe("opened");
 		await owner.close();
 		owner = undefined;
