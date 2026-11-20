@@ -486,7 +486,7 @@ test("concurrent reconnect managers share one pending answer and preserve it aft
 	).toHaveLength(1);
 });
 
-test("an answer waits for owned appends queued before and during the first drain", async () => {
+test.each(["new", "consumed"])("an answer rechecks owned appends queued during its first drain (%s)", async state => {
 	const { manager } = newSession();
 	await manager.ensureOnDisk();
 	const journal = manager.getSessionFile()!;
@@ -512,14 +512,18 @@ test("an answer waits for owned appends queued before and during the first drain
 			secondEntered.resolve();
 			await secondRelease.promise;
 		});
-		manager.appendMessage({ role: "user", content: "input during drain", timestamp: Date.now() });
+		manager.appendMessage({
+			role: "user",
+			content: state === "consumed" ? answer : "input during drain",
+			timestamp: Date.now(),
+		});
 		release.resolve();
 		await Promise.race([secondEntered.promise, secondHolder]);
 		await new Promise<void>(resolve => setImmediate(resolve));
 		expect(queue).toEqual([]);
 		secondRelease.resolve();
-		expect(await accepted).toBe("queued");
-		expect(queue).toEqual([answer]);
+		expect(await accepted).toBe(state === "consumed" ? "duplicate" : "queued");
+		expect(queue).toEqual(state === "consumed" ? [] : [answer]);
 		expect(await inbox.accept(envelope("q-contended", "evt-retry"), "auto")).toBe("duplicate");
 	} finally {
 		release.resolve();

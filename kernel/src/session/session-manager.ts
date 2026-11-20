@@ -3300,12 +3300,19 @@ export class SessionManager {
 		if (writer?.isOpen()) {
 			const sessionFile = this.#sessionFile;
 			const sessionId = this.getSessionId();
-			await writer.flush();
-			if (this.#sessionFile !== sessionFile || this.getSessionId() !== sessionId)
-				throw new Error("Operator-answer session changed before journaling");
-			if (this.#foreignLines.length > 0)
-				throw new Error("Operator-answer journal is stale; reopen session before accepting");
-			if (this.#fileIsExactlyAsPublished()) return;
+			const deadline = performance.now() + 1_000;
+			do {
+				const publishedSize = this.#publishedFileState?.size;
+				await writer.flush();
+				if (this.#sessionFile !== sessionFile || this.getSessionId() !== sessionId)
+					throw new Error("Operator-answer session changed before journaling");
+				if (this.#foreignLines.length > 0)
+					throw new Error("Operator-answer journal is stale; reopen session before accepting");
+				if (this.#fileIsExactlyAsPublished()) return;
+				// flush() drains a snapshot of the writer's tail. Only try again
+				// if this writer is still current and the expected size advanced.
+				if (this.#writer !== writer || this.#publishedFileState?.size === publishedSize) break;
+			} while (performance.now() < deadline);
 		}
 		const state = this.#storage.existsStateSync(this.#sessionFile);
 		if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
