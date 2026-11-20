@@ -5,6 +5,7 @@
 ### Fixed
 
 - Strip unsupported array validation keywords from Gemini tool declarations while retaining local argument validation ([#1190](https://github.com/Wladefant/veyyon/issues/1190)).
+- Pair Claude Code 2.1.329 with its Agent SDK version, 0.3.329, in the Anthropic OAuth user-agent.
 
 ## [1.10.11] - 2026-11-17
 
