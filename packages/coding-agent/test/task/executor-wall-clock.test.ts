@@ -479,7 +479,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		vi.useFakeTimers();
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 30 });
 		const { promise: promptStarted, resolve: markPromptStarted } = Promise.withResolvers<void>();
-		const handle = createMockSessionHandle(markPromptStarted, {
+		const handle = createMockSessionHandle(() => markPromptStarted(), {
 			hangUntilAbort: true,
 			// Emitted from inside `abort`, which is the only way to land in the teardown window.
 			onAbort: ({ emit }) => emit(yieldSuccessEvent({ lateButLanded: true }, "tool-late-yield")),
