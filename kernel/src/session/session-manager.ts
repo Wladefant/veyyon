@@ -3293,6 +3293,33 @@ export class SessionManager {
 		if (this.#foreignLines.length > 0)
 			throw new Error("Operator-answer journal is stale; reopen session before accepting");
 		if (this.#fileIsExactlyAsPublished()) return;
+		// The append path records its expected byte count before a contended writer
+		// reaches disk. Drain only this manager's writer before treating that gap
+		// as foreign history. Do not rewrite or adopt the file to make it match.
+		const writer = this.#writer;
+		if (writer?.isOpen()) {
+			const sessionFile = this.#sessionFile;
+			const sessionId = this.getSessionId();
+			const timeout = Promise.withResolvers<never>();
+			const timer = setTimeout(() => {
+				timeout.reject(new Error("Operator-answer journal is stale: timed out draining owned appends"));
+			}, 1_000);
+			try {
+				for (;;) {
+					const publishedSize = this.#publishedFileState?.size;
+					await Promise.race([writer.flush(), timeout.promise]);
+					if (this.#sessionFile !== sessionFile || this.getSessionId() !== sessionId)
+						throw new Error("Operator-answer session changed before journaling");
+					if (this.#foreignLines.length > 0)
+						throw new Error("Operator-answer journal is stale; reopen session before accepting");
+					if (this.#fileIsExactlyAsPublished()) return;
+					// A flush covers one snapshot of the writer's tail.
+					if (this.#writer !== writer || this.#publishedFileState?.size === publishedSize) break;
+				}
+			} finally {
+				clearTimeout(timer);
+			}
+		}
 		const state = this.#storage.existsStateSync(this.#sessionFile);
 		if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
 		if (state !== "present") throw new Error("Cannot verify current session journal");

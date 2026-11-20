@@ -142,7 +142,8 @@ export class OperatorAnswerInbox {
 			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before acceptance");
 			const sessionId = journal.getSessionId();
 			const key = `${sessionId}:${questionId}`;
-			const { pending, consumed } = this.#scan(journal);
+			const leafBeforeCheck = journal.getLeafId();
+			let { pending, consumed } = this.#scan(journal);
 			// An answer still waiting in the runtime queue is a replay. One the operator cleared from the queue is
 			// gone: no user message was written, so the retry delivers it again. A dequeue that lands between the
 			// runtime taking the message and journaling it is a window of milliseconds against a retry's seconds.
@@ -162,7 +163,14 @@ export class OperatorAnswerInbox {
 			// operation lock has settled. Its empty queue is not proof that no durable answer exists.
 			// Refuse to append from that stale snapshot; a reopened manager can recover the original.
 			await journal.assertReplayJournalCurrent();
-			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before journaling");
+			if (this.#journal() !== journal || journal.getSessionId() !== sessionId)
+				throw new Error("Operator-answer session changed before journaling");
+			// The runtime may consume an answer while the owned writer drains.
+			if (leafBeforeCheck !== journal.getLeafId()) ({ pending, consumed } = this.#scan(journal));
+			if (consumed.has(questionId) || this.#isQueued(questionId)) {
+				logger.info(`DUPLICATE-ANSWER ${questionId}`);
+				return "duplicate";
+			}
 			const answer: PendingAnswer = pending.get(questionId) ?? {
 				version: 1,
 				sessionId,
@@ -175,7 +183,8 @@ export class OperatorAnswerInbox {
 			// append alone can remain behind the lazy-file gate or a foreign-file rewrite.
 			await journal.ensureOnDisk();
 			await journal.flush();
-			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before injection");
+			if (this.#journal() !== journal || journal.getSessionId() !== sessionId)
+				throw new Error("Operator-answer session changed before injection");
 			return this.#queue(answer, options);
 		});
 	}
