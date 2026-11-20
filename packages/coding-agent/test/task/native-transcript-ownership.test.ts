@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { TempDir, withFileLock } from "@veyyon/utils";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const run = promisify(execFile);
@@ -97,8 +97,10 @@ it("refuses to move a root session directory while a child native transcript has
 		await expect(fs.stat(movedJournal)).rejects.toMatchObject({ code: "ENOENT" });
 		await expect(fs.stat(movedArtifactsDir)).rejects.toMatchObject({ code: "ENOENT" });
 
-		await child.close();
+		const relocationGate = `${await fs.realpath(rootArtifactsDir!)}.native-relocation`;
+		const activeChild = child;
 		child = undefined;
+		await withFileLock(relocationGate, () => activeChild.close());
 
 		await root.moveTo(cwdB, sessionDirB);
 		expect(root.getSessionFile()).toBe(movedJournal);
