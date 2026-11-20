@@ -274,14 +274,17 @@ describe("atomic file-lock lifecycle claims", () => {
 			renameSync(from, to);
 			if (to === lockPath) denyCheck = true;
 		});
-		vi.spyOn(fs, "lstat").mockImplementation(async (entry, options) => {
+		// Each wrapper forwards the options unchanged, preserving the original overloads.
+		const checkLstat = async (entry: fsSync.PathLike, options?: Parameters<typeof lstat>[1]) => {
 			check(entry);
 			return lstat(entry, options);
-		});
-		vi.spyOn(fsSync, "lstatSync").mockImplementation((entry, options) => {
+		};
+		const checkLstatSync = (entry: fsSync.PathLike, options?: Parameters<typeof lstatSync>[1]) => {
 			check(entry);
 			return lstatSync(entry, options);
-		});
+		};
+		vi.spyOn(fs, "lstat").mockImplementation(checkLstat as typeof lstat);
+		vi.spyOn(fsSync, "lstatSync").mockImplementation(checkLstatSync as typeof lstatSync);
 
 		const callback = vi.fn(() => "entered");
 		try {
