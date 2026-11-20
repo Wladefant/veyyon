@@ -286,14 +286,18 @@ describe("atomic file-lock lifecycle claims", () => {
 		vi.spyOn(fs, "lstat").mockImplementation(checkLstat as typeof lstat);
 		vi.spyOn(fsSync, "lstatSync").mockImplementation(checkLstatSync as typeof lstatSync);
 
-		const callback = vi.fn(() => "entered");
+		let entries = 0;
+		const callback = () => {
+			entries += 1;
+			return "entered";
+		};
 		try {
 			if (mode === "async") {
 				await expect(withFileLock(target, async () => callback())).rejects.toMatchObject({ code: "EBUSY" });
 			} else {
 				expect(() => withFileLockSync(target, callback)).toThrow("owner record is busy");
 			}
-			expect(callback).not.toHaveBeenCalled();
+			expect(entries).toBe(0);
 		} finally {
 			vi.restoreAllMocks();
 		}
@@ -302,7 +306,7 @@ describe("atomic file-lock lifecycle claims", () => {
 		} else {
 			expect(withFileLockSync(target, callback, { retries: 1 })).toBe("entered");
 		}
-		expect(callback).toHaveBeenCalledTimes(1);
+		expect(entries).toBe(1);
 		await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 
