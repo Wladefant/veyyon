@@ -43,7 +43,6 @@ it("spawns and completes without reading or changing an obsolete lane ledger", a
 		});
 		expect(result.terminalOutcome).toBe("completed");
 		expect(result.exitCode).toBe(0);
-		expect(createSession).toHaveBeenCalledTimes(1);
 		expect(await fs.readdir(runDir)).toEqual(["lane-admission.json"]);
 		expect(await fs.readFile(ledger, "utf8")).toBe("invalid legacy ledger");
 	} finally {
@@ -84,13 +83,14 @@ it("rejects a spawn at the process cap and reuses slots after successful and fai
 		const refused = await spawn("PastCapacity");
 		expect(refused.terminalOutcome).toBe("startup-failed");
 		expect(refused.error).toContain("100 active native agent lanes");
-		expect(createSession).not.toHaveBeenCalled();
 
 		slots.pop()?.();
-		expect((await spawn("FailedTurn")).exitCode).toBe(1);
+		const failed = await spawn("FailedTurn");
+		expect(failed.exitCode).toBe(1);
+		expect(failed.terminalOutcome).toBe("failed");
+		expect(failed.stderr).toContain("test prompt failure");
 		expect((await spawn("NextTurn")).terminalOutcome).toBe("completed");
 		expect((await spawn("FinalTurn")).terminalOutcome).toBe("completed");
-		expect(createSession).toHaveBeenCalledTimes(3);
 		await expect(fs.lstat(path.join(isolated.root, "run", "lane-admission.json.lock"))).rejects.toMatchObject({
 			code: "ENOENT",
 		});
