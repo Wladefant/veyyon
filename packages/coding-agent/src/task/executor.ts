@@ -11,7 +11,7 @@ import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, Model, ServiceTierByFamily, ToolChoice } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import {
 	collapseWhitespace,
@@ -84,6 +84,7 @@ import {
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
 import { reserveNativeLane } from "./native-lane-capacity";
+import { openNativeTranscript, readNativeReviveInit } from "./native-transcript";
 import { reportProviderError } from "./provider-error-reporter";
 import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
@@ -2184,25 +2185,6 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 }
 
 /**
- * Create the child's session. When an abort races startup the session may still resolve later
- * holding live LSP/MCP child processes, so it is disposed when it does and a cancelled agent cannot
- * leak them.
- */
-async function createChildSession(
-	parentSessionId: string | undefined,
-	sessionOptions: CreateAgentSessionOptions,
-	awaitAbortable: AbortableAwaiter,
-): Promise<AgentSession> {
-	const sessionPromise = createSubagentSession(parentSessionId, sessionOptions);
-	try {
-		return (await awaitAbortable(sessionPromise)).session;
-	} catch (err) {
-		void sessionPromise.then(created => created.session.dispose()).catch(() => {});
-		throw err;
-	}
-}
-
-/**
  * Lifecycle reviver: park closed the JSONL writer, so reopening takes the single-writer lock cleanly
  * and restores the full message history (createAgentSession → agent.replaceMessages).
  */
@@ -2213,34 +2195,20 @@ function createSessionReviver(
 	// The reviver lives as long as the parked agent, so it captures the fields it reads, never `ctx`
 	// or `ctx.options`: see `childSessionOptionsBuilder`.
 	const { options, sessionFile, settings } = ctx;
+	const cwd = ctx.effectiveCwd;
 	const { id, parentArtifactManager, parentSessionId } = options;
-	return async () => {
-		const currentSessionFile = AgentRegistry.global().get(id)?.sessionFile ?? sessionFile;
-		// Re-peek as well as re-open on every use: /move and handoff can replace the transcript.
-		const current = await SessionManager.peekSessionInit(currentSessionFile);
-		if (!current?.init) {
-			throw new Error(`Cannot revive ${id}: persisted session contract is missing`);
-		}
-		try {
-			await fs.stat(current.cwd);
-		} catch {
-			throw new Error(`Cannot revive ${id}: persisted working directory is unavailable`);
-		}
-		const reopened = await SessionManager.open(currentSessionFile, undefined, undefined, {
-			initialCwd: current.cwd,
-			suppressBreadcrumb: true,
+	return () =>
+		openNativeTranscript(AgentRegistry.global().get(id)?.sessionFile ?? sessionFile, cwd, async reopened => {
+			await readNativeReviveInit(reopened, id);
+			if (parentArtifactManager) reopened.adoptArtifactManager(parentArtifactManager);
+			const revivedSettings = await settings.cloneForCwd(reopened.getCwd());
+			const { session: revived } = await createSubagentSession(
+				parentSessionId,
+				buildSessionOptions(reopened, revivedSettings),
+			);
+			syncStatusWithTurns(AgentRegistry.global(), id, revived);
+			return revived;
 		});
-		if (parentArtifactManager) {
-			reopened.adoptArtifactManager(parentArtifactManager);
-		}
-		const revivedSettings = await settings.cloneForCwd(reopened.getCwd());
-		const { session: revived } = await createSubagentSession(
-			parentSessionId,
-			buildSessionOptions(reopened, revivedSettings),
-		);
-		syncStatusWithTurns(AgentRegistry.global(), id, revived);
-		return revived;
-	};
 }
 
 interface OpenedChildSession {
@@ -2254,22 +2222,25 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	const { options, monitor, marks } = ctx;
 	const runModel = await resolveRunModel(ctx);
 	marks.resolvedAt = performance.now();
-	const sessionManager = await ctx.awaitAbortable(
-		SessionManager.open(ctx.sessionFile, undefined, undefined, {
-			initialCwd: ctx.effectiveCwd,
-			suppressBreadcrumb: true,
-		}),
-	);
-	if (options.parentArtifactManager) {
-		sessionManager.adoptArtifactManager(options.parentArtifactManager);
-	}
-	marks.sessionOpenedAt = performance.now();
 	const buildSessionOptions = childSessionOptionsBuilder(ctx, runModel);
-	const session = await createChildSession(
-		options.parentSessionId,
-		buildSessionOptions(sessionManager, ctx.settings),
-		ctx.awaitAbortable,
-	);
+	const opening = openNativeTranscript(ctx.sessionFile, ctx.effectiveCwd, async sessionManager => {
+		monitor.abortSignal.throwIfAborted();
+		if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
+		marks.sessionOpenedAt = performance.now();
+		const { session } = await createSubagentSession(
+			options.parentSessionId,
+			buildSessionOptions(sessionManager, ctx.settings),
+		);
+		return session;
+	});
+	let session: AgentSession;
+	try {
+		session = await ctx.awaitAbortable(opening);
+	} catch (error) {
+		// Startup can still resolve after cancellation. The session owns its transcript until it closes.
+		void opening.then(created => created.dispose()).catch(() => {});
+		throw error;
+	}
 	if (runModel.skippedModelReasons.length > 0) {
 		session.sessionManager.appendCustomEntry("agent-model-resolution", {
 			skipped: runModel.skippedModelReasons,

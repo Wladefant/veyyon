@@ -16,6 +16,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@veyyon/utils";
+import { acquireFileLock, type FileLockHandle } from "@veyyon/utils/file-lock";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { ArtifactManager } from "./artifacts";
@@ -333,6 +334,13 @@ export interface SessionManagerNoticeOptions {
 	instrumentation?: InstrumentationLevel;
 }
 
+interface SessionOpenOptions extends SessionManagerNoticeOptions {
+	initialCwd?: string;
+	suppressBreadcrumb?: boolean;
+	/** Reserve this transcript until close. The caller must not switch to another transcript. */
+	exclusiveOwner?: boolean;
+}
+
 export interface SessionManagerStateSnapshot {
 	cwd: string;
 	sessionDir: string;
@@ -464,6 +472,7 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
+	#exclusiveOwner: { handle: FileLockHandle; closing?: Promise<void> } | undefined;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
 	#diskTail: Promise<void> = Promise.resolve();
 	#diskFailure: Error | undefined;
@@ -3521,7 +3530,13 @@ export class SessionManager {
 	}
 
 	/** Flush, then close the append writer. */
-	async close(): Promise<void> {
+	close(): Promise<void> {
+		const owner = this.#exclusiveOwner;
+		if (!owner) return this.#close();
+		return (owner.closing ??= this.#close().finally(() => owner.handle.release()));
+	}
+
+	async #close(): Promise<void> {
 		this.#endLifecycle("closed");
 		if (!this.#persist) return;
 		// A fault latched earlier in the session leaves entries that reached memory and
@@ -4566,12 +4581,33 @@ export class SessionManager {
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: {
-			initialCwd?: string;
-			suppressBreadcrumb?: boolean;
-			operatorNotices?: OperatorNotices;
-			instrumentation?: InstrumentationLevel;
-		},
+		options?: SessionOpenOptions,
+	): Promise<SessionManager> {
+		if (!options?.exclusiveOwner) return SessionManager.#open(filePath, sessionDir, storage, options);
+		const resolved = path.resolve(filePath);
+		await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
+		const transcript = await fs.promises.realpath(resolved).catch(error => {
+			if (isEnoent(error)) return resolved;
+			throw error;
+		});
+		// This marker covers a running session, not individual append transactions. A peer
+		// cannot load the same journal while we own it, but unrelated paths never wait here.
+		const handle = await acquireFileLock(`${transcript}.active-owner`, { retries: 1, queueWaitMs: 1 });
+		try {
+			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
+			manager.#exclusiveOwner = { handle };
+			return manager;
+		} catch (error) {
+			await handle.release();
+			throw error;
+		}
+	}
+
+	static async #open(
+		filePath: string,
+		sessionDir: string | undefined,
+		storage: SessionStorage,
+		options: SessionOpenOptions | undefined,
 	): Promise<SessionManager> {
 		await assertNotTerminalOwned(filePath);
 		const loaded = await loadSessionFile(filePath, storage, {
@@ -4609,9 +4645,9 @@ export class SessionManager {
 	/**
 	 * Lock-free peek for cold agent revival: returns the recorded working
 	 * directory (session header) and the latest `session_init` contract (system
-	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
-	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
-	 * null when the file can't be read, and reports it first unless the file is
+	 * prompt / tools / output schema) without reserving exclusive ownership. The
+	 * caller must open the transcript exclusively before it attaches a native agent.
+	 * Returns null when the file can't be read, and reports it first unless the file is
 	 * simply absent, so an unreadable session is not silently a missing one;
 	 * `init` is null for files written before `session_init` was recorded (no
 	 * faithful contract to rebuild from).

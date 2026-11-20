@@ -102,7 +102,13 @@ describe("native retained child resume", () => {
 					spyOn(child.instance.agent, "prompt").mockRejectedValue(new Error("worker prompt failed"));
 				}
 				const registry = AgentRegistry.global();
-				registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+				registry.register({
+					id: "owner",
+					displayName: "Owner",
+					kind: "main",
+					scope: "test",
+					session: parent.instance,
+				});
 				registry.register({
 					id: "worker",
 					displayName: "Worker",

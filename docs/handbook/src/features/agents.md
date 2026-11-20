@@ -97,6 +97,10 @@ agent shares that agent's lane.
 Veyyon does not coordinate this limit across processes or with external workers.
 It ignores old lane ledgers on disk.
 
+A separate owner marker protects each native agent's transcript until that
+session closes. A second process cannot open the same native transcript for a
+turn. Sessions that use different transcripts do not share an owner marker.
+
 ## Choosing agents
 
 `agent.agents` holds one row per agent name. You choose initial permissions in

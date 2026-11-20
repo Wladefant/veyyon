@@ -7,6 +7,7 @@
 - Refresh the foreground conversation's Herdr resume command while Veyyon runs. This lets Veyyon replace a lost command before Herdr restarts.
 - Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
 - Replace the shared lane ledger and its CLI with a 100-lane limit per Veyyon process, so native spawns, wakes, and exits do not wait for a ledger lock.
+- Reject concurrent opens of the same native transcript without blocking other transcripts.
 - Retry the current Codex model once after a replay-safe WebSocket close before switching models ([Refs #1203](https://github.com/Wladefant/veyyon/issues/1203)).
 
 ## [1.12.0] - 2026-11-18

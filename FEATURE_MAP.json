@@ -52,6 +52,25 @@
       "owning_issue": "https://github.com/Wladefant/super-board/issues/375",
       "risk": "medium",
       "components": ["coding-agent", "Herdr"]
+    },
+    "native-lane-capacity": {
+      "name": "Native lane capacity",
+      "description": "Count active native agent lanes per Veyyon process without shared runtime files.",
+      "entry_files": [
+        "packages/coding-agent/src/task/native-lane-capacity.ts",
+        "packages/coding-agent/src/task/native-transcript.ts",
+        "packages/coding-agent/src/task/executor.ts",
+        "packages/coding-agent/src/session/agent-session.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/task/native-lane-lifecycle.test.ts",
+        "packages/coding-agent/test/task/native-transcript-ownership.test.ts",
+        "packages/coding-agent/test/a-parent-irc-resume-publishes-a-separate-native-completion.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1183",
+      "risk": "high",
+      "components": ["coding-agent", "task"],
+      "docs": ["docs/handbook/src/features/agents.md"]
     }
   }
 }
