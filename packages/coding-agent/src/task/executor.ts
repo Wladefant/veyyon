@@ -83,7 +83,7 @@ import {
 	resolveAgentPruneBudget,
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
-import { acquireSubagentHostLane, LaneAdmissionError, type NativeHostLaneLease } from "./lane-admission";
+import { reserveNativeLane } from "./native-lane-capacity";
 import { reportProviderError } from "./provider-error-reporter";
 import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
@@ -1609,34 +1609,6 @@ export interface FollowUpTurnOptions {
 	maxRuntimeMs?: number;
 }
 
-async function runWithHostLaneRelease(
-	lease: NativeHostLaneLease,
-	run: () => Promise<SingleResult>,
-): Promise<SingleResult> {
-	let result: SingleResult | undefined;
-	let runError: unknown;
-	try {
-		result = await run();
-	} catch (error) {
-		runError = error;
-	}
-	try {
-		await lease.release();
-	} catch (releaseError) {
-		if (result?.exitCode === 0) throw releaseError;
-		const runFailure = result
-			? result.error || result.abortReason || result.stderr || `Agent exited with code ${result.exitCode}`
-			: runError;
-		const failure = new AggregateError(
-			[runFailure, releaseError],
-			`${errorMessage(releaseError)}\nAgent run also failed: ${errorMessage(runFailure)}`,
-		);
-		throw releaseError instanceof LaneAdmissionError ? Object.assign(failure, { code: releaseError.code }) : failure;
-	}
-	if (!result) throw runError;
-	return result;
-}
-
 /**
  * Continue a previously spawned (keep-alive) agent with one more monitored
  * turn: revive it if parked, send `message` as a real prompt, drive it to
@@ -1675,15 +1647,12 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		};
 	}
 
-	let hostLaneLease: NativeHostLaneLease | null = null;
+	let releaseLane: () => void;
 	try {
-		hostLaneLease = await acquireSubagentHostLane({
-			agentId: id,
-			owner: path.resolve(
-				AgentRegistry.global().get(id)?.sessionFile ?? path.join(getSessionsDir(), sessionFileName(id)),
-			),
-			signal,
-		});
+		releaseLane = reserveNativeLane(
+			id,
+			path.resolve(AgentRegistry.global().get(id)?.sessionFile ?? path.join(getSessionsDir(), sessionFileName(id))),
+		);
 	} catch (error) {
 		const reason = errorMessage(error);
 		return {
@@ -1704,30 +1673,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 			error: reason,
 		};
 	}
-	if (!hostLaneLease) {
-		return {
-			index,
-			id,
-			agent: agent.name,
-			agentSource: agent.source,
-			task: message,
-			description: options.description,
-			exitCode: 1,
-			output: "",
-			stderr: CANCELLED_BEFORE_START,
-			truncated: false,
-			durationMs: Date.now() - startTime,
-			tokens: 0,
-			requests: 0,
-			terminalOutcome: "cancelled",
-			error: CANCELLED_BEFORE_START,
-			aborted: true,
-			abortReason: CANCELLED_BEFORE_START,
-			cancellationAcknowledged: false,
-		};
-	}
-
-	return runWithHostLaneRelease(hostLaneLease, async () => {
+	try {
 		const session = await AgentLifecycleManager.global().ensureLive(id);
 		const ref = AgentRegistry.global().get(id);
 		const sessionFile = ref?.sessionFile ?? undefined;
@@ -1796,7 +1742,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 			AgentRegistry.global().setWaitingOnPeer(id, saysItIsWaitingOnAPeer(agentSignOffText(monitor)));
 		}
 
-		return finalizeRunResult({
+		return await finalizeRunResult({
 			monitor,
 			done: { ...outcome, durationMs: Date.now() - startTime },
 			index,
@@ -1811,7 +1757,9 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 			sessionFile,
 			startTime,
 		});
-	});
+	} finally {
+		releaseLane();
+	}
 }
 
 /**
@@ -2703,20 +2651,14 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 	const childDepth = (options.taskDepth ?? 0) + 1;
 	const atMaxDepth = !canSpawnAtDepth(maxNestedSpawnDepth, childDepth);
 
-	let hostLaneLease: NativeHostLaneLease | null = null;
+	if (signal?.aborted) return cancelledBeforeStart(options);
+	let releaseLane: () => void;
 	try {
-		hostLaneLease = await acquireSubagentHostLane({
-			agentId: id,
-			owner: path.resolve(sessionFile),
-			signal,
-			waitIfFull: (options.taskDepth ?? 0) === 0,
-		});
+		releaseLane = reserveNativeLane(id, path.resolve(sessionFile));
 	} catch (error) {
 		return startupFailedBeforeMonitor(options, error, startTime);
 	}
-	if (!hostLaneLease) return cancelledBeforeStart(options);
-
-	return runWithHostLaneRelease(hostLaneLease, async () => {
+	try {
 		const monitor = createAgentRunMonitor({
 			index: options.index,
 			id,
@@ -2766,7 +2708,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 		);
 		monitor.finish();
 
-		return finalizeRunResult({
+		return await finalizeRunResult({
 			monitor,
 			done,
 			index: options.index,
@@ -2784,5 +2726,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 			sessionFile,
 			startTime,
 		});
-	});
+	} finally {
+		releaseLane();
+	}
 }

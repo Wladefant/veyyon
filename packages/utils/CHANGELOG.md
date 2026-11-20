@@ -13,12 +13,16 @@
 - Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
 ### Fixed
 
-- Fixed file locks that stayed held for the rest of a session after a burst of same-process callers on Windows, which made subagent spawns fail with "Failed to acquire lock for lane-admission.json": same-process contenders now queue, a Windows sharing violation during release is retried, and a lock whose release failed is reaped by its own process.
+- Queue same-process Windows file-lock contenders, retry sharing errors at release, and recover failed releases from the owning process.
 - Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
 - File-lock release warnings now keep the underlying Windows access error when cleanup stays blocked.
 - Report the owner, age, and phase when an asynchronous file-lock queue stalls ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
 - Skip speculative owner writes while a lock is held, and let async callers opt into a bounded contention wait ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 - Retry transient Windows access errors when restoring a live file lock from its transition directory ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+
+### Removed
+
+- Remove the lane ledger path helper and keep the host `run` directory exempt from profile migration.
 
 ## [1.10.7] - 2026-11-16
 
