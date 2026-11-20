@@ -486,7 +486,7 @@ test("concurrent reconnect managers share one pending answer and preserve it aft
 	).toHaveLength(1);
 });
 
-test("a pending append by the receiving manager does not make its answer journal stale", async () => {
+test("an answer waits for owned appends queued before and during the first drain", async () => {
 	const { manager } = newSession();
 	await manager.ensureOnDisk();
 	const journal = manager.getSessionFile()!;
@@ -496,6 +496,9 @@ test("a pending append by the receiving manager does not make its answer journal
 		entered.resolve();
 		await release.promise;
 	});
+	const secondEntered = Promise.withResolvers<void>();
+	const secondRelease = Promise.withResolvers<void>();
+	let secondHolder: Promise<void> | undefined;
 	const queue: string[] = [];
 	const answer = envelope("q-contended", "evt-original");
 	const inbox = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
@@ -505,13 +508,24 @@ test("a pending append by the receiving manager does not make its answer journal
 		const accepted = inbox.accept(answer, "auto").catch((error: unknown) => error);
 		await new Promise<void>(resolve => setImmediate(resolve));
 		expect(queue).toEqual([]);
+		secondHolder = new FileSessionStorage().withJournalLock(journal, async () => {
+			secondEntered.resolve();
+			await secondRelease.promise;
+		});
+		manager.appendMessage({ role: "user", content: "input during drain", timestamp: Date.now() });
 		release.resolve();
+		await Promise.race([secondEntered.promise, secondHolder]);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(queue).toEqual([]);
+		secondRelease.resolve();
 		expect(await accepted).toBe("queued");
 		expect(queue).toEqual([answer]);
 		expect(await inbox.accept(envelope("q-contended", "evt-retry"), "auto")).toBe("duplicate");
 	} finally {
 		release.resolve();
+		secondRelease.resolve();
 		await holder;
+		await secondHolder;
 		await manager.close();
 	}
 });
