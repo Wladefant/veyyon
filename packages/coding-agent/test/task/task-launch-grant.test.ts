@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { readFile, realpath } from "node:fs/promises";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
+import { AgentRegistry, mainAgentIdFor } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdk from "@veyyon/coding-agent/sdk";
-import { mainAgentIdFor, AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import type { SubagentLaunchGrant } from "@veyyon/kernel/session/session-entries";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -27,6 +30,7 @@ describe("task launch grants", () => {
 	let managers: SessionManager[];
 
 	beforeEach(async () => {
+		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 		managers = [];
 		root = SessionManager.create(process.cwd());
@@ -41,19 +45,20 @@ describe("task launch grants", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
 		for (const manager of [...managers, root]) await manager.close();
 	});
 
 	function tool(depth = 0, batch = false) {
 		const id = root.getSessionId();
 		return TaskTool.create(makeToolSession({
-			settings: { get: key => ({ "agent.batch": batch, "async.enabled": false })[key as "agent.batch" | "async.enabled"] },
+			settings: Settings.isolated({ "agent.batch": batch, "async.enabled": false }),
 			getSessionSpawns: () => "*",
 			getSessionId: () => id,
 			getAgentId: () => depth === 0 ? mainAgentIdFor(id) : "ParentLane",
 			getSessionFile: () => rootFile,
 			taskDepth: depth,
-			...{ recordSubagentLaunchGrant: (record: Parameters<SessionManager["appendSubagentLaunchGrant"]>[0]) => root.appendSubagentLaunchGrant(record) },
+			...{ recordSubagentLaunchGrant: (record: SubagentLaunchGrant) => root.appendSubagentLaunchGrant(record) },
 		}));
 	}
 
@@ -78,7 +83,7 @@ describe("task launch grants", () => {
 				grants,
 			}]);
 		});
-		const result = await (await tool(0, true)).execute("grant", { context: "", tasks: [{ ...lane, grants }] });
+		const result = await (await tool(0, true)).execute("grant", { context: "Test the launch receipt.", tasks: [{ ...lane, grants }] });
 		expect(result.details?.results[0]?.exitCode).toBe(0);
 		expect(start).toHaveBeenCalledTimes(1);
 		await root.flush();
