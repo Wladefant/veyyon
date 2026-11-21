@@ -64,6 +64,8 @@ jobs:
         env:
           RELEASE_TARGETS: win32-x64
           VEYYON_OFFICIAL_RELEASE: '1'
+          VEYYON_BUILD_SHA: ${{ inputs.sha }}
+          VEYYON_BUILD_TAG: ''
         run: |
           bun run ci:release:build-binaries
           binary=packages/coding-agent/binaries/veyyon-windows-x64.exe
