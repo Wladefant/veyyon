@@ -2,7 +2,7 @@ import { getInstallId } from "@veyyon/utils/dirs";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import type { DiscoveryFailure, DiscoveryHooks, DiscoveryReport } from "../discovery/failure";
+import type { DiscoveryHooks } from "../discovery/failure";
 import type {
 	FetchOpenAICompatibleModelsOptions,
 	OpenAICompatibleModelMapperContext,
@@ -56,7 +56,12 @@ import {
 import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
 import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
-import { createBundledReferenceMap, createReferenceResolver, mapWithBundledReference, toModelSpec } from "./bundled-references";
+import {
+	createBundledReferenceMap,
+	createReferenceResolver,
+	mapWithBundledReference,
+	toModelSpec,
+} from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
 async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completions">(
@@ -67,17 +72,11 @@ async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completion
 	return mod.fetchOpenAICompatibleModels<TApi>(options);
 }
 
-async function readDiscoveryJson(response: Response, report: DiscoveryReport): Promise<unknown> {
-	// Deferred import keeps discovery out of the provider-models startup graph.
-	const mod = await import("../discovery/failure");
-	return mod.readDiscoveryJson(response, report);
-}
-
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 const ANTHROPIC_OAUTH_BETA =
-	"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11";
+	"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11";
 
 export interface ModelsDevModel {
 	id?: string;
@@ -347,6 +346,18 @@ function buildAnthropicReferenceMap(
 const ANTHROPIC_CURATED_REASONING_OPTIONS: ModelReasoningOptions = {
 	efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
 };
+export const FABLE_MYTHOS_5_2_SPEC = {
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: true,
+	reasoningOptions: ANTHROPIC_CURATED_REASONING_OPTIONS,
+	input: ["text", "image"],
+	cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+	contextWindow: 1_000_000,
+	maxTokens: 128_000,
+} satisfies Omit<ModelSpec<"anthropic-messages">, "id" | "name">;
+
 export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-messages">[] = [
 	{
 		id: "claude-opus-5-5",
@@ -400,6 +411,16 @@ export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-me
 		contextWindow: 1_000_000,
 		maxTokens: 128_000,
 	},
+	{
+		id: "claude-fable-5-2",
+		name: "Claude Fable 5.2",
+		...FABLE_MYTHOS_5_2_SPEC,
+	},
+	{
+		id: "claude-mythos-5-2",
+		name: "Claude Mythos 5.2",
+		...FABLE_MYTHOS_5_2_SPEC,
+	},
 ];
 
 function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string): string {
@@ -413,7 +434,6 @@ function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string
 function toAnthropicDiscoveryBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 }
-
 
 const OPENAI_NON_RESPONSES_PREFIXES = [
 	"text-embedding",
