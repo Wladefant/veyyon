@@ -336,7 +336,7 @@ describe("model thinking derivation", () => {
 		});
 		expect(mapEffortToGoogleThinkingLevel(Effort.Low)).toBe("LOW");
 		expect(mapEffortToGoogleThinkingLevel(Effort.High)).toBe("HIGH");
-		expect(mapEffortToGoogleThinkingLevel(Effort.XHigh)).toBe("HIGH");
+		expect(mapEffortToGoogleThinkingLevel(Effort.XHigh)).toBe("XHIGH");
 		expect(() => requireSupportedEffort(model, Effort.Medium)).toThrow(/not supported/);
 	});
 	it("maps minimal to LOW when a collapsed family aliases it onto the low wire id", () => {
