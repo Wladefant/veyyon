@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
+import { dirname } from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, mainAgentIdFor } from "@veyyon/coding-agent/registry/agent-registry";
@@ -94,6 +96,44 @@ describe("task launch grants", () => {
 		root.appendCustomEntry("test", { persisted: true });
 		await root.flush();
 		expect(await receipts(rootFile)).toEqual(persisted);
+	});
+
+	it.skipIf(process.platform === "win32")("syncs the published receipt's parent directory before child startup", async () => {
+		const parent = fs.statSync(dirname(rootFile));
+		const sync = fs.fsyncSync;
+		let receiptSynced = false;
+		vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			const stat = fs.fstatSync(fd);
+			if (stat.isDirectory() && stat.dev === parent.dev && stat.ino === parent.ino) {
+				expect(fs.readFileSync(rootFile, "utf8")).toContain('"type":"subagent_launch_grant"');
+				sync(fd);
+				receiptSynced = true;
+			} else {
+				sync(fd);
+			}
+		});
+		const start = observeChild(async () => expect(receiptSynced).toBe(true));
+		const result = await (await tool()).execute("sync", { ...lane, grants });
+		expect(result.details?.results[0]?.exitCode).toBe(0);
+		expect(receiptSynced).toBe(true);
+		expect(start).toHaveBeenCalledTimes(1);
+	});
+
+	it.skipIf(process.platform === "win32")("does not start the child if the receipt directory sync fails", async () => {
+		const parent = fs.statSync(dirname(rootFile));
+		const sync = fs.fsyncSync;
+		vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			const stat = fs.fstatSync(fd);
+			if (stat.isDirectory() && stat.dev === parent.dev && stat.ino === parent.ino) {
+				throw Object.assign(new Error("injected receipt directory sync failure"), { code: "EIO" });
+			}
+			sync(fd);
+		});
+		const start = observeChild(async () => {});
+		const result = await (await tool()).execute("sync-failed", { ...lane, grants });
+		expect(firstToolResultText(result)).toContain("injected receipt directory sync failure");
+		expect(start).not.toHaveBeenCalled();
+		expect(root.getSubagentLaunchGrants()).toEqual([]);
 	});
 
 	it("launches without granting authority from assignment text", async () => {
