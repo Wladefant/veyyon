@@ -112,6 +112,14 @@ function foreignMessageRow(id: string, content: string): string {
 	})}\n`;
 }
 
+async function appendLargeHistory(manager: SessionManager): Promise<void> {
+	const payload = "retained session history ".repeat(45);
+	for (let i = 0; i < 9_000; i++) {
+		manager.appendMessage({ role: "user", content: `${i} ${payload}`, timestamp: i });
+	}
+	await manager.flush();
+}
+
 class LateAppendOnWriteTextAtomicStorage extends FileSessionStorage {
 	lateBytes?: string;
 
@@ -349,18 +357,8 @@ describe("staged journal rewrite reads only new bytes", () => {
 		const storage = new NoWholeJournalRead();
 		const manager = await SessionManager.open(journal, dir, storage);
 		try {
-			const payload = "retained session history ".repeat(45);
-			for (let i = 0; i < 9_000; i++) {
-				manager.appendMessage({ role: "user", content: `${i} ${payload}`, timestamp: i });
-			}
-			await manager.flush();
-			const peer = `${JSON.stringify({
-				type: "message",
-				id: "foreign-streamed",
-				timestamp: new Date().toISOString(),
-				parentId: null,
-				message: { role: "user", content: "independent append", timestamp: 0 },
-			})}\n`;
+			await appendLargeHistory(manager);
+			const peer = foreignMessageRow("foreign-streamed", "independent append");
 			await fsp.appendFile(journal, peer);
 			const before = await fsp.readFile(journal);
 			expect(before.byteLength).toBeGreaterThan(8 << 20);
@@ -381,11 +379,7 @@ describe("staged journal rewrite reads only new bytes", () => {
 		const manager = await SessionManager.open(journal, dir);
 		let openSpy: { mockRestore(): void } | undefined;
 		try {
-			const largeContent = "a".repeat(500_000);
-			for (let i = 0; i < 18; i++) {
-				manager.appendMessage({ role: "user", content: `${i} ${largeContent}`, timestamp: i });
-			}
-			await manager.flush();
+			await appendLargeHistory(manager);
 
 			const peer1 = foreignMessageRow("foreign-before-scan", "pre-existing foreign row");
 			const peer2 = foreignMessageRow("foreign-during-scan", "concurrent foreign row");
@@ -394,7 +388,7 @@ describe("staged journal rewrite reads only new bytes", () => {
 			const preAppendSize = (await fsp.stat(journal)).size;
 			expect(preAppendSize).toBeGreaterThan(8 << 20);
 			expect(preAppendSize % (1 << 20)).not.toBe(0);
-			const before = await fsp.readFile(journal, "utf8");
+			const before = await fsp.readFile(journal);
 
 			const resolvedJournal = path.resolve(journal);
 			const realOpen = fs.promises.open.bind(fs.promises);
@@ -430,7 +424,9 @@ describe("staged journal rewrite reads only new bytes", () => {
 			);
 			expect(outOfBoundsReads).toEqual([]);
 
-			expect(await fsp.readFile(journal, "utf8")).toBe(before + peer2);
+			const after = await fsp.readFile(journal);
+			expect(after.subarray(0, preAppendSize).equals(before)).toBe(true);
+			expect(after.subarray(preAppendSize).toString("utf8")).toBe(peer2);
 		} finally {
 			openSpy?.mockRestore();
 			await manager.close();
