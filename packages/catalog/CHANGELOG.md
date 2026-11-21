@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-11-21
+
 ### Added
 
 - Add Claude Fable 5.2 and Claude Mythos 5.2 to the first-party Anthropic catalog, with 1M context, 128k output, image input, and adaptive thinking.
