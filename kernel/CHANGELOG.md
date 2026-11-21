@@ -6,7 +6,7 @@
 
 ### Fixed
 
-- Drain pending journal appends before locking a rewrite, and remove whole-file rereads from large session publication ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+- Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
 
 ## [1.12.1] - 2026-11-20
 

@@ -21,12 +21,9 @@ import { TempDir } from "@veyyon/utils";
  *
  * The class these rows close is "a whole-file publish writes something other than
  * the whole file, or stops noticing another writer". Two hazards, both here:
- * chunking can drop, duplicate or truncate a chunk (and the EPERM fallback writes
- * the same body a SECOND time, which a spent generator cannot do), and a skipped
- * read-back can miss a change it needed to see. The foreign-line class itself is
- * owned by `two-managers-on-one-transcript.test.ts`, which is the suite that
- * proves a line another writer appended survives a publish; these rows defend the
- * conditions under which the read that finds it is allowed to be skipped.
+ * chunking can drop, duplicate or truncate a chunk, and a skipped read-back can
+ * miss a change it needed to see. `two-managers-on-one-transcript.test.ts`
+ * proves that peer appends survive publication; these rows defend when a read can be skipped.
  *
  * MEASURED (mutation matrix, each mutant applied alone, rows in file order):
  * - M1 the final partial chunk is never yielded: rows 1, 5 red. Row 6 stays green,
@@ -34,8 +31,6 @@ import { TempDir } from "@veyyon/utils";
  *   chunks and so proves the WRITER rather than the chunker.
  * - M2 the synchronous chunk writer stops after one chunk: row 6 red.
  * - M3 the asynchronous chunk writer stops after one chunk: row 1 red.
- * - M4 a body can be consumed only once: row 6 red, rows 1 and 5 green - one pass
- *   is all any other path asks for, and only the fallback asks twice.
  * - M5 the chunk writers open with "a" instead of "w": row 6 red.
  * - M6 the published size is counted in characters instead of UTF-8 bytes: row 2 red.
  * - M7 the skip compares size and ignores identity: row 4 red.
@@ -65,7 +60,7 @@ class FsCodeError extends Error {
 	}
 }
 
-/** Windows-style EPERM on the publish rename, which makes the body get written twice. */
+/** Inject Windows-style EPERM on the first staged replacement, not on lock acquisition. */
 class RenameEpermOnceStorage extends FileSessionStorage {
 	failNextReplace = false;
 
@@ -197,7 +192,7 @@ describe("a rewrite publishes the whole file without holding or re-reading it", 
 		await manager.close();
 	});
 
-	it("writes the whole body again when the publish falls back after EPERM", async () => {
+	it("preserves the full staged body when asynchronous replacement hits EPERM", async () => {
 		using tempDir = TempDir.createSync("@veyyon-rewrite-eperm-");
 		const dir = tempDir.path();
 		const file = path.join(dir, "session.jsonl");
@@ -215,7 +210,7 @@ describe("a rewrite publishes the whole file without holding or re-reading it", 
 		await manager.close();
 	});
 
-	it("writes every chunk at the target, twice, when the synchronous publish hits EPERM", async () => {
+	it("publishes every staged chunk when synchronous replacement hits EPERM", async () => {
 		using tempDir = TempDir.createSync("@veyyon-sync-eperm-");
 		const target = path.join(tempDir.path(), "session.jsonl");
 		// Longer than the body about to replace it, so a writer that appends instead
@@ -228,18 +223,13 @@ describe("a rewrite publishes the whole file without holding or re-reading it", 
 			passes += 1;
 			return chunks;
 		};
-		// The synchronous publish stages a temp file and renames it. EPERM on that
-		// rename is the Windows case, and its fallback asks for the SAME body a
-		// second time and writes it straight at the target: a body handed over as a
-		// spent iterator has nothing left to give it.
-		vi.spyOn(nodeFs, "renameSync").mockImplementationOnce(() => {
-			throw new FsCodeError("EPERM", "EPERM: operation not permitted, rename");
-		});
-
-		new FileSessionStorage().writeTextSync(target, body);
+		const storage = new RenameEpermOnceStorage();
+		storage.failNextReplace = true;
+		storage.writeTextSync(target, body);
 
 		expect(await fs.readFile(target, "utf8")).toBe(chunks.join(""));
-		expect(passes).toBe(2);
+		expect(storage.failNextReplace).toBe(false);
+		expect(passes).toBe(1);
 	});
 
 	it("keeps noticing another writer after a publish that skipped the read", async () => {
