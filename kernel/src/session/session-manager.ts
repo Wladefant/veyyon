@@ -226,6 +226,81 @@ const nativeRelocationGate = (directory: string): string => `${directory}.native
 // the relocation gate, and a concurrent move cannot carry off a retiring lease.
 const nativeOwnerDirectory = (directory: string): string => `${directory}.native-owners`;
 
+// Leave room for one turn to finish filesystem work after its retry deadline.
+const NATIVE_RELOCATION_WAIT = { contentionTimeoutMs: 5_000, queueWaitMs: 15_000 };
+const NATIVE_OPEN_GATE_OPTIONS = {
+	...NATIVE_RELOCATION_WAIT,
+	queueContext: { owner: "native-transcript", site: "native-transcript-open" },
+};
+const NATIVE_MOVE_SOURCE_GATE_OPTIONS = {
+	...NATIVE_RELOCATION_WAIT,
+	queueContext: { owner: "session-move", site: "native-relocation-source" },
+};
+const NATIVE_MOVE_TARGET_GATE_OPTIONS = {
+	retries: 1,
+	queueWaitMs: 1,
+	queueContext: { owner: "session-move", site: "native-relocation-target" },
+};
+const NATIVE_OWNER_LOCK_OPTIONS = { retries: 1, queueWaitMs: 1 };
+
+interface NativeOwnerRequest {
+	name: string;
+	resolve(handle: FileLockHandle): void;
+	reject(error: unknown): void;
+}
+
+// Only opens awaiting the same gate acquisition share a batch. Arrivals during
+// publication take a new turn, so a queued move does not wait for a growing batch.
+const pendingNativeOwnerBatches = new Map<string, NativeOwnerRequest[]>();
+
+function reserveNativeOwner(transcript: string): Promise<FileLockHandle> {
+	const directory = path.dirname(transcript);
+	const { promise, resolve, reject } = Promise.withResolvers<FileLockHandle>();
+	const request = { name: path.basename(transcript), resolve, reject };
+	const pending = pendingNativeOwnerBatches.get(directory);
+	if (pending) {
+		pending.push(request);
+	} else {
+		const batch = [request];
+		pendingNativeOwnerBatches.set(directory, batch);
+		void publishNativeOwners(directory, batch);
+	}
+	return promise;
+}
+
+async function publishNativeOwners(directory: string, batch: NativeOwnerRequest[]): Promise<void> {
+	let outcomes: PromiseSettledResult<FileLockHandle>[] | undefined;
+	try {
+		const gate = await acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS);
+		pendingNativeOwnerBatches.delete(directory);
+		try {
+			// Publish under the same gate that protects a move's owner scan and rename.
+			const owners = nativeOwnerDirectory(directory);
+			await fs.promises.mkdir(owners, { recursive: true });
+			outcomes = await Promise.allSettled(
+				batch.map(({ name }) => acquireFileLock(path.join(owners, name), NATIVE_OWNER_LOCK_OPTIONS)),
+			);
+		} finally {
+			await gate.release();
+		}
+	} catch (error) {
+		if (pendingNativeOwnerBatches.get(directory) === batch) pendingNativeOwnerBatches.delete(directory);
+		if (outcomes) {
+			// If returning the gate failed, no caller received these leases.
+			await Promise.allSettled(
+				outcomes.flatMap(result => (result.status === "fulfilled" ? [result.value.release()] : [])),
+			);
+		}
+		for (const request of batch) request.reject(error);
+		return;
+	}
+	for (const [index, result] of outcomes.entries()) {
+		const request = batch[index]!;
+		if (result.status === "fulfilled") request.resolve(result.value);
+		else request.reject(result.reason);
+	}
+}
+
 async function canonicalArtifactDirectory(directory: string): Promise<string> {
 	return fs.promises.realpath(directory).catch(async error => {
 		if (!isEnoent(error)) throw error;
@@ -3182,21 +3257,25 @@ export class SessionManager {
 				const source = await canonicalArtifactDirectory(sourceDir);
 				// The gate is outside the tree being moved. Hold it across the scan,
 				// rename and header rewrite, including storage rollback on rewrite failure.
-				return withFileLock(nativeRelocationGate(source), async () => {
-					await assertNoNativeOwners(source);
-					await fs.promises.mkdir(nextSessionDir, { recursive: true });
-					const target = await canonicalArtifactDirectory(sessionFileStem(nextFile));
-					if (target === source) return this.#moveTo(resolvedCwd, nextSessionDir);
-					// Fail fast rather than deadlock with a competing move in the opposite direction.
-					return withFileLock(
-						nativeRelocationGate(target),
-						async () => {
-							await assertNoNativeOwners(target);
-							await this.#moveTo(resolvedCwd, nextSessionDir);
-						},
-						{ retries: 1, queueWaitMs: 1 },
-					);
-				});
+				return withFileLock(
+					nativeRelocationGate(source),
+					async () => {
+						await assertNoNativeOwners(source);
+						await fs.promises.mkdir(nextSessionDir, { recursive: true });
+						const target = await canonicalArtifactDirectory(sessionFileStem(nextFile));
+						if (target === source) return this.#moveTo(resolvedCwd, nextSessionDir);
+						// Fail fast rather than deadlock with a competing move in the opposite direction.
+						return withFileLock(
+							nativeRelocationGate(target),
+							async () => {
+								await assertNoNativeOwners(target);
+								await this.#moveTo(resolvedCwd, nextSessionDir);
+							},
+							NATIVE_MOVE_TARGET_GATE_OPTIONS,
+						);
+					},
+					NATIVE_MOVE_SOURCE_GATE_OPTIONS,
+				);
 			}
 		}
 		return this.#moveTo(resolvedCwd, nextSessionDir);
@@ -4665,14 +4744,7 @@ export class SessionManager {
 			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
 			throw error;
 		});
-		// Publish under the gate so relocation cannot pass its owner check and
-		// then race a new open. The lease itself never enters the moved tree.
-		const directory = path.dirname(transcript);
-		const owners = nativeOwnerDirectory(directory);
-		const handle = await withFileLock(nativeRelocationGate(directory), async () => {
-			await fs.promises.mkdir(owners, { recursive: true });
-			return acquireFileLock(path.join(owners, path.basename(transcript)), { retries: 1, queueWaitMs: 1 });
-		});
+		const handle = await reserveNativeOwner(transcript);
 		try {
 			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
 			manager.#exclusiveOwner = { handle };
