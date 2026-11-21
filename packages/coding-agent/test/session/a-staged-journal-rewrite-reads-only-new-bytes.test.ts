@@ -444,6 +444,7 @@ describe("staged journal rewrite reads only new bytes", () => {
 				try {
 					manager.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
 					await manager.flush();
+					await manager.ensureOnDisk();
 					const journal = manager.getSessionFile()!;
 					peer = await SessionManager.open(journal);
 					const grant = {
