@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { reportFault } from "@veyyon/utils/fault-sink";
@@ -15,6 +16,7 @@ import { Snowflake } from "@veyyon/utils/snowflake";
 import { toError } from "@veyyon/utils/type-guards";
 import { SESSION_TITLE_SLOT_ENTRY_TYPE } from "./session-entries";
 import { overlayTitleSlotContent, type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
+import { windowsWriteThroughRenameSync } from "./windows-write-through-rename";
 
 const utf8Decoder = new TextDecoder("utf-8");
 
@@ -1218,9 +1220,18 @@ export class FileSessionStorage implements SessionStorage {
 				throw fallbackErr;
 			}
 		}
-		// Keep sync errors out of the rename fallback: the replacement is already visible.
-		// Windows keeps the staged file flush; its directory handles cannot be synced this way.
-		if (process.platform !== "win32") fsyncDirEntrySync(path.dirname(fpath), { required: true });
+		// The replacement is already visible. A sync failure must not enter the rename fallback.
+		if (os.platform() === "win32") {
+			// Sync the published file too: renameSync can replay appends after the staged flush.
+			const fd = fs.openSync(fpath, "r+");
+			try {
+				fs.fsyncSync(fd);
+			} finally {
+				fs.closeSync(fd);
+			}
+		} else {
+			fsyncDirEntrySync(path.dirname(fpath), { required: true });
+		}
 	}
 
 	/**
@@ -1231,7 +1242,8 @@ export class FileSessionStorage implements SessionStorage {
 	renameSync(source: string, target: string): void {
 		withJournalLockSync(target, () => {
 			this.#replayTailAppends(source, target);
-			fs.renameSync(source, target);
+			if (os.platform() === "win32") windowsWriteThroughRenameSync(source, target);
+			else fs.renameSync(source, target);
 		});
 	}
 
@@ -1309,6 +1321,8 @@ export class FileSessionStorage implements SessionStorage {
 		renameError: unknown,
 		commitGuard?: (sourcePath?: string) => boolean,
 	): boolean {
+		// If replacement consumed the staged name before reporting failure, leave the target alone.
+		if (this.existsStateSync(tempPath) !== "present") throw toError(renameError);
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, sessionBackupName(path.basename(targetPath), Snowflake.next()));
 		try {

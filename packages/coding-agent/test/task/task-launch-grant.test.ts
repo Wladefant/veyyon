@@ -141,17 +141,22 @@ describe("task launch grants", () => {
 	it.skipIf(process.platform === "win32")("waits for the Win32 write-through replacement and rejects its failure", async () => {
 		const platform = vi.spyOn(os, "platform").mockReturnValue("win32");
 		let shouldFail = true;
-		let replaced = false;
+		let failFileSync = false;
+		let rootMoves = 0;
+		let rootSyncs = 0;
 		const moveFileEx = vi.fn((from: Buffer, to: Buffer, flags: number) => {
 			const source = from.toString("utf16le").slice(0, -1);
 			const target = to.toString("utf16le").slice(0, -1);
-			expect(target).toBe(rootFile);
+			if (target !== rootFile) {
+				fs.renameSync(source, target);
+				return 1;
+			}
+			rootMoves++;
 			expect(dirname(source)).toBe(dirname(target));
 			expect(flags).toBe(0x9); // REPLACE_EXISTING | WRITE_THROUGH, no cross-volume copy.
 			expect(fs.readFileSync(source, "utf8")).toContain('"type":"subagent_launch_grant"');
 			if (shouldFail) return 0;
 			fs.renameSync(source, target);
-			replaced = true;
 			return 1;
 		});
 		const load = vi.spyOn(ffi, "dlopen").mockReturnValue({
@@ -160,11 +165,17 @@ describe("task launch grants", () => {
 		});
 		const sync = fs.fsyncSync;
 		vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
-			expect(fs.fstatSync(fd).isDirectory()).toBe(false);
+			const current = fs.fstatSync(fd);
+			expect(current.isDirectory()).toBe(false);
+			const target = fs.statSync(rootFile);
+			if (target.dev === current.dev && target.ino === current.ino) {
+				if (failFileSync) throw new Error("injected published receipt file sync failure");
+				rootSyncs++;
+			}
 			sync(fd);
 		});
 		const start = observeChild(async () => {
-			expect(replaced).toBe(true);
+			expect(rootSyncs).toBe(1);
 			expect(await receipts(rootFile)).toHaveLength(1);
 		});
 		try {
@@ -180,7 +191,13 @@ describe("task launch grants", () => {
 			const success = await dispatch.execute("write-through-ok", { ...lane, name: "RetryLane", grants });
 			expect(success.details?.results[0]?.exitCode).toBe(0);
 			expect(start).toHaveBeenCalledTimes(1);
-			expect(moveFileEx).toHaveBeenCalledTimes(2);
+			expect(rootMoves).toBe(2);
+
+			failFileSync = true;
+			const syncFailed = await dispatch.execute("file-sync-failed", { ...lane, name: "SyncFailureLane", grants });
+			expect(firstToolResultText(syncFailed)).toContain("injected published receipt file sync failure");
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(root.getSubagentLaunchGrants().map(grant => grant.agentId)).toEqual(["RetryLane"]);
 		} finally {
 			load.mockRestore();
 			platform.mockRestore();

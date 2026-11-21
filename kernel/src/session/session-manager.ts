@@ -4276,8 +4276,7 @@ export class SessionManager {
 		this.#grants = [...previousGrants, grant];
 		this.#forceFileCreation = true;
 		try {
-			// Rewrite the head and copy the transcript bytes after it. On POSIX the file
-			// backend must also sync the published directory entry before we acknowledge.
+			// The file backend waits for the replacement to be durable before we acknowledge the receipt.
 			await this.#rewriteAtomically(this.#entries.length);
 			if (
 				this.#diskEpoch !== epoch ||
