@@ -4,7 +4,6 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, mainAgentIdFor } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdk from "@veyyon/coding-agent/sdk";
-import type { SubagentLaunchGrant } from "@veyyon/kernel/session/session-entries";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -58,7 +57,7 @@ describe("task launch grants", () => {
 			getAgentId: () => depth === 0 ? mainAgentIdFor(id) : "ParentLane",
 			getSessionFile: () => rootFile,
 			taskDepth: depth,
-			...{ recordSubagentLaunchGrant: (record: SubagentLaunchGrant) => root.appendSubagentLaunchGrant(record) },
+			recordSubagentLaunchGrant: record => root.appendSubagentLaunchGrant(record),
 		}));
 	}
 
@@ -87,7 +86,14 @@ describe("task launch grants", () => {
 		expect(result.details?.results[0]?.exitCode).toBe(0);
 		expect(start).toHaveBeenCalledTimes(1);
 		await root.flush();
-		expect(await receipts(rootFile)).toHaveLength(1);
+		const persisted = await receipts(rootFile);
+		expect(persisted).toHaveLength(1);
+		await root.close();
+		root = await SessionManager.open(rootFile);
+		expect(root.getSubagentLaunchGrants()).toEqual(persisted);
+		root.appendCustomEntry("test", { persisted: true });
+		await root.flush();
+		expect(await receipts(rootFile)).toEqual(persisted);
 	});
 
 	it("launches without granting authority from assignment text", async () => {
