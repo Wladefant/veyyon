@@ -155,7 +155,9 @@ test.each([6, 14])(
 		await fs.mkdir(artifactsDir, { recursive: true });
 		const canonicalDir = await fs.realpath(artifactsDir);
 		const gateLockPath = `${canonicalDir}.native-relocation.lock`;
-		const transcriptFiles = Array.from({ length: count }, (_, index) => path.join(canonicalDir, `child-${index}.jsonl`));
+		const transcriptFiles = Array.from({ length: count }, (_, index) =>
+			path.join(canonicalDir, `child-${index}.jsonl`),
+		);
 		const burstFiles = [...transcriptFiles, transcriptFiles[0]!];
 		await Promise.all(transcriptFiles.map(file => fs.writeFile(file, "")));
 		const resolution = watchTranscriptResolution(burstFiles);
@@ -175,7 +177,6 @@ test.each([6, 14])(
 			return originalRename(source, destination);
 		});
 
-		const managers: SessionManager[] = [];
 		let openBurstPromise: Promise<PromiseSettledResult<SessionManager>[]> | undefined;
 		try {
 			vi.useFakeTimers();
@@ -202,11 +203,7 @@ test.each([6, 14])(
 			gateRelease.resolve();
 
 			const settled = await openBurstPromise;
-			for (const result of settled) {
-				if (result.status === "fulfilled") {
-					managers.push(result.value);
-				}
-			}
+			const managers = settled.flatMap(result => (result.status === "fulfilled" ? [result.value] : []));
 
 			expect(
 				settled.slice(1, count).flatMap(result => (result.status === "rejected" ? [String(result.reason)] : [])),
@@ -228,21 +225,20 @@ test.each([6, 14])(
 
 			await Promise.all(managers.map(manager => manager.ensureOnDisk()));
 			expect(managers.map(manager => manager.getSessionFile()).sort()).toEqual(transcriptFiles.toSorted());
-			await Promise.all(transcriptFiles.map(file => fs.stat(file)));
+			const owners = await fs.readdir(`${canonicalDir}.native-owners`);
+			expect(owners.sort()).toEqual(transcriptFiles.map(file => `${path.basename(file)}.lock`).sort());
+			for (const file of transcriptFiles) {
+				expect(await fs.readFile(file, "utf8")).toContain('"type":"session"');
+			}
 		} finally {
 			vi.useRealTimers();
 			resolution.restore();
 			gateRelease.resolve();
 			renameSpy.mockRestore();
-			if (openBurstPromise) {
-				const settled = await openBurstPromise;
-				for (const result of settled) {
-					if (result.status === "fulfilled" && !managers.includes(result.value)) {
-						managers.push(result.value);
-					}
-				}
-			}
-			await Promise.allSettled(managers.map(manager => manager.close()));
+			const settled = (await openBurstPromise) ?? [];
+			await Promise.allSettled(
+				settled.flatMap(result => (result.status === "fulfilled" ? [result.value.close()] : [])),
+			);
 			dir.removeSync();
 		}
 	},
@@ -316,7 +312,12 @@ it("keeps native owner publication behind both relocation gates through the move
 		expect(await opened).toHaveLength(2);
 		expect(await fs.readFile(path.join(target, "artifact.txt"), "utf8")).toBe("kept");
 		const journal = await fs.readFile(root.getSessionFile()!, "utf8");
-		expect(JSON.parse(journal.split("\n", 1)[0]!)).toMatchObject({ cwd: cwdB });
+		const header = journal
+			.trimEnd()
+			.split("\n")
+			.map(line => JSON.parse(line))
+			.find(entry => entry.type === "session");
+		expect(header).toMatchObject({ cwd: cwdB });
 	} finally {
 		resolution?.restore();
 		moveRelease.resolve();
