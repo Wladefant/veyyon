@@ -4,7 +4,11 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import {
+	FileSessionStorage,
+	type SessionFileBody,
+	type WriteTextAtomicOptions,
+} from "@veyyon/kernel/session/session-storage";
 import { useTempDirs } from "../helpers/temp-dirs";
 
 /**
@@ -96,6 +100,33 @@ class LateAppendStorage extends FileSessionStorage {
 
 function sessionRow(id: string, text: string): string {
 	return `${JSON.stringify({ type: "message", id, text })}\n`;
+}
+
+function foreignMessageRow(id: string, content: string): string {
+	return `${JSON.stringify({
+		type: "message",
+		id,
+		timestamp: new Date().toISOString(),
+		parentId: null,
+		message: { role: "user", content, timestamp: 0 },
+	})}\n`;
+}
+
+class LateAppendOnWriteTextAtomicStorage extends FileSessionStorage {
+	lateBytes?: string;
+
+	override async writeTextAtomic(
+		fpath: string,
+		body: SessionFileBody,
+		options?: WriteTextAtomicOptions,
+	): Promise<void> {
+		const bytes = this.lateBytes;
+		if (bytes !== undefined) {
+			this.lateBytes = undefined;
+			await fsp.appendFile(fpath, bytes, "utf8");
+		}
+		return super.writeTextAtomic(fpath, body, options);
+	}
 }
 
 describe("staged journal rewrite reads only new bytes", () => {
@@ -339,6 +370,89 @@ describe("staged journal rewrite reads only new bytes", () => {
 
 			expect(storage.attemptedWholeRead).toBe(false);
 			expect((await fsp.readFile(journal)).equals(before)).toBe(true);
+		} finally {
+			await manager.close();
+		}
+	});
+
+	it("bounds large foreign-line scans to pre-append stat size and preserves concurrent peer rows", async () => {
+		const dir = temp("rewrite-bounded-large-scan-");
+		const journal = path.join(dir, "session.jsonl");
+		const manager = await SessionManager.open(journal, dir);
+		let openSpy: { mockRestore(): void } | undefined;
+		try {
+			const largeContent = "a".repeat(500_000);
+			for (let i = 0; i < 18; i++) {
+				manager.appendMessage({ role: "user", content: `${i} ${largeContent}`, timestamp: i });
+			}
+			await manager.flush();
+
+			const peer1 = foreignMessageRow("foreign-before-scan", "pre-existing foreign row");
+			const peer2 = foreignMessageRow("foreign-during-scan", "concurrent foreign row");
+			await fsp.appendFile(journal, peer1, "utf8");
+
+			const preAppendSize = (await fsp.stat(journal)).size;
+			expect(preAppendSize).toBeGreaterThan(8 << 20);
+			expect(preAppendSize % (1 << 20)).not.toBe(0);
+			const before = await fsp.readFile(journal, "utf8");
+
+			const resolvedJournal = path.resolve(journal);
+			const realOpen = fs.promises.open.bind(fs.promises);
+			const readRequests: Array<{ offset: number; length: number }> = [];
+			let injected = false;
+
+			openSpy = spyOn(fs.promises, "open").mockImplementation(async (file, flags, mode) => {
+				const handle = await realOpen(file, flags, mode);
+				if (normalizeFsTarget(file) === resolvedJournal) {
+					const realRead = handle.read.bind(handle);
+					Object.defineProperty(handle, "read", {
+						configurable: true,
+						value: async (buffer: Buffer, offset: number, length: number, position: number) => {
+							readRequests.push({ offset: position, length });
+							const result = await realRead(buffer, offset, length, position);
+							if (!injected) {
+								injected = true;
+								await fsp.appendFile(journal, peer2, "utf8");
+							}
+							return result;
+						},
+					});
+				}
+				return handle;
+			});
+
+			await manager.rewriteEntries();
+
+			expect(injected).toBe(true);
+			expect(readRequests.length).toBeGreaterThan(0);
+			const outOfBoundsReads = readRequests.filter(
+				req => req.offset >= preAppendSize || req.offset + req.length > preAppendSize,
+			);
+			expect(outOfBoundsReads).toEqual([]);
+
+			expect(await fsp.readFile(journal, "utf8")).toBe(before + peer2);
+		} finally {
+			openSpy?.mockRestore();
+			await manager.close();
+		}
+	});
+
+	it("preserves a peer append that lands before writeTextAtomic during a full rewrite", async () => {
+		const dir = temp("rewrite-entries-late-peer-before-write-");
+		const journal = path.join(dir, "session.jsonl");
+		const storage = new LateAppendOnWriteTextAtomicStorage();
+		const manager = await SessionManager.open(journal, dir, storage);
+		try {
+			manager.appendMessage({ role: "user", content: "first owned message", timestamp: 1 });
+			await manager.flush();
+
+			const before = await fsp.readFile(journal, "utf8");
+			const peer = foreignMessageRow("foreign-before-write-text-atomic", "late peer append");
+			storage.lateBytes = peer;
+
+			await manager.rewriteEntries();
+
+			expect(await fsp.readFile(journal, "utf8")).toBe(before + peer);
 		} finally {
 			await manager.close();
 		}
