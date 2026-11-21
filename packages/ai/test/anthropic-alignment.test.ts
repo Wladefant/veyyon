@@ -29,8 +29,8 @@ import { Effort } from "@veyyon/catalog/effort";
 import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
-import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 import { withEnv } from "../../utils/test/helpers/restore-global";
+import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
 
 const ANTHROPIC_MODEL_SPEC: ModelSpec<"anthropic-messages"> = {
 	id: "claude-sonnet-4-5",

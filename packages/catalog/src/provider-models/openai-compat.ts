@@ -2,7 +2,7 @@ import { getInstallId } from "@veyyon/utils/dirs";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import type { DiscoveryFailure, DiscoveryHooks, DiscoveryReport } from "../discovery/failure";
+import type { DiscoveryHooks } from "../discovery/failure";
 import type {
 	FetchOpenAICompatibleModelsOptions,
 	OpenAICompatibleModelMapperContext,
@@ -56,7 +56,12 @@ import {
 import { resolveKimiCodeEndpoint } from "../wire/kimi-code";
 import { getOpenCodeUserAgent, openCodeSessionHeaderValue } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
-import { createBundledReferenceMap, createReferenceResolver, mapWithBundledReference, toModelSpec } from "./bundled-references";
+import {
+	createBundledReferenceMap,
+	createReferenceResolver,
+	mapWithBundledReference,
+	toModelSpec,
+} from "./bundled-references";
 import { filterModelsDevCatalogRows } from "./models-dev-policies";
 
 async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completions">(
@@ -65,12 +70,6 @@ async function fetchOpenAICompatibleModels<TApi extends Api = "openai-completion
 	// Deferred import keeps discovery out of the provider-models startup graph.
 	const mod = await import("../discovery/openai-compatible");
 	return mod.fetchOpenAICompatibleModels<TApi>(options);
-}
-
-async function readDiscoveryJson(response: Response, report: DiscoveryReport): Promise<unknown> {
-	// Deferred import keeps discovery out of the provider-models startup graph.
-	const mod = await import("../discovery/failure");
-	return mod.readDiscoveryJson(response, report);
 }
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -435,7 +434,6 @@ function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string
 function toAnthropicDiscoveryBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 }
-
 
 const OPENAI_NON_RESPONSES_PREFIXES = [
 	"text-embedding",
