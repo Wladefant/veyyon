@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
+
+### Fixed
+
+- Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+
+## [1.12.3] - 2026-11-21
+
+### Added
+
+- Allow a root task dispatch to grant a child explicit GitHub merge or review dismissal access to named repositories. Wait for the grant receipt to reach disk before starting the child.
+
+### Fixed
+
+- Return unconfirmed IRC delivery promptly when a local send without `await` cannot get a receipt ([#1224](https://github.com/Wladefant/veyyon/issues/1224)).
+
 ## [1.12.2] - 2026-11-21
 
 ### Added
