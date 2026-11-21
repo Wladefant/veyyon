@@ -1,6 +1,8 @@
+import * as ffi from "bun:ffi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
+import * as os from "node:os";
 import { dirname } from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -134,6 +136,55 @@ describe("task launch grants", () => {
 		expect(firstToolResultText(result)).toContain("injected receipt directory sync failure");
 		expect(start).not.toHaveBeenCalled();
 		expect(root.getSubagentLaunchGrants()).toEqual([]);
+	});
+
+	it.skipIf(process.platform === "win32")("waits for the Win32 write-through replacement and rejects its failure", async () => {
+		const platform = vi.spyOn(os, "platform").mockReturnValue("win32");
+		let shouldFail = true;
+		let replaced = false;
+		const moveFileEx = vi.fn((from: Buffer, to: Buffer, flags: number) => {
+			const source = from.toString("utf16le").slice(0, -1);
+			const target = to.toString("utf16le").slice(0, -1);
+			expect(target).toBe(rootFile);
+			expect(dirname(source)).toBe(dirname(target));
+			expect(flags).toBe(0x9); // REPLACE_EXISTING | WRITE_THROUGH, no cross-volume copy.
+			expect(fs.readFileSync(source, "utf8")).toContain('"type":"subagent_launch_grant"');
+			if (shouldFail) return 0;
+			fs.renameSync(source, target);
+			replaced = true;
+			return 1;
+		});
+		const load = vi.spyOn(ffi, "dlopen").mockReturnValue({
+			symbols: { MoveFileExW: moveFileEx, GetLastError: () => 1117 },
+			close: () => {},
+		});
+		const sync = fs.fsyncSync;
+		vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			expect(fs.fstatSync(fd).isDirectory()).toBe(false);
+			sync(fd);
+		});
+		const start = observeChild(async () => {
+			expect(replaced).toBe(true);
+			expect(await receipts(rootFile)).toHaveLength(1);
+		});
+		try {
+			const dispatch = await tool();
+			const failed = await dispatch.execute("write-through-failed", { ...lane, grants });
+			expect(firstToolResultText(failed)).toContain("MoveFileExW");
+			expect(firstToolResultText(failed)).toContain("1117");
+			expect(start).not.toHaveBeenCalled();
+			expect(root.getSubagentLaunchGrants()).toEqual([]);
+			expect(await receipts(rootFile)).toEqual([]);
+
+			shouldFail = false;
+			const success = await dispatch.execute("write-through-ok", { ...lane, name: "RetryLane", grants });
+			expect(success.details?.results[0]?.exitCode).toBe(0);
+			expect(start).toHaveBeenCalledTimes(1);
+			expect(moveFileEx).toHaveBeenCalledTimes(2);
+		} finally {
+			load.mockRestore();
+			platform.mockRestore();
+		}
 	});
 
 	it("launches without granting authority from assignment text", async () => {
