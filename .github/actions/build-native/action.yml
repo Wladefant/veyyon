@@ -35,7 +35,7 @@ inputs:
       required: false
       default: "false"
    linux_preprovisioned:
-      description: Check Linux build tools on PATH instead of installing OS packages.
+      description: Use host build tools and job-local LLVM instead of installing Linux packages.
       required: false
       default: "false"
 
@@ -79,24 +79,58 @@ runs:
            } >> "$GITHUB_OUTPUT"
            echo "Resolved cross_target='$cross_target' bare_target='$bare_target'"
 
-      - name: Check pre-provisioned Linux build tools
+      - name: Prepare unprivileged Linux build tools
         if: runner.os == 'Linux' && inputs.linux_preprovisioned == 'true'
         shell: bash
         env:
            CROSS_TARGET: ${{ steps.resolve.outputs.cross_target }}
         run: |
-           tools=(cc c++ make)
-           if [[ "$CROSS_TARGET" == *-msvc ]]; then
-             tools+=(clang clang-cl lld-link llvm-lib llvm-rc)
+           require_tools() {
+             local missing=() tool
+             for tool in "$@"; do
+               command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+             done
+             if ((${#missing[@]})); then
+               echo "::error title=Missing Linux build tools::${missing[*]}"
+               return 1
+             fi
+           }
+
+           require_tools cc c++ make
+           if [[ "$CROSS_TARGET" != *-msvc ]]; then
+             exit 0
            fi
-           missing=()
-           for tool in "${tools[@]}"; do
-             command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+
+           llvm_tools=(clang clang-cl lld-link llvm-lib llvm-rc)
+           missing_llvm=false
+           for tool in "${llvm_tools[@]}"; do
+             command -v "$tool" >/dev/null 2>&1 || missing_llvm=true
            done
-           if ((${#missing[@]})); then
-             echo "::error title=Missing pre-provisioned build tools::${missing[*]}"
-             exit 1
+           if [[ "$missing_llvm" == false ]]; then
+             exit 0
            fi
+           if [[ "$RUNNER_ARCH" != X64 ]]; then
+             require_tools "${llvm_tools[@]}"
+             exit 0
+           fi
+
+           require_tools curl sha256sum tar xz
+           llvm_version=22.1.8
+           llvm_sha256=df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384
+           # The runner clears its temporary directory after the job.
+           llvm_root=$(mktemp -d "$RUNNER_TEMP/llvm.XXXXXXXX")
+           archive="$llvm_root/llvm.tar.xz"
+           curl --fail --silent --show-error --location --retry 3 \
+             --connect-timeout 20 --max-time 900 --output "$archive" \
+             "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_version/LLVM-$llvm_version-Linux-X64.tar.xz"
+           printf '%s  %s\n' "$llvm_sha256" "$archive" | sha256sum --check --strict
+           tar -xJf "$archive" -C "$llvm_root" --strip-components=1
+           rm -- "$archive"
+           export PATH="$llvm_root/bin:$PATH"
+           require_tools "${llvm_tools[@]}"
+           clang --version
+           lld-link --version
+           printf '%s\n' "$llvm_root/bin" >> "$GITHUB_PATH"
 
       # --- Rust toolchain -----------------------------------------------------
       - name: Install Rust toolchain
