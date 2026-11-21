@@ -76,6 +76,7 @@ import {
 	type SessionInfo,
 } from "./session-listing";
 import {
+	forEachFileLine,
 	type LoadedSessionFile,
 	loadEntriesFromFile,
 	loadSessionFile,
@@ -83,6 +84,7 @@ import {
 	resolveBlobRefsInEntries,
 	restoreColdLine,
 	type SessionFileLayout,
+	STREAM_LOAD_THRESHOLD_BYTES,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
@@ -1152,6 +1154,16 @@ export class SessionManager {
 			if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
 			if (state !== "present") throw new Error("Cannot verify current session journal");
 		} else if (!(await this.#storage.exists(this.#sessionFile))) return;
+		// Find foreign rows without flattening a large transcript. This also
+		// covers legacy journals whose layout could not be reused on resume.
+		if (
+			!requireReadable &&
+			this.#storage instanceof FileSessionStorage &&
+			this.#storage.statSync(this.#sessionFile).size >= STREAM_LOAD_THRESHOLD_BYTES
+		) {
+			await this.#refreshLargeForeignLines(this.#sessionFile);
+			return;
+		}
 		let text: string;
 		try {
 			// Strict failed-fork recovery may not fall back to a lossy text reader:
@@ -1168,6 +1180,36 @@ export class SessionManager {
 			return;
 		}
 		this.#adoptForeignLines(text, requireReadable);
+	}
+
+	async #refreshLargeForeignLines(file: string): Promise<void> {
+		const foreign: string[] = [];
+		let liveWriterEntries = 0;
+		const aborted = this.#abortedForkLifecycleLinesByFile.get(file);
+		const handle = await fs.promises.open(file, "r");
+		try {
+			await forEachFileLine(handle, 0, (bytes, start, end) => {
+				// The persisted id is at the start of ordinary entry lines.
+				// Decode the full line only if its short prefix cannot rule it out.
+				const leadingId = LEADING_ENTRY_ID.exec(bytes.toString("utf8", start, Math.min(start + 64, end)))?.[1];
+				if (leadingId !== undefined && this.#isOwnId(leadingId)) return;
+				const raw = bytes.toString("utf8", start, end);
+				let entry: { id?: unknown; type?: unknown; customType?: unknown } | null;
+				try {
+					entry = JSON.parse(raw);
+				} catch {
+					return;
+				}
+				const id = entry?.id;
+				if (typeof id !== "string" || !id || this.#isOwnId(id) || aborted?.has(id)) return;
+				if (entry?.type === "session" || entry?.type === SESSION_TITLE_SLOT_ENTRY_TYPE) return;
+				foreign.push(raw);
+				if (entry?.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries++;
+			});
+		} finally {
+			await handle.close();
+		}
+		this.#recordForeignLines(foreign, liveWriterEntries);
 	}
 
 	/**
@@ -1377,6 +1419,10 @@ export class SessionManager {
 		if (requireCompleteHistory && this.#hasTitleSlot && !seenTitleSlot) {
 			throw new Error("Cannot preserve missing session title slot during failed-fork repair");
 		}
+		this.#recordForeignLines(foreign, liveWriterEntries);
+	}
+
+	#recordForeignLines(foreign: string[], liveWriterEntries: number): void {
 		this.#foreignLines = foreign;
 		if (this.#reportedForeignWriter) return;
 		// A `session_exit` record is the last thing a run writes, so a foreign one is
@@ -1553,15 +1599,15 @@ export class SessionManager {
 	 * Callers then skip their post-publish state updates.
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
-		this.#atomicRewriteFenceEpoch = epoch;
 		const sessionFile = this.#sessionFile;
 		if (!sessionFile) return false;
+		this.#atomicRewriteFenceEpoch = epoch;
 		const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
 		const runRewrite = async (): Promise<boolean> => {
 			try {
 				do {
 					this.#atomicRewriteDirty = false;
-					await this.#closeWriterHandle();
+					if (this.#writer) await this.#closeWriterHandle();
 					if (!this.#sessionFile || this.#sessionFile !== sessionFile) return false;
 					if (this.#diskEpoch !== epoch) return false;
 					let originalState: SessionStorageStat | undefined;
@@ -1648,10 +1694,21 @@ export class SessionManager {
 				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 			}
 		};
-		if (this.#storage.withJournalLock) {
-			return await this.#storage.withJournalLock(sessionFile, runRewrite);
+		try {
+			// Pending appends may already be queued behind another journal holder.
+			// Close before queueing the rewrite, or a later append could queue
+			// behind the rewrite that waits for it. The fence absorbs new appends.
+			await this.#closeWriterHandle();
+			if (this.#diskEpoch !== epoch) return false;
+			if (this.#storage.withJournalLock) {
+				return await this.#storage.withJournalLock(sessionFile, runRewrite);
+			}
+			return await runRewrite();
+		} catch (error) {
+			// Failed before runRewrite's own finally could release the fence: release it here.
+			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
+			throw error;
 		}
-		return await runRewrite();
 	}
 
 	/**

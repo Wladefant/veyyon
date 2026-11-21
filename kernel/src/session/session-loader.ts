@@ -438,7 +438,7 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
  * Each read is split synchronously: an async iterator over lines cost one promise per line, and
  * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
  */
-async function forEachFileLine(
+export async function forEachFileLine(
 	handle: fs.promises.FileHandle,
 	from: number,
 	onLine: (bytes: Buffer, start: number, end: number) => void,

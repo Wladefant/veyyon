@@ -265,4 +265,37 @@ describe("staged journal rewrite reads only new bytes", () => {
 		expect(journalReads.stagedReads).toBe(0);
 		expect(await fsp.readFile(journal, "utf8")).toBe(sessionRow("new", "direct-replace"));
 	});
+
+	it.skipIf(process.platform === "win32")("replays a peer append after the 1 GiB boundary", async () => {
+		const journal = path.join(temp("staged-gibibyte-offset-"), "session.jsonl");
+		const end = (1 << 30) + 1;
+		const file = await fsp.open(journal, "w");
+		try {
+			// A hole exercises the real file-offset boundary without writing 1 GiB.
+			await file.write(Buffer.from("\n"), 0, 1, end - 1);
+		} finally {
+			await file.close();
+		}
+		expect((await fsp.stat(journal)).size).toBe(end);
+		const staged = sessionRow("replacement", "replacement body");
+		const peer = sessionRow("peer", "peer append past 1 GiB");
+		const storage = new LateAppendStorage(journal, peer);
+		await storage.writeTextAtomic(journal, staged);
+		expect(await fsp.readFile(journal, "utf8")).toBe(staged + peer);
+	});
+
+	it("keeps the original journal when an out-of-lock append exceeds the commit budget", async () => {
+		const dir = temp("staged-write-foreign-burst-");
+		const journal = path.join(dir, "session.jsonl");
+		const original = sessionRow("old", "original");
+		const peer = sessionRow("peer", "x".repeat(2 << 20));
+		await fsp.writeFile(journal, original);
+		const storage = new LateAppendStorage(journal, peer);
+
+		await expect(storage.writeTextAtomic(journal, sessionRow("new", "new"))).rejects.toThrow(
+			"Too many bytes appended during session journal publication",
+		);
+		expect(await fsp.readFile(journal, "utf8")).toBe(original + peer);
+		expect((await fsp.readdir(dir)).filter(name => name.endsWith(".tmp"))).toEqual([]);
+	});
 });
