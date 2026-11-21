@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Allow a root task dispatch to grant a child explicit GitHub merge or review dismissal access to named repositories.
+
 ## [1.12.2] - 2026-11-21
 
 ### Fixed
