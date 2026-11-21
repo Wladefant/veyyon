@@ -1165,6 +1165,7 @@ export class SessionManager {
 	async #refreshFileForeignLines(file: string, snapshot: JournalSnapshot): Promise<void> {
 		const foreign: string[] = [];
 		let liveWriterEntries = 0;
+		let ownReceipts: Map<string, number> | undefined;
 		const aborted = this.#abortedForkLifecycleLinesByFile.get(file);
 		const handle = await fs.promises.open(
 			file,
@@ -1195,6 +1196,13 @@ export class SessionManager {
 					try {
 						entry = JSON.parse(raw);
 					} catch {
+						return;
+					}
+					if (entry?.type === SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE) {
+						// Match exact bytes with multiplicity: a duplicate must remain visible
+						// to the receipt validator on reopen, not disappear as an owned line.
+						ownReceipts ??= this.#ownReceiptCounts();
+						this.#retainForeignReceipt(raw, ownReceipts, foreign);
 						return;
 					}
 					const id = entry?.id;
@@ -1247,6 +1255,25 @@ export class SessionManager {
 			return;
 		}
 		this.#adoptForeignLines(text, repairingFailedFork);
+	}
+
+	#ownReceiptCounts(): Map<string, number> {
+		const counts = new Map<string, number>();
+		for (const line of this.#receiptLines) counts.set(line, (counts.get(line) ?? 0) + 1);
+		return counts;
+	}
+
+	#retainForeignReceipt(raw: string, ownReceipts: Map<string, number>, foreign: string[], strict = false): void {
+		const ownCount = ownReceipts.get(raw) ?? 0;
+		if (ownCount > 0) {
+			ownReceipts.set(raw, ownCount - 1);
+			return;
+		}
+		if (strict) throw new Error("Cannot preserve unrecognized subagent launch grant during failed-fork repair");
+		// Preserve even invalid receipts verbatim. Only a fresh load can validate
+		// the complete receipt set and its identity collisions.
+		foreign.push(raw);
+		this.#grantsAmbiguous = "the journal contains an unrecognized subagent launch grant";
 	}
 
 	/**
@@ -1372,21 +1399,8 @@ export class SessionManager {
 			if (parsed.type === SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE) {
 				// Our receipts are published from memory in the head. Any other receipt is another writer's:
 				// carried as-is, never adopted, and refused outright by a strict repair.
-				if (!ownReceipts) {
-					ownReceipts = new Map();
-					for (const line of this.#receiptLines) {
-						ownReceipts.set(line, (ownReceipts.get(line) ?? 0) + 1);
-					}
-				}
-				const ownCount = ownReceipts.get(raw) ?? 0;
-				if (ownCount > 0) {
-					ownReceipts.set(raw, ownCount - 1);
-				} else {
-					if (requireCompleteHistory) {
-						throw new Error("Cannot preserve unrecognized subagent launch grant during failed-fork repair");
-					}
-					foreign.push(raw);
-				}
+				ownReceipts ??= this.#ownReceiptCounts();
+				this.#retainForeignReceipt(raw, ownReceipts, foreign, requireCompleteHistory);
 				continue;
 			}
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;

@@ -455,12 +455,13 @@ describe("staged journal rewrite reads only new bytes", () => {
 						sessionFile: path.join(await fsp.realpath(path.dirname(journal)), path.basename(journal, ".jsonl"), "child.jsonl"),
 						grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
 					};
-					// A second manager acknowledges the receipt before the stale manager scans.
-					await peer.appendSubagentLaunchGrant(grant);
-					const raw = (await fsp.readFile(journal, "utf8")).split("\n").find(line => line.includes('"subagent_launch_grant"'))!;
+					let raw = JSON.stringify(grant);
+					if (!late) {
+						// A second manager acknowledges the receipt before the stale manager scans.
+						await peer.appendSubagentLaunchGrant(grant);
+						raw = (await fsp.readFile(journal, "utf8")).split("\n").find(line => line.includes('"subagent_launch_grant"'))!;
+					}
 					if (late) {
-						// Restore the stale manager's published layout so a tail plan remains eligible.
-						await fsp.writeFile(journal, (await fsp.readFile(journal, "utf8")).replace(`${raw}\n`, ""));
 						const realRename = storage.renameSync.bind(storage);
 						spyOn(storage, "renameSync").mockImplementation((source, target) => {
 							if (target === journal && source.includes(".tmp")) {
@@ -476,6 +477,9 @@ describe("staged journal rewrite reads only new bytes", () => {
 					expect(rows.filter(line => line === raw)).toHaveLength(1);
 					reopened = await SessionManager.open(journal);
 					expect(reopened.getSubagentLaunchGrants()).toEqual([grant]);
+					await fsp.appendFile(journal, foreignMessageRow("force-receipt-refresh", "peer row"));
+					await reopened.rewriteEntries();
+					expect((await fsp.readFile(journal, "utf8")).split("\n").filter(line => line === raw)).toHaveLength(1);
 				} finally {
 					vi.restoreAllMocks();
 					await reopened?.close();
