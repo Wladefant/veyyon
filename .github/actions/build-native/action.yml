@@ -78,6 +78,12 @@ runs:
              echo "bare_target=$bare_target"
            } >> "$GITHUB_OUTPUT"
            echo "Resolved cross_target='$cross_target' bare_target='$bare_target'"
+           if [[ "$cross_target" == *-msvc ]]; then
+             # cargo-xwin 0.23.1 includes the Visual Studio 18 manifest fix in xwin 0.10.0.
+             cargo_xwin_version=0.23.1
+             echo "cargo_xwin_version=$cargo_xwin_version" >> "$GITHUB_OUTPUT"
+             echo "XWIN_CACHE_DIR=$RUNNER_TEMP/cargo-xwin-$cargo_xwin_version" >> "$GITHUB_ENV"
+           fi
 
       - name: Prepare unprivileged Linux build tools
         if: runner.os == 'Linux' && inputs.linux_preprovisioned == 'true'
@@ -268,9 +274,10 @@ runs:
            sudo apt-get install -y clang lld llvm
       - name: Install cargo-xwin (MSVC cross)
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
-           tool: cargo-xwin
+           tool: cargo-xwin@${{ steps.resolve.outputs.cargo_xwin_version }}
+           fallback: none
       - name: Verify user-space cargo-xwin
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc') && inputs.linux_preprovisioned == 'true'
         shell: bash
@@ -283,8 +290,8 @@ runs:
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-           path: ~/.cache/cargo-xwin
-           key: cargo-xwin-${{ runner.os }}-v1
+           path: ${{ env.XWIN_CACHE_DIR }}/xwin
+           key: cargo-xwin-${{ runner.os }}-${{ steps.resolve.outputs.cargo_xwin_version }}
       - name: Accept xwin license
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         shell: bash
