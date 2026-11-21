@@ -3,7 +3,10 @@
  */
 
 import { ANTHROPIC_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
-import { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
+import {
+	CLAUDE_CODE_ANTHROPIC_SDK_VERSION,
+	CLAUDE_CODE_VERSION as claudeCodeVersion,
+} from "@veyyon/catalog/wire/anthropic";
 import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
@@ -334,7 +337,7 @@ export async function refreshAnthropicToken(
 			{
 				// CC sends these on refresh but not on the initial code exchange
 				"anthropic-beta": "oauth-2025-04-20",
-				"User-Agent": "anthropic-sdk-typescript/0.94.0 userOAuthProvider",
+				"User-Agent": `anthropic-sdk-typescript/${CLAUDE_CODE_ANTHROPIC_SDK_VERSION} userOAuthProvider`,
 			},
 			signal,
 		);

@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- Update the shared Claude Code version to 2.1.329 for Anthropic OAuth requests, including Fable 5.2.
+- Add Claude Fable 5.2 and Claude Mythos 5.2 to the first-party Anthropic catalog, with 1M context, 128k output, image input, and adaptive thinking.
 
 ## [1.8.0] - 2026-11-05
 

@@ -26,7 +26,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
-import { emptyUsage } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
@@ -194,9 +194,10 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 
 		expect(headers.Accept).toBe("application/json");
-		expect(headers["User-Agent"]).toBe(
-			`claude-cli/${claudeCodeVersion} (external, local-agent, agent-sdk/${claudeAgentSdkVersion})`,
-		);
+		expect(headers["User-Agent"]).toBe("claude-cli/2.1.321 (external, local-agent, agent-sdk/0.3.321)");
+		expect(headers["X-Stainless-Package-Version"]).toBe("0.128.0");
+		expect(headers["X-Stainless-Runtime-Version"]).toBe("v26.12.1");
+		expect(headers["anthropic-beta"]?.split(",")).not.toContain("mid-conversation-system-2026-04-07");
 		expect(headers["X-Claude-Code-Session-Id"]).toBe(sessionId);
 		expect(headers["x-client-request-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 	});
@@ -554,7 +555,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect((lastContent as Array<{ cache_control?: unknown }>)[0]?.cache_control).toBeDefined();
 	});
 
-	it("adds effort and mid-conversation betas to API-key requests that use those features", async () => {
+	it("keeps the effort beta but omits the retired system-role beta on API-key requests", async () => {
 		let capturedBeta: string | undefined;
 		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
 			capturedBeta = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
@@ -579,11 +580,9 @@ describe("Anthropic request fingerprint alignment", () => {
 			{ apiKey: "sk-ant-api-test", thinkingEnabled: false, fetch: fetchMock },
 		).result();
 
-		// thinking-off on an adaptive-only model still pins output_config.effort,
-		// and the converter may emit mid-conversation system turns on Opus 4.8 —
-		// both fields need their betas on API-key requests too.
+		// Adaptive-only thinking still pins output_config.effort when thinking is off.
 		expect(capturedBeta).toContain("effort-2025-11-24");
-		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
+		expect(capturedBeta).not.toContain("mid-conversation-system-2026-04-07");
 	});
 
 	it("adds the effort beta when a direct forced tool choice creates an adaptive effort pin", async () => {
@@ -2642,19 +2641,9 @@ describe("Anthropic request fingerprint alignment", () => {
 	});
 
 	it("downgrades forced tool choice for Claude Fable/Mythos without deleting adaptive thinking", async () => {
-		for (const id of ["claude-fable-5", "claude-mythos-5"] as const) {
+		for (const id of ["claude-fable-5", "claude-mythos-5", "claude-fable-5-2", "claude-mythos-5-2"] as const) {
 			const payload = (await captureAnthropicPayload(
-				buildModel({
-					...ANTHROPIC_MODEL_SPEC,
-					id,
-					name: id === "claude-fable-5" ? "Claude Fable 5" : "Claude Mythos 5",
-					contextWindow: 1_000_000,
-					maxTokens: 128_000,
-					thinking: {
-						mode: "anthropic-adaptive",
-						efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
-					},
-				}),
+				getBundledModel<"anthropic-messages">("anthropic", id),
 				{
 					systemPrompt: ["Stay concise."],
 					messages: [{ role: "user", content: "Use the tool", timestamp: Date.now() }],

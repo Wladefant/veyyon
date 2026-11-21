@@ -22,6 +22,8 @@
  * controlled catalog, and we assert on the enriched result.
  */
 import { describe, expect, it } from "bun:test";
+import { Effort } from "@veyyon/catalog/effort";
+import { getBundledModel } from "@veyyon/catalog/models";
 import { anthropicModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
 import type { FetchImpl } from "@veyyon/catalog/types";
 
@@ -164,5 +166,71 @@ describe("anthropic dynamic discovery — models.dev failure fallback", () => {
 			contextWindow: null,
 			maxTokens: null,
 		});
+	});
+
+	it("enriches sparse first-party Fable 5.2 and Mythos 5.2 discovery when models.dev is down", async () => {
+		const { fetch } = routedFetch(
+			discoveryPayload(
+				{ id: "claude-fable-5-2", display_name: "Claude Fable 5.2" },
+				{ id: "claude-mythos-5-2", display_name: "Claude Mythos 5.2" },
+			),
+			{ modelsDevStatus: 503 },
+		);
+
+		const models = await discover(fetch);
+
+		for (const [id, name] of [
+			["claude-fable-5-2", "Claude Fable 5.2"],
+			["claude-mythos-5-2", "Claude Mythos 5.2"],
+		] as const) {
+			expect(models?.find(m => m.id === id)).toMatchObject({
+				id,
+				name,
+				api: "anthropic-messages",
+				provider: "anthropic",
+				reasoning: true,
+				reasoningOptions: {
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				},
+				input: ["text", "image"],
+				cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+				contextWindow: 1_000_000,
+				maxTokens: 128_000,
+				thinking: {
+					mode: "anthropic-adaptive",
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+					supportsDisplay: true,
+					prefixBinding: true,
+				},
+			});
+		}
+	});
+
+	it("resolves Fable 5.2 and Mythos 5.2 from the offline bundled catalog", () => {
+		for (const [id, name] of [
+			["claude-fable-5-2", "Claude Fable 5.2"],
+			["claude-mythos-5-2", "Claude Mythos 5.2"],
+		] as const) {
+			expect(getBundledModel("anthropic", id)).toMatchObject({
+				id,
+				name,
+				api: "anthropic-messages",
+				provider: "anthropic",
+				reasoning: true,
+				reasoningOptions: {
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				},
+				input: ["text", "image"],
+				cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+				contextWindow: 1_000_000,
+				maxTokens: 128_000,
+				thinking: {
+					mode: "anthropic-adaptive",
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+					supportsDisplay: true,
+					prefixBinding: true,
+				},
+			});
+		}
 	});
 });

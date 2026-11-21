@@ -134,7 +134,9 @@ describe("generated model policies", () => {
 	it("preserves every curated Anthropic offline ladder", () => {
 		expect(ANTHROPIC_CURATED_FALLBACK_MODELS.map(model => model.id).sort()).toEqual([
 			"claude-fable-5",
+			"claude-fable-5-2",
 			"claude-mythos-5",
+			"claude-mythos-5-2",
 			"claude-opus-5-5",
 			"claude-sonnet-5",
 		]);
@@ -152,7 +154,69 @@ describe("generated model policies", () => {
 				expect(models[0]?.contextWindow).toBe(1_000_000);
 				expect(models[0]?.maxTokens).toBe(128_000);
 			}
+			if (seed.id === "claude-fable-5-2" || seed.id === "claude-mythos-5-2") {
+				expect(models[0]?.thinking?.prefixBinding).toBe(true);
+				expect(models[0]?.input).toEqual(["text", "image"]);
+				expect(models[0]?.cost).toEqual({ input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 });
+				expect(models[0]?.contextWindow).toBe(1_000_000);
+				expect(models[0]?.maxTokens).toBe(128_000);
+			}
 		}
+	});
+
+	it("corrects sparse first-party Fable/Mythos 5.2 rows while preserving 5/5.1 and third-party pricing", () => {
+		const models: ModelSpec<Api>[] = [
+			createSpec({
+				id: "claude-fable-5-2",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				reasoning: false,
+			}),
+			createSpec({
+				id: "claude-mythos-5-2",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				reasoning: false,
+			}),
+			createSpec({
+				id: "claude-fable-5-1",
+				api: "anthropic-messages",
+				provider: "anthropic",
+			}),
+			createSpec({
+				id: "claude-mythos-5-1",
+				api: "anthropic-messages",
+				provider: "anthropic",
+			}),
+			createSpec({
+				id: "anthropic/claude-fable-5.2",
+				api: "openai-completions",
+				provider: "openrouter",
+				cost: { input: 9, output: 45, cacheRead: 0.9, cacheWrite: 11.25 },
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		for (const index of [0, 1]) {
+			expect(models[index]?.reasoning).toBe(true);
+			expect(models[index]?.reasoningOptions).toEqual({
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+			});
+			expect(models[index]?.input).toEqual(["text", "image"]);
+			expect(models[index]?.contextWindow).toBe(1_000_000);
+			expect(models[index]?.maxTokens).toBe(128_000);
+			expect(models[index]?.cost).toEqual({ input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 });
+			expect(models[index]?.thinking).toEqual({
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				supportsDisplay: true,
+				prefixBinding: true,
+			});
+		}
+		expect(models[2]?.cost).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
+		expect(models[3]?.cost).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
+		expect(models[4]?.cost).toEqual({ input: 9, output: 45, cacheRead: 0.9, cacheWrite: 11.25 });
 	});
 
 	it("pins zai glm-5.2 base id to 1M context", () => {
