@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { reportFault } from "@veyyon/utils/fault-sink";
 import { acquireFileLockSync, withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 import { hasFsCode, isEnoent } from "@veyyon/utils/fs-error";
@@ -306,8 +307,8 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 /**
  * Write a staged file's data to disk on the thread pool, before the rename that publishes it. ext4
  * writes back a file renamed over another inside `rename(2)` (`auto_da_alloc`), so a sync rename of
- * an unflushed 420MB session held the event loop for 38-92ms; flushed first, it took 0.1ms. The
- * flush also makes the replacement survive a power cut.
+ * an unflushed 420MB session held the event loop for 38-92ms; flushed first, it took 0.1ms.
+ * This flush covers the staged file contents, not the rename.
  */
 async function flushStaged(handle: fs.promises.FileHandle): Promise<void> {
 	await handle.datasync();
@@ -1205,19 +1206,21 @@ export class FileSessionStorage implements SessionStorage {
 		}
 		try {
 			this.renameSync(tempPath, fpath);
-			return;
 		} catch (err) {
 			if (!hasFsCode(err, "EPERM")) {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
 			try {
-				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
+				if (!this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard)) return;
 			} catch (fallbackErr) {
 				discardTemp(tempPath, fpath);
 				throw fallbackErr;
 			}
 		}
+		// Keep sync errors out of the rename fallback: the replacement is already visible.
+		// Windows keeps the staged file flush; its directory handles cannot be synced this way.
+		if (process.platform !== "win32") fsyncDirEntrySync(path.dirname(fpath), { required: true });
 	}
 
 	/**
@@ -1305,7 +1308,7 @@ export class FileSessionStorage implements SessionStorage {
 		targetPath: string,
 		renameError: unknown,
 		commitGuard?: (sourcePath?: string) => boolean,
-	): void {
+	): boolean {
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, sessionBackupName(path.basename(targetPath), Snowflake.next()));
 		try {
@@ -1314,10 +1317,10 @@ export class FileSessionStorage implements SessionStorage {
 			if (isEnoent(moveAsideError)) {
 				if (commitGuard && !commitGuard()) {
 					discardTemp(tempPath, targetPath);
-					return;
+					return false;
 				}
 				this.renameSync(tempPath, targetPath);
-				return;
+				return true;
 			}
 			throw toError(renameError);
 		}
@@ -1351,7 +1354,7 @@ export class FileSessionStorage implements SessionStorage {
 				});
 			}
 			discardTemp(tempPath, targetPath);
-			return;
+			return false;
 		}
 		try {
 			this.renameSync(tempPath, targetPath);
@@ -1388,6 +1391,7 @@ export class FileSessionStorage implements SessionStorage {
 				});
 			}
 		}
+		return true;
 	}
 
 	async rename(sourcePath: string, nextPath: string): Promise<void> {
