@@ -34,6 +34,10 @@ inputs:
       description: Whether Swatinem/rust-cache should write a cache entry
       required: false
       default: "false"
+   linux_preprovisioned:
+      description: Check Linux build tools on PATH instead of installing OS packages.
+      required: false
+      default: "false"
 
 runs:
    using: composite
@@ -75,6 +79,25 @@ runs:
            } >> "$GITHUB_OUTPUT"
            echo "Resolved cross_target='$cross_target' bare_target='$bare_target'"
 
+      - name: Check pre-provisioned Linux build tools
+        if: runner.os == 'Linux' && inputs.linux_preprovisioned == 'true'
+        shell: bash
+        env:
+           CROSS_TARGET: ${{ steps.resolve.outputs.cross_target }}
+        run: |
+           tools=(cc c++ make)
+           if [[ "$CROSS_TARGET" == *-msvc ]]; then
+             tools+=(clang clang-cl lld-link llvm-lib llvm-rc)
+           fi
+           missing=()
+           for tool in "${tools[@]}"; do
+             command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+           done
+           if ((${#missing[@]})); then
+             echo "::error title=Missing pre-provisioned build tools::${missing[*]}"
+             exit 1
+           fi
+
       # --- Rust toolchain -----------------------------------------------------
       - name: Install Rust toolchain
         # The explicit `toolchain:` input below selects the compiler, so the ref
@@ -85,7 +108,7 @@ runs:
            components: ""
            targets: ${{ steps.resolve.outputs.bare_target }}
       - name: Install Linux build prerequisites
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.linux_preprovisioned != 'true'
         shell: bash
         run: |
            sudo apt-get update
@@ -204,7 +227,7 @@ runs:
         with:
            tool: cargo-zigbuild
       - name: Install LLVM tooling (MSVC cross)
-        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc') && inputs.linux_preprovisioned != 'true'
         shell: bash
         run: |
            sudo apt-get update
@@ -214,6 +237,14 @@ runs:
         uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
         with:
            tool: cargo-xwin
+      - name: Verify user-space cargo-xwin
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc') && inputs.linux_preprovisioned == 'true'
+        shell: bash
+        run: |
+           if ! cargo xwin --version; then
+             echo "::error title=Missing user-space build tool::cargo-xwin"
+             exit 1
+           fi
       - name: Cache cargo-xwin Windows SDK
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

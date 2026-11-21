@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   windows-x64:
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, ovh, veyyon]
     timeout-minutes: 120
     env:
@@ -32,39 +33,58 @@ jobs:
         with:
           ref: ${{ inputs.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify release source
         shell: bash
         run: |
           [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Checkout does not match the input SHA'; exit 1; }
-          git fetch origin refs/heads/main "refs/tags/$TAG:refs/tags/$TAG"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main "refs/tags/$TAG:refs/tags/$TAG"
           [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" == "$EXPECTED_SHA" ]] || { echo '::error::Tag does not point to the input SHA'; exit 1; }
-          git merge-base --is-ancestor "$EXPECTED_SHA" FETCH_HEAD || { echo '::error::Tagged commit is not on main'; exit 1; }
+          git merge-base --is-ancestor "$EXPECTED_SHA" refs/remotes/origin/main || { echo '::error::Tagged commit is not on main'; exit 1; }
           version=$(python3 -c 'import json; print(json.load(open("packages/coding-agent/package.json", encoding="utf-8"))["version"])')
           [[ "$version" == "${TAG#v}" ]] || { echo '::error::Coding agent version does not match the tag'; exit 1; }
-      - uses: ./.github/actions/build-native
+      - name: Check out the native action from the workflow revision
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /.github/actions/build-native/action.yml
+      - uses: ./.release-workflow/.github/actions/build-native
         with:
           hash: ${{ inputs.sha }}
           platform: win32
           arch: x64
           variant: baseline
           target: x86_64-pc-windows-msvc
+          linux_preprovisioned: "true"
       - name: Build and record Windows executable
         shell: bash
         env:
           RELEASE_TARGETS: win32-x64
           VEYYON_OFFICIAL_RELEASE: '1'
+          VEYYON_BUILD_SHA: ${{ inputs.sha }}
+          VEYYON_BUILD_TAG: ''
         run: |
           bun run ci:release:build-binaries
           binary=packages/coding-agent/binaries/veyyon-windows-x64.exe
           [[ -s "$binary" ]] || { echo '::error::Windows executable is missing or empty'; exit 1; }
           artifact="$RUNNER_TEMP/veyyon.exe"
           cp "$binary" "$artifact"
-          checksum=$(sha256sum "$artifact")
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum veyyon.exe > veyyon.exe.sha256
+          )
+          read -r checksum _ < "$artifact.sha256"
           size=$(stat --format=%s "$artifact")
+          printf 'Source SHA: %s\nSHA-256: %s\nSize: %s bytes\n' "$EXPECTED_SHA" "$checksum" "$size"
           printf 'Source SHA: `%s`\n\nSHA-256: `%s`\n\nSize: %s bytes\n' \
-            "$EXPECTED_SHA" "${checksum%% *}" "$size" >> "$GITHUB_STEP_SUMMARY"
+            "$EXPECTED_SHA" "$checksum" "$size" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: veyyon-windows-x64-${{ inputs.tag }}
-          path: ${{ runner.temp }}/veyyon.exe
+          path: |
+            ${{ runner.temp }}/veyyon.exe
+            ${{ runner.temp }}/veyyon.exe.sha256
           if-no-files-found: error
