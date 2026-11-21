@@ -101,7 +101,12 @@ vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [AGENT],
 vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async (options = {}) => {
 	heldOptions.push(options);
 	const session = createMockSession(call => nextTurn(call), { activeToolNames: ["read", "yield"] });
-	Object.assign(session, { sessionManager: options.sessionManager });
+	Object.assign(session, {
+		sessionManager: options.sessionManager,
+		dispose: async () => {
+			await options.sessionManager?.close();
+		},
+	});
 	const id = options.agentId;
 	if (!id) throw new Error("the executor created a child session with no agent id");
 	const sessionFile = options.sessionManager?.getSessionFile() ?? null;

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-20
+
 ### Fixed
 
 - Strip unsupported array validation keywords from Gemini tool declarations while retaining local argument validation ([#1190](https://github.com/Wladefant/veyyon/issues/1190)).

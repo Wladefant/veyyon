@@ -42,7 +42,6 @@ const baseOptions = {
 	agent: baseAgent,
 	task: "do work",
 	index: 0,
-	id: "agent-approval-bypass",
 	settings: Settings.isolated(),
 	modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 	enableLsp: false,
@@ -57,7 +56,11 @@ function yieldEmittingSession(): AgentSession {
 /** Run one spawn and return the options the executor handed `createAgentSession`. */
 async function spawnAndCaptureSessionOptions(bypassAllApprovals?: boolean) {
 	const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(yieldEmittingSession()));
-	const result = await runSubprocess({ ...baseOptions, bypassAllApprovals });
+	const result = await runSubprocess({
+		...baseOptions,
+		id: `agent-approval-bypass-${bypassAllApprovals ?? "omitted"}`,
+		bypassAllApprovals,
+	});
 	expect(result.exitCode).toBe(0);
 	expect(spy).toHaveBeenCalledTimes(1);
 	return spy.mock.calls[0]?.[0];

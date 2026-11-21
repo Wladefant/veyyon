@@ -35,7 +35,6 @@ describe("autoloadSkills in executor", () => {
 		agent: baseAgent,
 		task: "do work",
 		index: 0,
-		id: "agent-1",
 		settings: Settings.isolated(),
 		modelRegistry: {
 			refresh: async () => {},
@@ -77,11 +76,13 @@ describe("autoloadSkills in executor", () => {
 			},
 		}));
 
-		await runSubprocess({
+		const result = await runSubprocess({
 			...baseOptions,
+			id: "agent-autoload-resolved",
 			skills: mockSkills,
 			autoloadSkills: { kind: "resolved", skills: mockSkills },
 		});
+		expect(result.terminalOutcome).toBe("completed");
 
 		const sendCustomMessage = session.sendCustomMessage as Mock<any>;
 		expect(sendCustomMessage).toHaveBeenCalledTimes(2);
@@ -118,7 +119,8 @@ describe("autoloadSkills in executor", () => {
 
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
-		await runSubprocess(baseOptions);
+		const result = await runSubprocess({ ...baseOptions, id: "agent-autoload-empty" });
+		expect(result.terminalOutcome).toBe("completed");
 
 		const sendCustomMessage = session.sendCustomMessage as Mock<any>;
 		expect(sendCustomMessage).not.toHaveBeenCalled();
@@ -131,7 +133,8 @@ describe("autoloadSkills in executor", () => {
 
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
-		await runSubprocess({ ...baseOptions, autoloadSkills: undefined });
+		const result = await runSubprocess({ ...baseOptions, id: "agent-autoload-undefined", autoloadSkills: undefined });
+		expect(result.terminalOutcome).toBe("completed");
 
 		const sendCustomMessage = session.sendCustomMessage as Mock<any>;
 		expect(sendCustomMessage).not.toHaveBeenCalled();
@@ -170,11 +173,13 @@ describe("autoloadSkills in executor", () => {
 			details: { name: "user-created-skill", path: "/skills/user-created-skill/SKILL.md", lineCount: 1 },
 		});
 
-		await runSubprocess({
+		const result = await runSubprocess({
 			...baseOptions,
+			id: "agent-autoload-order",
 			skills: [mockSkill],
 			autoloadSkills: { kind: "resolved", skills: [mockSkill] },
 		});
+		expect(result.terminalOutcome).toBe("completed");
 
 		expect(callOrder).toEqual(["sendCustomMessage", "prompt"]);
 	});
