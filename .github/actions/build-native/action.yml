@@ -82,7 +82,7 @@ runs:
              # cargo-xwin 0.23.1 includes the Visual Studio 18 manifest fix in xwin 0.10.0.
              cargo_xwin_version=0.23.1
              echo "cargo_xwin_version=$cargo_xwin_version" >> "$GITHUB_OUTPUT"
-             echo "XWIN_CACHE_DIR=$HOME/.cache/cargo-xwin-$cargo_xwin_version" >> "$GITHUB_ENV"
+             echo "XWIN_CACHE_DIR=$RUNNER_TEMP/cargo-xwin-$cargo_xwin_version" >> "$GITHUB_ENV"
            fi
 
       - name: Prepare unprivileged Linux build tools
@@ -290,7 +290,7 @@ runs:
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-           path: ${{ env.XWIN_CACHE_DIR }}
+           path: ${{ env.XWIN_CACHE_DIR }}/xwin
            key: cargo-xwin-${{ runner.os }}-${{ steps.resolve.outputs.cargo_xwin_version }}
       - name: Accept xwin license
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
