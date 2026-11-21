@@ -433,6 +433,88 @@ describe("staged journal rewrite reads only new bytes", () => {
 		}
 	});
 
+	for (const late of [false, true]) {
+		for (const tail of [false, true]) {
+			it(`preserves a peer launch grant ${late ? "after" : "before"} the snapshot during ${tail ? "tail" : "full"} rewrite`, async () => {
+				const dir = temp("rewrite-peer-grant-");
+				const storage = new LateAppendOnWriteTextAtomicStorage();
+				const manager = SessionManager.create(dir, path.join(dir, "sessions", "project"), storage);
+				let peer: SessionManager | undefined;
+				let reopened: SessionManager | undefined;
+				try {
+					manager.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
+					await manager.flush();
+					const journal = manager.getSessionFile()!;
+					peer = await SessionManager.open(journal);
+					const grant = {
+						type: "subagent_launch_grant" as const,
+						version: 1 as const,
+						rootSessionId: peer.getSessionId(),
+						agentId: "PeerGrant",
+						childSessionId: "11111111-2222-4333-8444-555555555555",
+						sessionFile: path.join(await fsp.realpath(path.dirname(journal)), path.basename(journal, ".jsonl"), "child.jsonl"),
+						grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
+					};
+					// A second manager acknowledges the receipt before the stale manager scans.
+					await peer.appendSubagentLaunchGrant(grant);
+					const raw = (await fsp.readFile(journal, "utf8")).split("\n").find(line => line.includes('"subagent_launch_grant"'))!;
+					if (late) {
+						// Restore the stale manager's published layout so a tail plan remains eligible.
+						await fsp.writeFile(journal, (await fsp.readFile(journal, "utf8")).replace(`${raw}\n`, ""));
+						const realRename = storage.renameSync.bind(storage);
+						spyOn(storage, "renameSync").mockImplementation((source, target) => {
+							if (target === journal && source.includes(".tmp")) {
+								fs.appendFileSync(journal, `${raw}\n`);
+								vi.restoreAllMocks();
+							}
+							realRename(source, target);
+						});
+					}
+					if (tail) await manager.setCwd(path.join(dir, "moved"), { validate: false });
+					else await manager.rewriteEntries();
+					const rows = (await fsp.readFile(journal, "utf8")).split("\n");
+					expect(rows.filter(line => line === raw)).toHaveLength(1);
+					reopened = await SessionManager.open(journal);
+					expect(reopened.getSubagentLaunchGrants()).toEqual([grant]);
+				} finally {
+					vi.restoreAllMocks();
+					await reopened?.close();
+					await peer?.close();
+					await manager.close();
+				}
+			});
+		}
+	}
+
+	for (const malformed of [false, true]) {
+		it(`retains ${malformed ? "malformed" : "duplicate"} foreign receipt bytes and refuses ambiguous authorization`, async () => {
+			const dir = temp("rewrite-ambiguous-peer-grant-");
+			const manager = await SessionManager.open(path.join(dir, "session.jsonl"), dir);
+			let reopened: SessionManager | undefined;
+			try {
+				manager.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
+				await manager.flush();
+				const journal = manager.getSessionFile()!;
+				const raw = JSON.stringify({
+					type: "subagent_launch_grant", version: malformed ? 2 : 1,
+					rootSessionId: manager.getSessionId(), agentId: "PeerGrant",
+					childSessionId: "11111111-2222-4333-8444-555555555555",
+					sessionFile: path.join(dir, "child.jsonl"),
+					grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
+				});
+				const copies = malformed ? 1 : 2;
+				await fsp.appendFile(journal, `${raw}\n`.repeat(copies));
+				await manager.rewriteEntries();
+				expect((await fsp.readFile(journal, "utf8")).split("\n").filter(line => line === raw)).toHaveLength(copies);
+				reopened = await SessionManager.open(journal);
+				expect(() => reopened!.getSubagentLaunchGrants()).toThrow("unverified");
+			} finally {
+				await reopened?.close();
+				await manager.close();
+			}
+		});
+	}
+
 	it("preserves a peer append that lands before writeTextAtomic during a full rewrite", async () => {
 		const dir = temp("rewrite-entries-late-peer-before-write-");
 		const journal = path.join(dir, "session.jsonl");
