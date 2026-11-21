@@ -1198,6 +1198,13 @@ export class SessionManager {
 					} catch {
 						return;
 					}
+					if (entry?.type === SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE) {
+						// Match exact bytes with multiplicity: a duplicate must remain visible
+						// to the receipt validator on reopen, not disappear as an owned line.
+						ownReceipts ??= this.#ownReceiptCounts();
+						this.#retainForeignReceipt(raw, ownReceipts, foreign);
+						return;
+					}
 					const id = entry?.id;
 					if (typeof id !== "string" || !id || this.#isOwnId(id) || aborted?.has(id)) return;
 					if (entry?.type === "session" || entry?.type === SESSION_TITLE_SLOT_ENTRY_TYPE) return;
