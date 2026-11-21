@@ -114,7 +114,19 @@ The scale has no `space-*` tokens in the code; these are cell counts you write d
 constants the code does own are `COMPOSER_INSET_COLS` (2) and `COMPOSER_BOTTOM_MARGIN_ROWS` (1), both in
 `composer-chrome.ts`. Prefer 1 or 2 cells in dense tool UIs. One-off paddings are bugs.
 
+
+### Layout-first
+
+Let the interface structure explain the data; use secondary text only for non-recoverable identifiers or instructions. If a frame or alignment provides the hierarchy, omit redundant labels.
+
+**Example:** Instead of a `Status: Pending` chip, align the element to the `pending` rail and use a dimmed `pending` status if the rail tint is ambiguous.
+
+See [Design system adoption (Heylolo)](https://github.com/Wladefant/superboard/issues/2828).
+
 ### Separator grammar
+
+
+
 
 Modal footer chips use the middle dot `·` with two spaces on each side (`  ·  `). The dot is dim; the
 terms around it carry the emphasis. These footers route through the shared
