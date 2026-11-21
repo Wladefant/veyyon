@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Drain pending journal appends before locking a rewrite, and remove whole-file rereads from large session publication ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+
 ## [1.12.1] - 2026-11-20
 
 ### Fixed

@@ -4,6 +4,36 @@
   "repository": "Wladefant/veyyon",
   "description": "Feature map for Veyyon coding-agent capabilities.",
   "features": {
+    "irc-send-receipts": {
+      "name": "IRC send receipts",
+      "description": "Report confirmed or unconfirmed peer delivery without waiting indefinitely for revival or journal persistence.",
+      "entry_files": ["packages/coding-agent/src/tools/agent/irc.ts"],
+      "tests": ["packages/coding-agent/test/tools/an-irc-send-has-a-bounded-delivery.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1224",
+      "risk": "high",
+      "components": ["coding-agent", "IRC"],
+      "docs": ["docs/tools/irc.md"]
+    },
+    "large-session-compaction-publish": {
+      "name": "Large session compaction publication",
+      "description": "Persist compaction rewrites without a writer/lock wait cycle or whole-file rereads at rename.",
+      "entry_files": [
+        "kernel/src/session/session-loader.ts",
+        "kernel/src/session/session-manager.ts",
+        "kernel/src/session/session-storage.ts",
+        "packages/coding-agent/src/session/runtime/compaction-runtime.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/session/a-rewrite-drains-its-writer-before-locking.test.ts",
+        "packages/coding-agent/test/session/a-staged-journal-rewrite-reads-only-new-bytes.test.ts",
+        "packages/coding-agent/test/tailrev-compaction-elision-persist.test.ts",
+        "packages/coding-agent/test/steer-preview-drains-after-compaction.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1225",
+      "risk": "high",
+      "components": ["kernel", "session", "compaction"],
+      "docs": ["docs/internal/session.md"]
+    },
     "sage-approved-context": {
       "name": "Sage approved context",
       "description": "Portable Sage context records with explicit approval, validation, and provider authorization.",

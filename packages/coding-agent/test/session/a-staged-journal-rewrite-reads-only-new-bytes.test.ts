@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { useTempDirs } from "../helpers/temp-dirs";
 
@@ -297,5 +298,49 @@ describe("staged journal rewrite reads only new bytes", () => {
 		);
 		expect(await fsp.readFile(journal, "utf8")).toBe(original + peer);
 		expect((await fsp.readdir(dir)).filter(name => name.endsWith(".tmp"))).toEqual([]);
+	});
+
+	it("preserves foreign rows when rebuilding a large journal", async () => {
+		const dir = temp("rewrite-stream-foreign-");
+		const journal = path.join(dir, "session.jsonl");
+		class NoWholeJournalRead extends FileSessionStorage {
+			blockWholeRead = false;
+			attemptedWholeRead = false;
+
+			override readText(file: string): Promise<string> {
+				if (this.blockWholeRead && file === journal) {
+					this.attemptedWholeRead = true;
+					throw new Error("Whole journal read refused");
+				}
+				return super.readText(file);
+			}
+		}
+		const storage = new NoWholeJournalRead();
+		const manager = await SessionManager.open(journal, dir, storage);
+		try {
+			const payload = "retained session history ".repeat(45);
+			for (let i = 0; i < 9_000; i++) {
+				manager.appendMessage({ role: "user", content: `${i} ${payload}`, timestamp: i });
+			}
+			await manager.flush();
+			const peer = `${JSON.stringify({
+				type: "message",
+				id: "foreign-streamed",
+				timestamp: new Date().toISOString(),
+				parentId: null,
+				message: { role: "user", content: "independent append", timestamp: 0 },
+			})}\n`;
+			await fsp.appendFile(journal, peer);
+			const before = await fsp.readFile(journal);
+			expect(before.byteLength).toBeGreaterThan(8 << 20);
+			storage.blockWholeRead = true;
+
+			await manager.rewriteEntries();
+
+			expect(storage.attemptedWholeRead).toBe(false);
+			expect((await fsp.readFile(journal)).equals(before)).toBe(true);
+		} finally {
+			await manager.close();
+		}
 	});
 });

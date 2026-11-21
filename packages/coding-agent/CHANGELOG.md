@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Return unconfirmed IRC delivery promptly when a local send without `await` cannot get a receipt ([#1224](https://github.com/Wladefant/veyyon/issues/1224)).
+
 ## [1.12.2] - 2026-11-21
 
 ### Fixed

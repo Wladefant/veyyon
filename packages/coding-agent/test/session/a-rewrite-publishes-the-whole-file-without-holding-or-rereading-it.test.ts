@@ -277,28 +277,4 @@ describe("a rewrite publishes the whole file without holding or re-reading it", 
 
 		await manager.close();
 	});
-
-	it("finds foreign rows in a large journal without reading the entire file as text", async () => {
-		using tempDir = TempDir.createSync("@veyyon-rewrite-stream-foreign-");
-		const dir = tempDir.path();
-		const file = path.join(dir, "session.jsonl");
-		const storage = new ReadCountingStorage();
-		const manager = await seedSession(file, dir, storage, 20);
-		try {
-			const payload = "a".repeat(512 << 10);
-			for (let i = 0; i < 18; i++) manager.appendCustomEntry("history", { i, payload });
-			await manager.flush();
-			await fs.appendFile(file, foreignLine("outsider-streamed"));
-			const before = await fs.readFile(file);
-			expect(before.byteLength).toBeGreaterThan(8 << 20);
-			storage.reads = [];
-
-			await manager.rewriteEntries();
-
-			expect(storage.reads).toEqual([]);
-			expect(await fs.readFile(file)).toEqual(before);
-		} finally {
-			await manager.close();
-		}
-	});
 });
