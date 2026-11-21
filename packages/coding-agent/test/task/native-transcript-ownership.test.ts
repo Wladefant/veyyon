@@ -33,7 +33,7 @@ function watchTranscriptResolution(files: readonly string[]): ResolutionWatch {
 	let pending = remaining.length;
 	const reached = Promise.withResolvers<void>();
 	const realpath = fsPromises.realpath;
-	const spy = spyOn(fsPromises, "realpath").mockImplementation((...args: Parameters<typeof realpath>) => {
+	const observe = (...args: Parameters<typeof realpath>) => {
 		const resolved = realpath(...args);
 		const index = remaining.indexOf(String(args[0]));
 		if (index >= 0) {
@@ -43,7 +43,9 @@ function watchTranscriptResolution(files: readonly string[]): ResolutionWatch {
 			}, reached.reject);
 		}
 		return resolved;
-	});
+	};
+	// The wrapper forwards the arguments and returns the original promise for every overload.
+	const spy = spyOn(fsPromises, "realpath").mockImplementation(observe as typeof realpath);
 	return { reached: reached.promise, restore: () => spy.mockRestore() };
 }
 
