@@ -299,6 +299,8 @@ export interface ExecutorOptions {
 	index: number;
 	id: string;
 	parentToolCallId?: string;
+	/** Root-only startup gate, after reserving a fresh transcript and before constructing the child. */
+	beforeChildStart?: (childSessionId: string, sessionFile: string) => Promise<void>;
 	/**
 	 * Spawn runs as a detached background job (parent turn not blocked on it).
 	 * Rides the agent lifecycle/progress payloads so HUD-style surfaces can
@@ -2224,6 +2226,10 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	const buildSessionOptions = childSessionOptionsBuilder(ctx, runModel);
 	const opening = openNativeTranscript(ctx.sessionFile, ctx.effectiveCwd, async sessionManager => {
 		monitor.abortSignal.throwIfAborted();
+		if (options.beforeChildStart) {
+			await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+			monitor.abortSignal.throwIfAborted();
+		}
 		if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
 		marks.sessionOpenedAt = performance.now();
 		const { session } = await createSubagentSession(
@@ -2231,7 +2237,7 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 			buildSessionOptions(sessionManager, ctx.settings),
 		);
 		return session;
-	});
+	}, options.beforeChildStart !== undefined);
 	let session: AgentSession;
 	try {
 		session = await ctx.awaitAbortable(opening);

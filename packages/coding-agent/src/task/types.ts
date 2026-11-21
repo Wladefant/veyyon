@@ -1,6 +1,7 @@
 import type { Usage } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { type ToolSchema, toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import type { SubagentLaunchGrant } from "@veyyon/kernel/session/session-entries";
 import { lazy } from "@veyyon/utils/abortable";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { $envpos } from "@veyyon/utils/env";
@@ -75,6 +76,11 @@ export interface AgentLifecyclePayload {
 export const LABEL_MAX = 80;
 
 const ownershipLeaseRule = { paths: "string[]", expiresAt: "string", "+": "delete" } as const;
+const repoGrantsRule = {
+	mergeRepos: "string[]",
+	dismissRepos: "string[]",
+	"+": "reject",
+} as const;
 
 export const taskItemSchema = lazy(() =>
 	type({
@@ -85,6 +91,7 @@ export const taskItemSchema = lazy(() =>
 		"successorOf?": "string",
 		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
+		"grants?": repoGrantsRule,
 		"+": "delete",
 	}),
 );
@@ -98,6 +105,7 @@ const taskItemSchemaIsolated = lazy(() =>
 		"successorOf?": "string",
 		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
+		"grants?": repoGrantsRule,
 		"+": "delete",
 	}),
 );
@@ -120,6 +128,8 @@ export interface TaskItem {
 	priority?: SpawnPriority;
 	/** Explicit ancestor handoff of dirty paths, bounded by its expiry. */
 	ownershipLease?: OwnershipLeaseRequest;
+	/** Explicit root dispatch authority; never infer it from task or context text. */
+	grants?: SubagentLaunchGrant["grants"];
 }
 
 export const taskSchema = toolSchema("task", () =>
@@ -132,6 +142,7 @@ export const taskSchema = toolSchema("task", () =>
 		"successorOf?": "string",
 		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
+		"grants?": repoGrantsRule,
 		"+": "delete",
 	}),
 );
@@ -144,6 +155,7 @@ const taskSchemaNoIsolation = toolSchema("task:flat", () =>
 		"successorOf?": "string",
 		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
+		"grants?": repoGrantsRule,
 		"+": "delete",
 	}),
 );
@@ -201,6 +213,7 @@ function createTaskSchema(options: {
 				"successorOf?": "string",
 				"priority?": "'normal' | 'high'",
 				"ownershipLease?": ownershipLeaseRule,
+				"grants?": repoGrantsRule,
 				"+": "delete",
 			});
 			return type.raw({
@@ -217,6 +230,7 @@ function createTaskSchema(options: {
 			"successorOf?": "string",
 			"priority?": "'normal' | 'high'",
 			"ownershipLease?": ownershipLeaseRule,
+			"grants?": repoGrantsRule,
 			"+": "delete",
 		});
 		return type.raw({
@@ -235,6 +249,7 @@ function createTaskSchema(options: {
 			"successorOf?": "string",
 			"priority?": "'normal' | 'high'",
 			"ownershipLease?": ownershipLeaseRule,
+			"grants?": repoGrantsRule,
 			"+": "delete",
 		});
 	}
@@ -246,6 +261,7 @@ function createTaskSchema(options: {
 		"successorOf?": "string",
 		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
+		"grants?": repoGrantsRule,
 		"+": "delete",
 	});
 }
@@ -333,6 +349,8 @@ export interface TaskParams {
 	priority?: SpawnPriority;
 	/** Explicit ancestor handoff; per-item in batch form. */
 	ownershipLease?: OwnershipLeaseRequest;
+	/** Explicit root dispatch authority (flat form). */
+	grants?: SubagentLaunchGrant["grants"];
 	/** Internal native-ledger ticket identity; never exposed by the model-facing schema. */
 	ticketId?: string;
 	/** Internal WorkerBackend run identity; never exposed by the model-facing schema. */

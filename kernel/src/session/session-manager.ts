@@ -63,6 +63,8 @@ import {
 	type SessionLifecycleState,
 	type SessionTitleSource,
 	type SessionTreeNode,
+	SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE,
+	type SubagentLaunchGrant,
 	TITLE_CHANGE_ENTRY_TYPE,
 	type TitleChangeEntry,
 	type UsageStatistics,
@@ -75,6 +77,12 @@ import {
 	listSessions,
 	type SessionInfo,
 } from "./session-listing";
+import {
+	hasDuplicateJsonMemberNames,
+	parseSubagentLaunchGrantLine,
+	serializeSubagentLaunchGrant,
+	validateSubagentLaunchGrant,
+} from "./session-launch-grants";
 import {
 	forEachFileLine,
 	type LoadedSessionFile,
@@ -122,52 +130,6 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
  * bounded is bounded either way.
  */
 const CHUNK_TARGET_CHARS = 1 << 20;
-
-/**
- * JSON.parse silently takes the last duplicate object member. In a strict
- * failed-fork repair this could make a foreign line appear to have our ID.
- * Check raw member names after JSON syntax validation, including escaped-
- * equivalent names; nested objects retain independent name namespaces.
- */
-function hasDuplicateJsonMemberNames(raw: string): boolean {
-	const containers: Array<Set<string> | null> = [];
-	let index = 0;
-	while (index < raw.length) {
-		const char = raw[index];
-		if (char === '"') {
-			const start = index++;
-			while (index < raw.length) {
-				if (raw[index] === "\\") index += 2;
-				else if (raw[index] === '"') {
-					index++;
-					break;
-				} else index++;
-			}
-			const names = containers[containers.length - 1];
-			if (names) {
-				let following = index;
-				while (
-					raw[following] === " " ||
-					raw[following] === "\t" ||
-					raw[following] === "\r" ||
-					raw[following] === "\n"
-				)
-					following++;
-				if (raw[following] === ":") {
-					const name = JSON.parse(raw.slice(start, index)) as string;
-					if (names.has(name)) return true;
-					names.add(name);
-				}
-			}
-			continue;
-		}
-		if (char === "{") containers.push(new Set<string>());
-		else if (char === "[") containers.push(null);
-		else if (char === "}" || char === "]") containers.pop();
-		index++;
-	}
-	return false;
-}
 
 /**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is
@@ -441,6 +403,7 @@ export type ReadonlySessionManager = Pick<
 	| "getEntriesThroughCheckpoint"
 	| "getTree"
 	| "getUsageStatistics"
+	| "getSubagentLaunchGrants"
 	| "putBlob"
 	| "putBlobSync"
 >;
@@ -457,6 +420,8 @@ interface SessionOpenOptions extends SessionManagerNoticeOptions {
 	suppressBreadcrumb?: boolean;
 	/** Reserve this transcript until close. The caller must not switch to another transcript. */
 	exclusiveOwner?: boolean;
+	/** Refuse to bind a new launch to a transcript that already exists. Requires exclusive ownership. */
+	requireNew?: boolean;
 }
 
 export interface SessionManagerStateSnapshot {
@@ -477,6 +442,9 @@ export interface SessionManagerStateSnapshot {
 	lifecycleEnded: boolean;
 	header: SessionHeader;
 	entries: SessionEntry[];
+	receiptLines: string[];
+	grants: SubagentLaunchGrant[];
+	grantsAmbiguous: string | undefined;
 	publishedFileState?: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null;
 }
 
@@ -649,6 +617,14 @@ export class SessionManager {
 	 */
 	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null =
 		null;
+	/** Raw receipt lines this journal holds, in file order: ours and any preserved as read. Published in the head. */
+	#receiptLines: string[] = [];
+	/** The receipts in {@link #receiptLines} that validate for this root. */
+	#grants: SubagentLaunchGrant[] = [];
+	/** Why {@link #grants} cannot be trusted (malformed, stale, or duplicate receipt), or undefined. */
+	#grantsAmbiguous: string | undefined;
+	/** Serialize grant publication and rollback, independently of other entry writers. */
+	#grantTail = Promise.resolve();
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
@@ -944,7 +920,13 @@ export class SessionManager {
 		const lines: PublishedLines = { base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
 		yield header;
-		let bytes = yield* this.#entryLines(lines, 0, SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8"));
+		let offset = SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8");
+		for (const receipt of this.#receiptLines) {
+			const line = `${receipt}\n`;
+			offset += Buffer.byteLength(line, "utf-8");
+			yield line;
+		}
+		let bytes = yield* this.#entryLines(lines, 0, offset);
 		for (const raw of foreign) {
 			const line = raw.endsWith("\n") ? raw : `${raw}\n`;
 			bytes += Buffer.byteLength(line, "utf-8");
@@ -1063,7 +1045,7 @@ export class SessionManager {
 		// The first entry's line starts where the old title slot and header end. A header of another
 		// length moves every kept line by the difference, once, before the tail is written.
 		const headBytes = lines.entryOffsets[0]!;
-		const head = this.#titleSlotLine() + this.#headerLine();
+		const head = this.#titleSlotLine() + this.#headerLine() + this.#receiptLines.map(line => `${line}\n`).join("");
 		const shift = Buffer.byteLength(head, "utf-8") - headBytes;
 		if (shift !== 0) {
 			const offsets = lines.entryOffsets;
@@ -1313,6 +1295,7 @@ export class SessionManager {
 				if (this.#isOwnId(entry.id)) missingPublishedIds.add(entry.id);
 			}
 		}
+		let ownReceipts: Map<string, number> | undefined;
 		const journalLines = text.split("\n");
 		for (let lineIndex = 0; lineIndex < journalLines.length; lineIndex++) {
 			const raw = journalLines[lineIndex]!;
@@ -1385,6 +1368,26 @@ export class SessionManager {
 			// precede every ordinary record; legacy title-slot-free sources qualify.
 			if (requireCompleteHistory && !seenSourceHeader) {
 				throw new Error("Cannot preserve journal entry before source header during failed-fork repair");
+			}
+			if (parsed.type === SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE) {
+				// Our receipts are published from memory in the head. Any other receipt is another writer's:
+				// carried as-is, never adopted, and refused outright by a strict repair.
+				if (!ownReceipts) {
+					ownReceipts = new Map();
+					for (const line of this.#receiptLines) {
+						ownReceipts.set(line, (ownReceipts.get(line) ?? 0) + 1);
+					}
+				}
+				const ownCount = ownReceipts.get(raw) ?? 0;
+				if (ownCount > 0) {
+					ownReceipts.set(raw, ownCount - 1);
+				} else {
+					if (requireCompleteHistory) {
+						throw new Error("Cannot preserve unrecognized subagent launch grant during failed-fork repair");
+					}
+					foreign.push(raw);
+				}
+				continue;
 			}
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
 			if (requireCompleteHistory && !id) {
@@ -2157,6 +2160,7 @@ export class SessionManager {
 
 		this.#entries = [];
 		this.#index.clear();
+		this.#clearSubagentLaunchGrants();
 		this.#forgetForeignWriter();
 		this.#nextSequence = 1;
 		this.#lifecycleStarted = false;
@@ -2202,6 +2206,61 @@ export class SessionManager {
 		// Every loaded id is ours from here on, including one a later rewrite drops
 		// on purpose: that is what keeps the foreign-line merge from resurrecting it.
 		this.#forgetForeignWriter();
+	}
+
+	/** Forget every receipt: a fork, branch or new session starts with none of its source's. */
+	#clearSubagentLaunchGrants(): void {
+		this.#receiptLines = [];
+		this.#grants = [];
+		this.#grantsAmbiguous = undefined;
+	}
+
+	/**
+	 * Adopt the receipt lines a load read, keeping each line verbatim for the next publish. Receipts are
+	 * trusted only when every one validates, names this root, and has identities no other receipt holds.
+	 * Otherwise the session fails closed: reads and new receipts are refused until the journal is repaired.
+	 */
+	#adoptSubagentLaunchGrants(lines: readonly string[], rootSessionId: string): void {
+		const grants: SubagentLaunchGrant[] = [];
+		let problem: string | undefined;
+		for (const line of lines) {
+			const checked = parseSubagentLaunchGrantLine(line);
+			if (!checked.ok) {
+				problem ??= checked.problem;
+				continue;
+			}
+			const grant = checked.grant;
+			if (grant.rootSessionId !== rootSessionId) {
+				problem ??= "a receipt names another root session";
+				continue;
+			}
+			if (grant.childSessionId === rootSessionId || grant.agentId === rootSessionId) {
+				problem ??= "a receipt names the root session as its own child";
+				continue;
+			}
+			if (
+				(this.#sessionFile !== undefined && path.resolve(grant.sessionFile) === path.resolve(this.#sessionFile)) ||
+				grants.some(
+					held =>
+						held.agentId === grant.agentId ||
+						held.childSessionId === grant.childSessionId ||
+						held.sessionFile === grant.sessionFile,
+				)
+			) {
+				problem ??= "two receipts share an identity";
+				continue;
+			}
+			grants.push(grant);
+		}
+		this.#receiptLines = [...lines];
+		this.#grants = grants;
+		this.#grantsAmbiguous = problem;
+		if (problem === undefined) return;
+		logger.warn("Session subagent launch grants are unverified", { sessionFile: this.#sessionFile, problem });
+		this.#operatorNotices?.error(
+			"session",
+			`Subagent launch grants in ${this.#sessionFile} are unverified (${problem}). Child launches from this session are refused until its journal is repaired.`,
+		);
 	}
 
 	#allocateSequence(): number {
@@ -2383,6 +2442,9 @@ export class SessionManager {
 			// active header/array wholesale, so rollback needs no deep clone.
 			header: this.#header,
 			entries: this.#entries.slice(),
+			receiptLines: this.#receiptLines.slice(),
+			grants: this.#grants.slice(),
+			grantsAmbiguous: this.#grantsAmbiguous,
 			publishedFileState: this.#publishedFileState
 				? {
 						size: this.#publishedFileState.size,
@@ -2426,6 +2488,9 @@ export class SessionManager {
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
+		this.#receiptLines = snapshot.receiptLines.slice();
+		this.#grants = snapshot.grants.slice();
+		this.#grantsAmbiguous = snapshot.grantsAmbiguous;
 		if (snapshot.publishedFileState !== undefined) {
 			this.#publishedFileState = snapshot.publishedFileState
 				? {
@@ -2521,6 +2586,7 @@ export class SessionManager {
 
 		if (cold !== undefined) this.#cold = cold.payloads;
 		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[], cold?.usage);
+		this.#adoptSubagentLaunchGrants(loaded.receiptLines, header.id);
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
@@ -3227,6 +3293,7 @@ export class SessionManager {
 		this.#clearDiskError();
 		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
+		this.#clearSubagentLaunchGrants();
 
 		this.#setSessionId(nextSessionId);
 		this.#sessionFile = nextSessionFile;
@@ -3636,6 +3703,7 @@ export class SessionManager {
 		if (this.#index.leafId() !== capturedLeafId) return [];
 		if (loaded.cold !== undefined) this.#cold = loaded.cold.payloads;
 		this.#applyEntries(header, entries, loaded.cold?.usage);
+		this.#adoptSubagentLaunchGrants(loaded.receiptLines, header.id);
 		this.#lifecycleStarted = lifecycleStarted;
 		this.#lifecycleEnded = lifecycleEnded;
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
@@ -4225,6 +4293,100 @@ export class SessionManager {
 	}
 
 	/**
+	 * Durably record that this root authorized a child launch for the grants in `record`. Resolves only after
+	 * the receipt is published to this root's journal. Rejects, and keeps nothing in memory, when the receipt
+	 * is invalid, names another root, collides with this root's own identities, repeats an identity already
+	 * recorded, or the journal's receipts are unverified.
+	 */
+	async appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
+		const sessionFile = this.#sessionFile;
+		const publish = this.#grantTail.then(() => this.#publishSubagentLaunchGrant(record, sessionFile));
+		this.#grantTail = publish.catch(() => {});
+		return publish;
+	}
+
+	async #publishSubagentLaunchGrant(record: SubagentLaunchGrant, sessionFile: string | undefined): Promise<void> {
+		if (!this.#persist || !sessionFile || this.#sessionFile !== sessionFile) {
+			throw new Error("Cannot record a subagent launch grant in a non-persistent session");
+		}
+		if (this.#grantsAmbiguous !== undefined) {
+			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
+		}
+		const checked = validateSubagentLaunchGrant(record);
+		if (!checked.ok) throw new Error(`Invalid subagent launch grant: ${checked.problem}`);
+		const grant = checked.grant;
+		if (grant.rootSessionId !== this.#sessionId) {
+			throw new Error("Subagent launch grant names a different root session");
+		}
+		const rootName = path.basename(sessionFile);
+		const rootDir = await fs.promises.realpath(path.dirname(sessionFile));
+		if (
+			this.#sessionFile !== sessionFile ||
+			this.#sessionId !== grant.rootSessionId ||
+			path.basename(path.dirname(rootDir)).toLowerCase() !== "sessions" ||
+			!rootName.endsWith(`_${grant.rootSessionId}.jsonl`) ||
+			path.dirname(grant.sessionFile) !== path.join(rootDir, sessionFileStem(rootName))
+		) {
+			throw new Error("Subagent launch grants require the canonical root and child journal paths");
+		}
+		if (
+			grant.childSessionId === this.#sessionId ||
+			grant.agentId === this.#sessionId ||
+			path.resolve(grant.sessionFile) === path.resolve(this.#sessionFile)
+		) {
+			throw new Error("Subagent launch grant identity collides with the root session");
+		}
+		for (const held of this.#grants) {
+			if (
+				held.agentId === grant.agentId ||
+				held.childSessionId === grant.childSessionId ||
+				held.sessionFile === grant.sessionFile
+			) {
+				throw new Error("Subagent launch grant repeats an identity already recorded for this root");
+			}
+		}
+		const epoch = this.#diskEpoch;
+		const previousLines = this.#receiptLines;
+		const previousGrants = this.#grants;
+		this.#receiptLines = [...previousLines, serializeSubagentLaunchGrant(grant)];
+		this.#grants = [...previousGrants, grant];
+		this.#forceFileCreation = true;
+		try {
+			// The file backend waits for the replacement to be durable before we acknowledge the receipt.
+			await this.#rewriteAtomically(this.#entries.length);
+			if (
+				this.#diskEpoch !== epoch ||
+				this.#sessionFile !== sessionFile ||
+				this.#sessionId !== grant.rootSessionId ||
+				!this.#fileIsCurrent ||
+				this.#rewriteRequired
+			) {
+				throw new Error("Subagent launch grant was not published to the session journal");
+			}
+		} catch (error) {
+			if (this.#sessionFile === sessionFile && this.#sessionId === grant.rootSessionId) {
+				this.#receiptLines = previousLines;
+				this.#grants = previousGrants;
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * This root's verified launch receipts. Throws, rather than answering, while the journal's receipts are
+	 * unverified, so a caller cannot dispatch on a receipt set it cannot trust.
+	 */
+	getSubagentLaunchGrants(): SubagentLaunchGrant[] {
+		if (this.#grantsAmbiguous !== undefined) {
+			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
+		}
+		return this.#grants.map(grant => ({
+			...grant,
+			grants: { mergeRepos: [...grant.grants.mergeRepos], dismissRepos: [...grant.grants.dismissRepos] },
+		}));
+	}
+
+	/**
 	 * Append an effective-settings snapshot recording the resolved config that
 	 * governed the run. `kind: "full"` is the complete config written at session
 	 * start; `kind: "diff"` carries only keys that changed since the prior snapshot.
@@ -4613,6 +4775,7 @@ export class SessionManager {
 		this.#titleUpdatedAt = timestamp;
 		this.#hasTitleSlot = true;
 		this.#index.rebuild(this.#entries);
+		this.#clearSubagentLaunchGrants();
 		// A branch is a new file holding a prefix of the source: the source's foreign
 		// tail stays behind, and the prefix we kept is ours here.
 		this.#forgetForeignWriter();
@@ -4822,6 +4985,9 @@ export class SessionManager {
 		});
 		const handle = await reserveNativeOwner(transcript);
 		try {
+			if (options.requireNew && storage.existsStateSync(transcript) !== "absent") {
+				throw new Error("A new launch grant requires a fresh child transcript");
+			}
 			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
 			manager.#exclusiveOwner = { handle };
 			return manager;

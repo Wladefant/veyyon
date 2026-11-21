@@ -34,6 +34,28 @@
       "components": ["kernel", "session", "compaction"],
       "docs": ["docs/internal/session.md"]
     },
+    "subagent-launch-grants": {
+      "name": "Subagent launch grants",
+      "description": "Bind explicit root dispatch grants to a fresh child session before startup.",
+      "entry_files": [
+        "kernel/src/session/session-launch-grants.ts",
+        "kernel/src/session/session-loader.ts",
+        "kernel/src/session/session-manager.ts",
+        "packages/coding-agent/src/session/tool-session.ts",
+        "packages/coding-agent/src/task/executor.ts",
+        "packages/coding-agent/src/task/index.ts",
+        "packages/coding-agent/src/task/native-transcript.ts",
+        "packages/coding-agent/src/task/spawn-run.ts",
+        "packages/coding-agent/src/task/spawn-scheduler.ts",
+        "packages/coding-agent/src/task/types.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/task/task-launch-grant.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/2922",
+      "risk": "high",
+      "components": ["coding-agent", "kernel"]
+    },
     "sage-approved-context": {
       "name": "Sage approved context",
       "description": "Portable Sage context records with explicit approval, validation, and provider authorization.",

@@ -8,11 +8,13 @@ export async function openNativeTranscript(
 	file: string,
 	initialCwd: string,
 	start: (manager: SessionManager) => Promise<AgentSession>,
+	requireNew = false,
 ): Promise<AgentSession> {
 	const manager = await SessionManager.open(file, undefined, undefined, {
 		initialCwd,
 		suppressBreadcrumb: true,
 		exclusiveOwner: true,
+		requireNew,
 	});
 	try {
 		return await start(manager);
