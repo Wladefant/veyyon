@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-11-21
+
 ### Fixed
 
 - Align Anthropic OAuth with Claude Code 2.1.321 and remove the retired mid-conversation system beta from requests.

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-11-21
+
+### Added
+
+- Add Claude Fable 5.2 and Claude Mythos 5.2 to the first-party Anthropic catalog, with 1M context, 128k output, image input, and adaptive thinking.
+
+### Fixed
+
+- Share one relocation gate acquisition across overlapping native agent starts in the same session. Each transcript still has its own lease.
+- Align Anthropic OAuth with Claude Code 2.1.321 and remove the retired mid-conversation system beta from requests.
+
 ## [1.12.1] - 2026-11-20
 
 ### Added
