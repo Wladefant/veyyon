@@ -52,6 +52,7 @@ jobs:
         shell: bash
         env:
           RELEASE_TARGETS: win32-x64
+          VEYYON_OFFICIAL_RELEASE: '1'
         run: |
           bun run ci:release:build-binaries
           binary=packages/coding-agent/binaries/veyyon-windows-x64.exe
