@@ -2,12 +2,15 @@
 
 ## [Unreleased]
 
-### Fixed
+## [1.12.3] - 2026-11-21
 
-- Return unconfirmed IRC delivery promptly when a local send without `await` cannot get a receipt ([#1224](https://github.com/Wladefant/veyyon/issues/1224)).
 ### Added
 
 - Allow a root task dispatch to grant a child explicit GitHub merge or review dismissal access to named repositories. Wait for the grant receipt to reach disk before starting the child.
+
+### Fixed
+
+- Return unconfirmed IRC delivery promptly when a local send without `await` cannot get a receipt ([#1224](https://github.com/Wladefant/veyyon/issues/1224)).
 
 ## [1.12.2] - 2026-11-21
 
