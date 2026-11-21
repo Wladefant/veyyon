@@ -151,6 +151,22 @@ describe("the prune budget reaches an agent restored from disk", () => {
 		expect(registry.get("Otter")).toBeDefined();
 	});
 
+	it("keeps a fresh restored agent past the orphan sweep until its prune budget expires", async () => {
+		await seedTranscript(path.join(root, "main", "Otter.jsonl"), 10 * 60_000);
+		installBudget(CLOSE_AFTER);
+		vi.useFakeTimers();
+
+		await registerPersistedAgents(registry, path.join(root, "main.jsonl"), "session-a");
+		vi.advanceTimersByTime(30_000);
+		await flushAsync();
+		expect(registry.get("Otter")).toBeDefined();
+		for (let elapsed = 0; elapsed < 50 * 60_000; elapsed += 30_000) {
+			vi.advanceTimersByTime(30_000);
+			await flushAsync();
+		}
+		expect(registry.get("Otter")).toBeUndefined();
+	});
+
 	/**
 	 * Pruning frees the view. It does not delete the operator's record: the
 	 * transcript is what `history://` reads, and a roster that tidies itself by
@@ -248,6 +264,7 @@ describe("the prune budget reaches an agent restored from disk", () => {
 				session: null,
 				sessionFile: file,
 				status: "parked",
+				coldRestoredFromDisk: true,
 				lastActivity: Date.now() - 3 * HOUR,
 			});
 			expect(ref.kind).toBe(kind);

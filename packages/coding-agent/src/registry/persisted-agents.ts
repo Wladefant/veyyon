@@ -144,6 +144,7 @@ async function registerPersistedAgentsFromDir(
 					scope,
 					createdAt: wrote.createdAt,
 					lastActivity: wrote.lastActivity,
+					coldRestoredFromDisk: true,
 				});
 				registered += 1;
 			}
@@ -162,6 +163,7 @@ async function registerPersistedAgentsFromDir(
 				status: "parked",
 				scope,
 				createdAt: wrote.createdAt,
+				coldRestoredFromDisk: true,
 				lastActivity: wrote.lastActivity,
 			});
 			registered += 1;
