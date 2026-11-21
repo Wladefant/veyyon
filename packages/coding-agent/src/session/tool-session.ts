@@ -333,6 +333,7 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 		},
 		getArtifactManager: () => sessionManager.getArtifactManager(),
 		recordAgentSpawn: record => sessionManager.appendAgentSpawn(record),
+		recordSubagentLaunchGrant: inputs.isSpawned ? undefined : record => sessionManager.appendSubagentLaunchGrant(record),
 		getTelemetry: () => inputs.agent()?.telemetry,
 	};
 
@@ -346,6 +347,7 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 		// The advisor is a derived review context, not the primary AgentSession owner.
 		// It must not inherit the primary's archived-history caller authority.
 		getOwningAgentSession: () => undefined,
+		recordSubagentLaunchGrant: undefined,
 		getAgentId: () => "advisor",
 		// The advisor runs its own conversation; the primary agent's context is not what it sees.
 		getLiveMessages: undefined,

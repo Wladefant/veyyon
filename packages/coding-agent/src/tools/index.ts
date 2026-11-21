@@ -15,7 +15,7 @@ import type { ToolResultCodec } from "@veyyon/kernel/registry/tool-result-codec"
 import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
-import type { AgentSpawnRecord, UsageStatistics } from "@veyyon/kernel/session/session-entries";
+import type { AgentSpawnRecord, SubagentLaunchGrant, UsageStatistics } from "@veyyon/kernel/session/session-entries";
 
 export type { AgentSpawnRecord };
 export type SubagentSpawnRecord = AgentSpawnRecord;
@@ -393,6 +393,8 @@ export interface ToolSession extends ToolSessionLocalState {
 	 * sessions that do not persist; a no-op there.
 	 */
 	recordAgentSpawn?: (record: AgentSpawnRecord) => void;
+	/** Root-only capability. Resolves after the child's grant is durable in this session's journal. */
+	recordSubagentLaunchGrant?: (record: SubagentLaunchGrant) => Promise<void>;
 	/**
 	 * Hook invoked when an agent completes, enabling automatic runtime topic replenishment.
 	 */

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
+
 ## [1.12.1] - 2026-11-20
 
 ### Fixed
