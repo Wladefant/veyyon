@@ -84,6 +84,7 @@ import {
 	validateSubagentLaunchGrant,
 } from "./session-launch-grants";
 import {
+	forEachFileLine,
 	type LoadedSessionFile,
 	loadEntriesFromFile,
 	loadSessionFile,
@@ -102,7 +103,9 @@ import {
 } from "./session-paths";
 import { prepareEntryForPersistence } from "./session-persistence";
 import {
+	fileObjectIdentity,
 	FileSessionStorage,
+	type JournalSnapshot,
 	MemorySessionStorage,
 	type PinnedSessionReader,
 	type SessionFileBody,
@@ -1023,10 +1026,12 @@ export class SessionManager {
 		sessionFile: string,
 		epoch: number,
 		updatedFrom: number,
+		sourceSnapshot: JournalSnapshot | null | undefined,
 		canPublishSource?: (sourcePath?: string) => boolean,
 	): Promise<number> {
 		const options = {
 			commitGuard: (sourcePath?: string) => this.#diskEpoch === epoch && (canPublishSource?.(sourcePath) ?? true),
+			sourceSnapshot,
 		};
 		const plan = this.#tailRewritePlan(updatedFrom);
 		if (!plan || !this.#storage.rewriteTailAtomic) {
@@ -1097,13 +1102,12 @@ export class SessionManager {
 	 * unknown identity (a backend that reports none) answers `false` and pays for
 	 * the read.
 	 */
-	#fileIsExactlyAsPublished(): boolean {
+	#fileIsExactlyAsPublished(current?: Pick<SessionStorageStat, "identity" | "size">): boolean {
 		const expected = this.#publishedFileState;
 		if (expected === null || !this.#sessionFile) return false;
 		if (expected.identity === undefined) return false;
-		let current: SessionStorageStat;
 		try {
-			current = this.#storage.statSync(this.#sessionFile);
+			current ??= this.#storage.statSync(this.#sessionFile);
 		} catch {
 			return false;
 		}
@@ -1114,18 +1118,24 @@ export class SessionManager {
 	 * Re-read the session file and record any line this manager never wrote, so
 	 * the publish that follows carries it instead of deleting it.
 	 *
-	 * A read failure leaves the previous knowledge in place rather than blocking
-	 * the publish: losing the elision a rewrite was asked for is worse than
-	 * carrying a slightly stale foreign tail, and an unreadable file is reported
-	 * by the read paths already.
+	 * For file rewrites, return the exact boundary we inspected. Publication
+	 * must replay anything appended after that boundary. If we cannot read
+	 * the snapshot, leave the original journal in place.
 	 *
 	 * The read is skipped when the file is still byte-for-byte the one we
 	 * published, which is the ordinary case: a second writer is rare, and reading
 	 * a large transcript back to learn nothing is the single most expensive step
 	 * of a rewrite (246ms and 322MiB of a 253MiB session's 778ms and 1056MiB).
 	 */
-	async #refreshForeignLines(requireReadable = false): Promise<void> {
+	async #refreshForeignLines(requireReadable = false): Promise<JournalSnapshot | null | undefined> {
 		if (!this.#persist || !this.#sessionFile) return;
+		if (!requireReadable && this.#storage instanceof FileSessionStorage) {
+			const snapshot = this.#storage.snapshotJournal(this.#sessionFile);
+			if (snapshot && !this.#fileIsExactlyAsPublished(snapshot)) {
+				await this.#refreshFileForeignLines(this.#sessionFile, snapshot);
+			}
+			return snapshot;
+		}
 		// A fixed-width title update writes in place: inode and byte count stay the
 		// same. Strict failed-fork recovery must inspect its actual contents.
 		if (!requireReadable && this.#fileIsExactlyAsPublished()) return;
@@ -1138,7 +1148,7 @@ export class SessionManager {
 		try {
 			// Strict failed-fork recovery may not fall back to a lossy text reader:
 			// a backend without byte-strict UTF-8 support cannot prove it retained
-			// independent source bytes. Ordinary rewrites remain best-effort.
+			// independent source bytes. Other backends remain best-effort.
 			if (requireReadable) {
 				if (!this.#storage.readTextStrict) throw new Error("Cannot verify current session journal");
 				text = await this.#storage.readTextStrict(this.#sessionFile);
@@ -1150,6 +1160,56 @@ export class SessionManager {
 			return;
 		}
 		this.#adoptForeignLines(text, requireReadable);
+	}
+
+	async #refreshFileForeignLines(file: string, snapshot: JournalSnapshot): Promise<void> {
+		const foreign: string[] = [];
+		let liveWriterEntries = 0;
+		const aborted = this.#abortedForkLifecycleLinesByFile.get(file);
+		const handle = await fs.promises.open(
+			file,
+			fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0),
+		);
+		try {
+			const stats = await handle.stat();
+			if (!stats.isFile() || fileObjectIdentity(stats) !== snapshot.identity || stats.size < snapshot.size) {
+				throw new Error(`Session journal was replaced or truncated during refresh: ${file}`);
+			}
+			let firstLine = true;
+			await forEachFileLine(
+				handle,
+				0,
+				(bytes, start, end) => {
+					if (firstLine) {
+						firstLine = false;
+						if (end - start >= 3 && bytes[start] === 0xef && bytes[start + 1] === 0xbb && bytes[start + 2] === 0xbf) {
+							start += 3;
+						}
+					}
+					if (start === end) return;
+					// Decode only the prefix of ordinary entries we already hold.
+					const leadingId = LEADING_ENTRY_ID.exec(bytes.toString("utf8", start, Math.min(start + 64, end)))?.[1];
+					if (leadingId !== undefined && this.#isOwnId(leadingId)) return;
+					const raw = bytes.toString("utf8", start, end);
+					let entry: { id?: unknown; type?: unknown; customType?: unknown } | null;
+					try {
+						entry = JSON.parse(raw);
+					} catch {
+						return;
+					}
+					const id = entry?.id;
+					if (typeof id !== "string" || !id || this.#isOwnId(id) || aborted?.has(id)) return;
+					if (entry?.type === "session" || entry?.type === SESSION_TITLE_SLOT_ENTRY_TYPE) return;
+					foreign.push(raw);
+					if (entry?.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries++;
+				},
+				undefined,
+				snapshot.size,
+			);
+		} finally {
+			await handle.close();
+		}
+		this.#recordForeignLines(foreign, liveWriterEntries);
 	}
 
 	/**
@@ -1380,6 +1440,10 @@ export class SessionManager {
 		if (requireCompleteHistory && this.#hasTitleSlot && !seenTitleSlot) {
 			throw new Error("Cannot preserve missing session title slot during failed-fork repair");
 		}
+		this.#recordForeignLines(foreign, liveWriterEntries);
+	}
+
+	#recordForeignLines(foreign: string[], liveWriterEntries: number): void {
 		this.#foreignLines = foreign;
 		if (this.#reportedForeignWriter) return;
 		// A `session_exit` record is the last thing a run writes, so a foreign one is
@@ -1556,15 +1620,15 @@ export class SessionManager {
 	 * Callers then skip their post-publish state updates.
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
-		this.#atomicRewriteFenceEpoch = epoch;
 		const sessionFile = this.#sessionFile;
 		if (!sessionFile) return false;
+		this.#atomicRewriteFenceEpoch = epoch;
 		const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
 		const runRewrite = async (): Promise<boolean> => {
 			try {
 				do {
 					this.#atomicRewriteDirty = false;
-					await this.#closeWriterHandle();
+					if (this.#writer) await this.#closeWriterHandle();
 					if (!this.#sessionFile || this.#sessionFile !== sessionFile) return false;
 					if (this.#diskEpoch !== epoch) return false;
 					let originalState: SessionStorageStat | undefined;
@@ -1593,7 +1657,7 @@ export class SessionManager {
 							return false;
 						}
 					};
-					await this.#refreshForeignLines(repairingFailedFork);
+					const sourceSnapshot = await this.#refreshForeignLines(repairingFailedFork);
 					if (repairingFailedFork && !sourceUnchanged()) {
 						throw new Error("Original journal changed during failed-fork repair");
 					}
@@ -1609,6 +1673,7 @@ export class SessionManager {
 							sessionFile,
 							epoch,
 							updatedFrom,
+							sourceSnapshot,
 							repairingFailedFork
 								? (sourcePath?: string) => {
 										const unchanged = sourceUnchanged(sourcePath);
@@ -1651,10 +1716,21 @@ export class SessionManager {
 				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 			}
 		};
-		if (this.#storage.withJournalLock) {
-			return await this.#storage.withJournalLock(sessionFile, runRewrite);
+		try {
+			// Pending appends may already be queued behind another journal holder.
+			// Close before queueing the rewrite, or a later append could queue
+			// behind the rewrite that waits for it. The fence absorbs new appends.
+			await this.#closeWriterHandle();
+			if (this.#diskEpoch !== epoch) return false;
+			if (this.#storage.withJournalLock) {
+				return await this.#storage.withJournalLock(sessionFile, runRewrite);
+			}
+			return await runRewrite();
+		} catch (error) {
+			// Failed before runRewrite's own finally could release the fence: release it here.
+			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
+			throw error;
 		}
-		return await runRewrite();
 	}
 
 	/**

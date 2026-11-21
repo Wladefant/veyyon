@@ -455,18 +455,24 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
  * the call. A line is the bytes before a line feed, or the bytes after the last one when the file
  * does not end with one; an empty line is a line. A line longer than the stream frame bound fails
  * with `StreamFrameLimitError`, as every line reader does.
+ * When `endOffset` is set, it is the exclusive end of the snapshot. EOF before it is an error.
  *
  * Each read is split synchronously: an async iterator over lines cost one promise per line, and
  * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
  */
-async function forEachFileLine(
+export async function forEachFileLine(
 	handle: fs.promises.FileHandle,
 	from: number,
 	onLine: (bytes: Buffer, start: number, end: number) => void,
 	signal?: AbortSignal,
+	endOffset?: number,
 ): Promise<void> {
+	if (endOffset === from) {
+		signal?.throwIfAborted();
+		return;
+	}
 	const limit = streamFrameCeiling();
-	let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
+	let buffer = Buffer.allocUnsafe(Math.min(STREAM_READ_BYTES, (endOffset ?? Infinity) - from));
 	let position = from;
 	// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
 	let carried = 0;
@@ -477,7 +483,11 @@ async function forEachFileLine(
 			buffer.copy(grown, 0, 0, carried);
 			buffer = grown;
 		}
-		const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, position);
+		const length = Math.min(buffer.length - carried, (endOffset ?? Infinity) - position);
+		const { bytesRead } = await handle.read(buffer, carried, length, position);
+		if (bytesRead === 0 && endOffset !== undefined) {
+			throw new Error("Short read during session journal refresh");
+		}
 		position += bytesRead;
 		const filled = buffer.subarray(0, carried + bytesRead);
 		let start = 0;
@@ -488,7 +498,7 @@ async function forEachFileLine(
 		}
 		carried = filled.length - start;
 		if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
-		if (bytesRead === 0) {
+		if (bytesRead === 0 || position === endOffset) {
 			signal?.throwIfAborted();
 			if (carried > 0) onLine(filled, start, filled.length);
 			return;
