@@ -203,6 +203,12 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
 	return `${stats.dev}:${stats.ino}`;
 }
 
+/** The prefix of one journal object seen by the refresh that precedes publication. */
+export interface JournalSnapshot {
+	readonly identity: string;
+	readonly size: number;
+}
+
 /**
  * Optional guard applied by {@link SessionStorage.writeTextAtomic}. The
  * backend MUST call `commitGuard()` synchronously immediately before it makes
@@ -214,6 +220,8 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
 export interface WriteTextAtomicOptions {
 	/** The EPERM move-aside path, when a backend has renamed the original there. */
 	commitGuard?: (sourcePath?: string) => boolean;
+	/** Replay growth beyond this snapshot. `null` means the refresh saw no journal. */
+	sourceSnapshot?: JournalSnapshot | null;
 }
 
 /**
@@ -1159,7 +1167,7 @@ export class FileSessionStorage implements SessionStorage {
 			await fs.promises.mkdir(dir, { recursive: true });
 			let publishScope: StagedPublishScope | undefined;
 			try {
-				publishScope = this.#captureStagedPublishScope(fpath, tempPath);
+				publishScope = this.#captureStagedPublishScope(fpath, tempPath, options?.sourceSnapshot);
 				await writeChunks(tempPath, body);
 			} catch (err) {
 				discardTemp(tempPath, fpath);
@@ -1190,7 +1198,7 @@ export class FileSessionStorage implements SessionStorage {
 			const headLength = Buffer.byteLength(head, "utf-8");
 			let publishScope: StagedPublishScope | undefined;
 			try {
-				publishScope = this.#captureStagedPublishScope(fpath, tempPath);
+				publishScope = this.#captureStagedPublishScope(fpath, tempPath, options?.sourceSnapshot);
 				const inPlace = headLength === headBytes;
 				if (inPlace) await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
 				const handle = await fs.promises.open(tempPath, inPlace ? "r+" : "w");
@@ -1219,16 +1227,26 @@ export class FileSessionStorage implements SessionStorage {
 		});
 	}
 
-	/** Remember the original journal boundary before producing the replacement. */
-	#captureStagedPublishScope(targetPath: string, tempPath: string): StagedPublishScope | undefined {
+	snapshotJournal(file: string): JournalSnapshot | null {
+		const stats = fs.lstatSync(file, { throwIfNoEntry: false });
+		if (!stats) return null;
+		if (!stats.isFile()) throw new Error(`Session journal is not a regular file: ${file}`);
+		return { identity: fileObjectIdentity(stats), size: stats.size };
+	}
+
+	/** Without a prior refresh, use the journal boundary just before staging. */
+	#captureStagedPublishScope(
+		targetPath: string,
+		tempPath: string,
+		sourceSnapshot: JournalSnapshot | null | undefined,
+	): StagedPublishScope | undefined {
 		if (!targetPath.endsWith(".jsonl")) return undefined;
-		const stats = fs.lstatSync(targetPath, { throwIfNoEntry: false });
-		if (stats && !stats.isFile()) throw new Error(`Session journal is not a regular file: ${targetPath}`);
+		const snapshot = sourceSnapshot === undefined ? this.snapshotJournal(targetPath) : sourceSnapshot;
 		return {
 			tempPath,
 			targetPath,
-			identity: stats && fileObjectIdentity(stats),
-			nextOffset: stats?.size ?? 0,
+			identity: snapshot?.identity,
+			nextOffset: snapshot?.size ?? 0,
 		};
 	}
 

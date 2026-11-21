@@ -56,21 +56,6 @@ import { TempDir } from "@veyyon/utils";
  *   harness, not in an assertion here.
  */
 
-/** Counts the reads a publish performs, which is what the skip is about. */
-class ReadCountingStorage extends FileSessionStorage {
-	reads: string[] = [];
-
-	override readText(filePath: string): Promise<string> {
-		this.reads.push(filePath);
-		return super.readText(filePath);
-	}
-
-	override readTextSync(filePath: string): string | undefined {
-		this.reads.push(filePath);
-		return super.readTextSync(filePath);
-	}
-}
-
 class FsCodeError extends Error {
 	code: string;
 
@@ -147,23 +132,23 @@ describe("a rewrite publishes the whole file without holding or re-reading it", 
 		using tempDir = TempDir.createSync("@veyyon-rewrite-skip-");
 		const dir = tempDir.path();
 		const file = path.join(dir, "session.jsonl");
-		const storage = new ReadCountingStorage();
-		const manager = await seedSession(file, dir, storage, 40);
+		const manager = await seedSession(file, dir, new FileSessionStorage(), 40);
 
 		// The first publish is what establishes what is on disk.
 		await manager.rewriteEntries();
 		manager.appendMessage({ role: "user", content: `after ${WIDE_TEXT}`, timestamp: Date.now() });
 		await manager.flush();
-		storage.reads = [];
+		const opens = vi.spyOn(nodeFs.promises, "open");
+		const readFiles = vi.spyOn(fs, "readFile");
 
 		await manager.rewriteEntries();
 
-		expect(storage.reads).toEqual([]);
-		// Non-vacuity: the same counter sees the read when the file did change,
-		// which rows 3 and 4 assert as behaviour rather than as a count.
+		expect(opens.mock.calls.map(([target]) => target)).not.toContain(file);
+		expect(readFiles.mock.calls.map(([target]) => target)).not.toContain(file);
+		// The counter sees a refresh when the file does change.
 		await fs.appendFile(file, foreignLine("outsider-after-skip"));
 		await manager.rewriteEntries();
-		expect(storage.reads).toContain(file);
+		expect(opens.mock.calls.map(([target]) => target)).toContain(file);
 
 		await manager.close();
 	});
