@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Share one relocation gate acquisition across overlapping native agent starts in the same session. Each transcript still has its own lease.
+
 ## [1.12.1] - 2026-11-20
 
 ### Fixed
