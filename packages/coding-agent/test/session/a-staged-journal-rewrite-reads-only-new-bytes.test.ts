@@ -433,6 +433,38 @@ describe("staged journal rewrite reads only new bytes", () => {
 		}
 	});
 
+	it("publishes waiting sibling grants once without accepting a duplicate or losing a sibling", async () => {
+		const dir = temp("rewrite-grant-burst-");
+		const storage = new FileSessionStorage();
+		const root = SessionManager.create(dir, path.join(dir, "sessions", "project"), storage);
+		try {
+			root.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
+			await root.ensureOnDisk();
+			const journal = root.getSessionFile()!;
+			const artifactDir = path.join(await fsp.realpath(path.dirname(journal)), path.basename(journal, ".jsonl"));
+			const grants = ["First", "Second", "Third"].map(agentId => ({
+				type: "subagent_launch_grant" as const,
+				version: 1 as const,
+				rootSessionId: root.getSessionId(),
+				agentId,
+				childSessionId: crypto.randomUUID(),
+				sessionFile: path.join(artifactDir, `${agentId}.jsonl`),
+				grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
+			}));
+			const publish = spyOn(storage, "renameSync");
+			const results = await Promise.allSettled(
+				[grants[0]!, grants[1]!, grants[0]!, grants[2]!].map(grant => root.appendSubagentLaunchGrant(grant)),
+			);
+			expect(results.map(result => result.status)).toEqual(["fulfilled", "fulfilled", "rejected", "fulfilled"]);
+			const rows = (await fsp.readFile(journal, "utf8")).trimEnd().split("\n").map(line => JSON.parse(line));
+			expect(rows.filter(row => row.type === "subagent_launch_grant")).toEqual(grants);
+			expect(rows.some(row => row.message?.content === "retained history")).toBe(true);
+			expect(publish.mock.calls.filter(([, target]) => target === journal)).toHaveLength(1);
+		} finally {
+			await root.close();
+		}
+	});
+
 	for (const late of [false, true]) {
 		for (const tail of [false, true]) {
 			it(`preserves a peer launch grant ${late ? "after" : "before"} the snapshot during ${tail ? "tail" : "full"} rewrite`, async () => {

@@ -4311,6 +4311,7 @@ export class SessionManager {
 	 * the receipt is published to this root's journal. Rejects, and keeps nothing in memory, when the receipt
 	 * is invalid, names another root, collides with this root's own identities, repeats an identity already
 	 * recorded, or the journal's receipts are unverified.
+	 * Sibling requests already waiting on the same root share one durable publication.
 	 */
 	async appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
 		const sessionFile = this.#sessionFile;
