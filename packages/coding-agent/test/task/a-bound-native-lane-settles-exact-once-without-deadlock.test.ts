@@ -148,11 +148,7 @@ describe("native replenishment lifecycle contracts", () => {
 
 		const ledgerPath = path.join(root, "ledger.json");
 		const writeLedger = async (requests: LedgerFileShape["requests"]) => {
-			await fs.writeFile(
-				ledgerPath,
-				JSON.stringify({ version: 2, requests }, null, 2),
-				"utf8",
-			);
+			await fs.writeFile(ledgerPath, JSON.stringify({ version: 2, requests }, null, 2), "utf8");
 		};
 		const readLedger = async (): Promise<LedgerFileShape> =>
 			JSON.parse(await fs.readFile(ledgerPath, "utf8")) as LedgerFileShape;
@@ -417,9 +413,9 @@ describe("native replenishment lifecycle contracts", () => {
 			agents: [taskAgent],
 			projectAgentsDir: null,
 		});
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
-			makePassResult(options, "build"),
-		);
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => makePassResult(options, "build"));
 
 		const harness = await setupHarness({
 			settings: { "async.enabled": true, "async.maxJobs": 2 },
@@ -604,9 +600,7 @@ describe("native replenishment lifecycle contracts", () => {
 			agents: [taskAgent],
 			projectAgentsDir: null,
 		});
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
-			makePassResult(options, "review"),
-		);
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makePassResult(options, "review"));
 
 		const harness = await setupHarness({
 			settings: { "async.enabled": false },
@@ -623,16 +617,18 @@ describe("native replenishment lifecycle contracts", () => {
 		});
 		let checkpointExistedAtCompletion = false;
 		const origComplete = harness.engine.onWorkerComplete.bind(harness.engine);
-		const completeSpy = vi.spyOn(harness.engine, "onWorkerComplete").mockImplementation(async (event, roster, opts) => {
-			const sessionDir = harness.sessionManager.getSessionFile()!.slice(0, -6);
-			const cpHash = createHash("sha256").update(event.agentId).digest("hex");
-			const cpPath = path.join(sessionDir, `${cpHash}.checkpoint.json`);
-			checkpointExistedAtCompletion = await fs
-				.stat(cpPath)
-				.then(() => true)
-				.catch(() => false);
-			return origComplete(event, roster, opts);
-		});
+		const completeSpy = vi
+			.spyOn(harness.engine, "onWorkerComplete")
+			.mockImplementation(async (event, roster, opts) => {
+				const sessionDir = harness.sessionManager.getSessionFile()!.slice(0, -6);
+				const cpHash = createHash("sha256").update(event.agentId).digest("hex");
+				const cpPath = path.join(sessionDir, `${cpHash}.checkpoint.json`);
+				checkpointExistedAtCompletion = await fs
+					.stat(cpPath)
+					.then(() => true)
+					.catch(() => false);
+				return origComplete(event, roster, opts);
+			});
 
 		await harness.engine.replenish([]);
 		await harness.engine.waitForPendingReplenishment();
