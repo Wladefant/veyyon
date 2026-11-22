@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import errno
 import json
 import os
+import platform
 import re
+import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -263,6 +267,141 @@ def get_iso_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+BASE_NATIVE_CLAIM_KEYS = frozenset({"version", "state", "worker_id", "run_id", "task_handle"})
+ACTIVE_NATIVE_CLAIM_KEYS = BASE_NATIVE_CLAIM_KEYS | frozenset({"host"})
+
+
+def local_host_name() -> str:
+    try:
+        name = socket.gethostname().strip()
+    except OSError:
+        name = ""
+    if not name:
+        try:
+            name = platform.node().strip()
+        except OSError:
+            name = ""
+    return name
+
+
+def parse_positive_pid(raw: Any) -> Tuple[Optional[int], Optional[str]]:
+    if raw is None:
+        return None, None
+    if type(raw) is int:
+        pid = raw
+    elif isinstance(raw, str):
+        s = raw.strip()
+        if not s or not re.fullmatch(r"[+-]?\d+", s):
+            return None, "Invalid host PID: must be a positive integer"
+        try:
+            pid = int(s, 10)
+        except ValueError:
+            return None, "Invalid host PID: must be a positive integer"
+    else:
+        return None, "Invalid host PID: must be a positive integer"
+    if pid <= 0:
+        return None, "Invalid host PID: must be a positive integer"
+    return pid, None
+
+
+def local_process_identity(pid: int) -> Tuple[str, Optional[str]]:
+    """Read the process birth identity without signalling or opening it for write."""
+    if type(pid) is not int or pid <= 0:
+        return "unknown", None
+    if sys.platform == "win32":
+        if pid > 0xFFFFFFFF:
+            return "unknown", None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            kernel32.GetProcessTimes.restype = wintypes.BOOL
+
+            # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION. Never request terminate access.
+            handle = kernel32.OpenProcess(0x00101000, False, pid)
+            if not handle:
+                return ("dead", None) if ctypes.get_last_error() == 87 else ("unknown", None)
+            try:
+                wait = kernel32.WaitForSingleObject(handle, 0)
+                if wait == 0:
+                    return "dead", None
+                if wait != 0x102:
+                    return "unknown", None
+                times = [wintypes.FILETIME() for _ in range(4)]
+                if not kernel32.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+                    return "unknown", None
+                created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                return "alive", f"win:{created}"
+            finally:
+                kernel32.CloseHandle(handle)
+        except (OSError, ValueError, OverflowError):
+            return "unknown", None
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead", None
+    except OSError as exc:
+        return ("dead", None) if exc.errno == errno.ESRCH else ("unknown", None)
+    except OverflowError:
+        return "unknown", None
+    try:
+        if sys.platform.startswith("linux"):
+            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as stat_file:
+                # comm is parenthesized and can contain spaces or parentheses.
+                fields = stat_file.read().rsplit(")", 1)[1].split()
+            if fields[0] in ("Z", "X"):
+                return "dead", None
+            with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as boot_file:
+                boot = boot_file.read().strip()
+            return "alive", f"linux:{boot}:{fields[19]}"
+        if sys.platform == "darwin":
+            value = subprocess.run(
+                ["/bin/ps", "-p", str(pid), "-o", "lstart="], capture_output=True,
+                text=True, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}, timeout=2,
+            )
+            if value.returncode == 0 and value.stdout.strip():
+                return "alive", f"darwin:{value.stdout.strip()}"
+    except (OSError, IndexError, subprocess.TimeoutExpired):
+        pass
+    return "unknown", None
+
+
+def claim_host_liveness(claim: Mapping[str, Any], current_host: Optional[str] = None) -> str:
+    """
+    Determine same-host owner liveness for a validated active claim.
+    Returns 'alive', 'dead', or 'unknown'.
+    Anonymous legacy claims and foreign-host claims always return 'unknown'.
+    """
+    host = claim.get("host")
+    if not isinstance(host, dict):
+        return "unknown"
+    claim_host_name = host.get("name")
+    claim_host_pid = host.get("pid")
+    if not isinstance(claim_host_name, str) or not claim_host_name.strip():
+        return "unknown"
+    if type(claim_host_pid) is not int or claim_host_pid <= 0:
+        return "unknown"
+    local_name = local_host_name() if current_host is None else current_host
+    if not local_name or claim_host_name != local_name:
+        return "unknown"
+    started = host.get("started")
+    if not isinstance(started, str) or not started:
+        return "unknown"
+    liveness, actual_start = local_process_identity(claim_host_pid)
+    if liveness == "alive" and actual_start != started:
+        return "dead"
+    return liveness
+
+
 def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
     """Validate the persisted execution identity without changing accountable ownership."""
     if any(req.get(key) not in (None, "") for key in ("native_run_id", "native_task_handle")):
@@ -270,11 +409,16 @@ def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
     if "native_claim" not in req:
         return None
     claim = req["native_claim"]
-    if not isinstance(claim, dict) or set(claim) != {"version", "state", "worker_id", "run_id", "task_handle"}:
+    if not isinstance(claim, dict):
+        return "Malformed native claim"
+    claim_keys = set(claim)
+    if not BASE_NATIVE_CLAIM_KEYS.issubset(claim_keys) or not claim_keys.issubset(ACTIVE_NATIVE_CLAIM_KEYS):
         return "Malformed native claim"
     if type(claim["version"]) is not int or claim["version"] != 1:
         return "Unsupported native claim version"
     if claim["state"] == "retryable":
+        if "host" in claim:
+            return "Malformed native claim"
         if any(claim[key] is not None for key in ("worker_id", "run_id", "task_handle")):
             return "Retryable native claim still has an execution identity"
         return None
@@ -287,6 +431,18 @@ def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
         return "Invalid native task handle"
     if handle is not None and handle.removeprefix("agent://") != claim["worker_id"]:
         return "Conflicting native worker and task identities"
+    if "host" in claim:
+        host = claim["host"]
+        if not isinstance(host, dict) or set(host) not in ({"name", "pid"}, {"name", "pid", "started"}):
+            return "Malformed native claim host"
+        host_name = host["name"]
+        host_pid = host["pid"]
+        if not isinstance(host_name, str) or not host_name.strip():
+            return "Invalid native claim host name"
+        if type(host_pid) is not int or host_pid <= 0:
+            return "Invalid native claim host PID"
+        if "started" in host and (not isinstance(host["started"], str) or not host["started"].strip()):
+            return "Invalid native claim host start identity"
     return None
 
 
@@ -429,6 +585,28 @@ def cmd_claim(args: argparse.Namespace) -> int:
     worker_id = args.worker_id or f"native-replenish-{int(time.time()*1000)}"
     covered_topics = set(args.covered_topics.split(",") if args.covered_topics else [])
     timeout = float(args.timeout)
+    host_pid, host_pid_err = parse_positive_pid(getattr(args, "host_pid", None))
+    if host_pid_err:
+        print(json.dumps({
+            "claimed": False,
+            "reason": host_pid_err,
+            "blockedTopics": [],
+            "blocked_topics": [],
+        }))
+        return 0
+    host = None
+    if host_pid is not None:
+        host_name = local_host_name()
+        liveness, started = local_process_identity(host_pid)
+        if not host_name or liveness != "alive" or not started:
+            print(json.dumps({
+                "claimed": False,
+                "reason": "Unable to identify the live SDK process for native claim",
+                "blockedTopics": [],
+                "blocked_topics": [],
+            }))
+            return 0
+        host = {"name": host_name, "pid": host_pid, "started": started}
 
     with FileLock(lock_path, timeout=timeout):
         if not os.path.exists(ledger_path):
@@ -702,10 +880,13 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "reason": "Claimed for native replenishment",
         })
         data["updated_at"] = now_iso
-        chosen_req["native_claim"] = {
+        native_claim: Dict[str, Any] = {
             "version": 1, "state": "active", "worker_id": worker_id,
             "run_id": run_id, "task_handle": None,
         }
+        if host is not None:
+            native_claim["host"] = host
+        chosen_req["native_claim"] = native_claim
 
         # Write file atomically inside FileLock
         write_ledger_atomic(ledger_path, data)
@@ -930,13 +1111,14 @@ def cmd_rollback(args: argparse.Namespace) -> int:
 def cmd_recover(args: argparse.Namespace) -> int:
     ledger_path = os.path.abspath(args.ledger)
     lock_path = ledger_path + ".lock"
-    running_worker_ids = set(filter(None, args.running_worker_ids.split(",")))
+    running_worker_ids = set(filter(None, (getattr(args, "running_worker_ids", "") or "").split(",")))
     recovered: List[str] = []
     retired: List[str] = []
     reconciled_outcomes: List[Dict[str, Any]] = []
     errors: List[str] = []
+    current_host = local_host_name()
 
-    with FileLock(lock_path, timeout=float(args.timeout)):
+    with FileLock(lock_path, timeout=float(getattr(args, "timeout", 15.0))):
         if not os.path.exists(ledger_path):
             print(json.dumps({"recovered": recovered}))
             return 0
@@ -954,8 +1136,11 @@ def cmd_recover(args: argparse.Namespace) -> int:
             if state not in {"implementation", "qa", "review"} or not claim:
                 continue
 
+            host_status = claim_host_liveness(claim, current_host)
+
             if WorkerBackend is None:
-                if claim["worker_id"] in running_worker_ids:
+                roster_live = claim["worker_id"] in running_worker_ids
+                if roster_live or host_status != "dead":
                     continue
                 owner = claim["worker_id"]
                 req["native_claim"] = retryable_native_claim()
@@ -999,14 +1184,11 @@ def cmd_recover(args: argparse.Namespace) -> int:
                 continue
 
             bound_worker_id = bound_handle.removeprefix("agent://") if bound_handle is not None else None
-            authoritative_live = (
-                bound_worker_id in running_worker_ids
-                if bound_worker_id is not None
-                else claim["worker_id"] in running_worker_ids
-            )
+            roster_worker_id = bound_worker_id if bound_worker_id is not None else claim["worker_id"]
+            roster_live = roster_worker_id in running_worker_ids
 
             if backend_ticket.state in ("finalized", "blocked"):
-                if authoritative_live:
+                if roster_live:
                     continue
                 try:
                     outcome = backend.get_native_outcome(run_id)
@@ -1031,19 +1213,19 @@ def cmd_recover(args: argparse.Namespace) -> int:
                 continue
 
             if backend_ticket.state in ("prepared", "background_dispatched", "retired"):
-                if authoritative_live:
-                    if (
-                        claim["task_handle"] is None
-                        and backend_ticket.state == "background_dispatched"
-                        and bound_handle is not None
-                        and bound_worker_id is not None
-                    ):
-                        claim["task_handle"] = bound_handle
-                        claim["worker_id"] = bound_worker_id
-                        req["updated_at"] = now_iso
-                        ledger_modified = True
+                known_live_handle = bound_worker_id is not None and bound_worker_id in running_worker_ids
+                if (
+                    known_live_handle
+                    and claim["task_handle"] is None
+                    and backend_ticket.state == "background_dispatched"
+                ):
+                    claim["task_handle"] = bound_handle
+                    claim["worker_id"] = bound_worker_id
+                    req["updated_at"] = now_iso
+                    ledger_modified = True
                     continue
-
+                if roster_live or host_status != "dead":
+                    continue
                 if backend_ticket.state == "prepared" and bound_handle is not None:
                     errors.append(f"{ticket_id}: prepared WorkerBackend run {run_id} unexpectedly has handle {bound_handle!r}")
                     continue
@@ -1203,6 +1385,110 @@ def cmd_complete(args: argparse.Namespace) -> int:
         }))
         return 0
 
+def _admit_refusal(error: str) -> int:
+    msg = error.strip() if isinstance(error, str) and error.strip() else "Native dispatch not admitted"
+    if len(msg) > 512:
+        msg = msg[:509] + "..."
+    print(json.dumps({"admitted": False, "error": msg}))
+    return 0
+
+
+def cmd_admit(args: argparse.Namespace) -> int:
+    raw_ledger = getattr(args, "ledger", "")
+    ticket_id = getattr(args, "ticket_id", "")
+    run_id = getattr(args, "run_id", "")
+    task_handle = getattr(args, "task_handle", "")
+    raw_host_pid = getattr(args, "host_pid", None)
+    timeout = float(getattr(args, "timeout", 15.0))
+
+    if not isinstance(raw_ledger, str) or not raw_ledger.strip():
+        return _admit_refusal("A ledger path is required for native admission")
+    if not isinstance(ticket_id, str) or not ticket_id.strip():
+        return _admit_refusal("A ticket ID is required for native admission")
+    if not isinstance(run_id, str) or not run_id.strip():
+        return _admit_refusal("A native run ID is required for native admission")
+    if not is_valid_task_handle(task_handle):
+        return _admit_refusal("Invalid native task handle")
+
+    host_pid, pid_err = parse_positive_pid(raw_host_pid)
+    if pid_err or host_pid is None:
+        return _admit_refusal(pid_err or "A positive host PID is required for native admission")
+
+    current_host = local_host_name()
+    ledger_path = os.path.abspath(raw_ledger)
+    lock_path = ledger_path + ".lock"
+
+    with FileLock(lock_path, timeout=timeout):
+        if not os.path.exists(ledger_path):
+            return _admit_refusal("Ledger not found")
+        try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            return _admit_refusal(f"Failed to read ledger: {exc}")
+
+        if not isinstance(data, dict) or not isinstance(data.get("requests"), dict):
+            return _admit_refusal("Malformed ledger structure")
+
+        req = data["requests"].get(ticket_id)
+        if not isinstance(req, dict):
+            return _admit_refusal(f"Ticket {ticket_id} not found")
+
+        if str(req.get("state") or "").lower() in ("cancelled", "dropped"):
+            return _admit_refusal(f"Ticket {ticket_id} is {req.get('state')}")
+
+        claim_err = native_claim_error(req)
+        if claim_err:
+            return _admit_refusal(claim_err)
+
+        claim = active_native_claim(req)
+        if not claim:
+            return _admit_refusal("Ticket has no active native claim")
+
+        if claim["run_id"] != run_id:
+            return _admit_refusal("Ledger claim no longer owns this native run")
+
+        if claim["task_handle"] is None:
+            return _admit_refusal("Ledger claim has no bound native task handle")
+
+        if claim["task_handle"] != task_handle:
+            return _admit_refusal("Ledger claim no longer owns this native task handle")
+
+        if "host" in claim:
+            claim_host = claim["host"]
+            if not current_host:
+                return _admit_refusal("Unable to verify local host name for native admission")
+            if claim_host["name"] != current_host:
+                return _admit_refusal(
+                    f"Native claim belongs to foreign host {claim_host['name']!r}, not {current_host!r}"
+                )
+            if claim_host["pid"] != host_pid:
+                return _admit_refusal(
+                    f"Native claim belongs to host PID {claim_host['pid']}, not {host_pid}"
+                )
+            if claim_host_liveness(claim, current_host) != "alive":
+                return _admit_refusal("Native claim's SDK process creation identity no longer matches")
+
+        if WorkerBackend is not None:
+            try:
+                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+                backend_ticket = backend.get_native_dispatch(run_id)
+            except Exception as exc:
+                return _admit_refusal(f"WorkerBackend admission check failed: {exc}")
+
+            if backend_ticket.state != "background_dispatched":
+                return _admit_refusal(
+                    f"WorkerBackend run {run_id} is in state {backend_ticket.state!r}, not 'background_dispatched'"
+                )
+            if backend_ticket.task_handle != task_handle:
+                return _admit_refusal(
+                    f"WorkerBackend run {run_id} handle {backend_ticket.task_handle!r} does not match {task_handle!r}"
+                )
+
+    print(json.dumps({"admitted": True}))
+    return 0
+
+
 
 def cmd_hold_lock(args: argparse.Namespace) -> int:
     """Acquire the lock, signal readiness, hold for duration, then release (for contention testing)."""
@@ -1225,6 +1511,7 @@ def main():
     p_claim.add_argument("--worker-id", default="", help="Worker ID")
     p_claim.add_argument("--covered-topics", default="", help="Comma-separated covered topic names")
     p_claim.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
+    p_claim.add_argument("--host-pid", default=None, help="Deploying host process PID (positive integer)")
 
     p_record = subparsers.add_parser("record-dispatch", help="Record native dispatch binding in WorkerBackend")
     p_record.add_argument("--state-dir", required=True, help="WorkerBackend state directory")
@@ -1260,6 +1547,14 @@ def main():
     p_complete.add_argument("--error", default="")
     p_complete.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 
+    p_admit = subparsers.add_parser("admit", help="Verify active claim, host PID, and backend dispatch before starting worker")
+    p_admit.add_argument("--ledger", required=True, help="Path to ledger.json")
+    p_admit.add_argument("--ticket-id", required=True, help="Ticket ID")
+    p_admit.add_argument("--run-id", required=True, help="Native run ID")
+    p_admit.add_argument("--task-handle", required=True, help="Native task handle (agent://...)")
+    p_admit.add_argument("--host-pid", required=True, help="Deploying host process PID (positive integer)")
+    p_admit.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
+
     p_hold = subparsers.add_parser("hold-lock", help="Hold lock for testing contention")
     p_hold.add_argument("--lock-path", required=True, help="Lock file path")
     p_hold.add_argument("--duration", default="1.0", help="Duration to hold in seconds")
@@ -1277,6 +1572,8 @@ def main():
         sys.exit(cmd_recover(args))
     elif args.subcommand == "complete":
         sys.exit(cmd_complete(args))
+    elif args.subcommand == "admit":
+        sys.exit(cmd_admit(args))
     elif args.subcommand == "hold-lock":
         sys.exit(cmd_hold_lock(args))
 

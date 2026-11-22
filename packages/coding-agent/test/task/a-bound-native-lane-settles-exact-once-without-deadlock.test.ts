@@ -408,6 +408,57 @@ describe("native replenishment lifecycle contracts", () => {
 		await manager.waitForAll();
 	}, 15_000);
 
+	it("refuses a stale bound job after it leaves the semaphore queue", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const hold = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			if (options.id === "AdmissionBlocker") {
+				entered.resolve();
+				await hold.promise;
+			}
+			return makePassResult(options);
+		});
+		const harness = await setupHarness({
+			settings: { "async.enabled": true, "agent.maxConcurrency": 1, "async.maxJobs": 5 },
+		});
+		cleanups.push(() => hold.resolve());
+		const taskTool = harness.session.getToolByName("task")!;
+		await taskTool.execute("tc-admission-blocker", {
+			agent: "task",
+			name: "AdmissionBlocker",
+			task: "Hold admission.",
+		} as TaskParams);
+		await entered.promise;
+		await harness.writeLedger({
+			"ticket-admit": { prompt: "Run only while owned", state: "review", authorization: AUTHORIZATION },
+		});
+		expect((await harness.engine.replenish([])).status).toBe("replenished");
+
+		const requests = (await harness.readLedger()).requests;
+		const claim = requests["ticket-admit"].native_claim!;
+		const job = harness.session.asyncJobManager!.getJob(claim.worker_id!)!;
+		expect(job.queued).toBe(true);
+		requests["ticket-admit"].native_claim = {
+			version: 1,
+			state: "active",
+			run_id: "replacement-run",
+			worker_id: "replacement",
+			task_handle: "agent://replacement",
+		};
+		await harness.writeLedger(requests);
+		hold.resolve();
+		await job.promise;
+
+		expect(job.status).toBe("failed");
+		expect(job.errorText).toContain("Native dispatch not admitted");
+		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect((await harness.readLedger()).requests["ticket-admit"].native_claim?.run_id).toBe("replacement-run");
+	}, 15_000);
+
 	it("rolls back a bound detached job on preflight refusal before recordSpawn with exact-once hooks", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],

@@ -54,7 +54,7 @@ import {
 	successorWorkflow,
 	writeSuccessorCheckpoint,
 } from "./successor-checkpoint";
-import { recordNativeDispatch } from "./topic-replenishment";
+import { assertNativeDispatchAdmitted, recordNativeDispatch } from "./topic-replenishment";
 import type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams, TaskToolDetails } from "./types";
 import { parseIsolationMode, type TaskIsolationMode } from "./worktree";
 
@@ -770,13 +770,17 @@ async function runPreparedSpawn(
 			Date.now() - startTime,
 		);
 	}
-	// Bind before execution. Detached workers bind before their job is accepted.
-	if (params.ticketId && !params.nativeDispatchBound) {
+	// Bind before execution. Detached workers bind before their job is accepted. Every ticket-backed spawn
+	// must then be admitted by the bridge before a worker starts, including one bound by the scheduler.
+	if (params.ticketId) {
 		if (!params.runId?.trim() || !params.ledgerPath?.trim()) {
 			throw new Error("Native dispatch requires a run ID and ledger path");
 		}
-		await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
-		lifecycleState.bound = true;
+		if (!params.nativeDispatchBound) {
+			await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
+			lifecycleState.bound = true;
+		}
+		await assertNativeDispatchAdmitted(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
 	}
 	const lifecycle = {
 		agentId,

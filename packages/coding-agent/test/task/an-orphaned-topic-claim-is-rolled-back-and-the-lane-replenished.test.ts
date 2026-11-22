@@ -1012,7 +1012,7 @@ async function runTests(): Promise<void> {
 		console.log("  [PASS] concurrent cycles share reservations and respect maxCeiling\n");
 	}
 
-	// Test 10: session recovery releases only native claims absent from the live roster.
+	// Test 10: a prior process identity cannot own a newly reused PID.
 	{
 		console.log("Test 10: recovery reclaims a crashed worker's durable claim");
 		const testDir = path.join(
@@ -1034,6 +1034,7 @@ async function runTests(): Promise<void> {
 						worker_id: "worker-that-crashed",
 						run_id: "old-run",
 						task_handle: "agent://worker-that-crashed",
+						host: { name: os.hostname(), pid: process.pid, started: "prior-sdk-process" },
 					},
 					authorization: validAuthorization,
 				},

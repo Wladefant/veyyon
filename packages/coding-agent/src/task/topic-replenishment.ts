@@ -229,7 +229,14 @@ export interface LedgerRequestHistoryItem {
 }
 
 export type NativeClaim =
-	| { version: 1; state: "active"; worker_id: string; run_id: string; task_handle: string | null }
+	| {
+			version: 1;
+			state: "active";
+			worker_id: string;
+			run_id: string;
+			task_handle: string | null;
+			host?: { name: string; pid: number; started?: string };
+	  }
 	| { version: 1; state: "retryable"; worker_id: null; run_id: null; task_handle: null };
 
 export interface LedgerRequestItem {
@@ -272,6 +279,8 @@ export interface ClaimTicketOptions {
 	authorizedProject?: string;
 	lockTimeoutMs?: number;
 	workerId?: string;
+	/** PID of the deploying SDK process; recovery treats its live state as keep-live evidence on this host. */
+	hostPid?: number;
 	customFilter?: (ticket: LedgerRequestItem) => boolean;
 }
 
@@ -879,6 +888,7 @@ export async function claimNextAuthorizedTicket(
 	if (options?.workerId) {
 		args.push("--worker-id", options.workerId);
 	}
+	if (options?.hostPid !== undefined) args.push("--host-pid", String(options.hostPid));
 	if (options?.coveredTopics && options.coveredTopics.length > 0) {
 		args.push("--covered-topics", options.coveredTopics.join(","));
 	}
@@ -951,6 +961,35 @@ export async function recordNativeDispatch(
 	];
 	args.push("--ledger", ledgerPath, "--ticket-id", ticketId);
 	await runLedgerBridge(args);
+}
+
+/**
+ * Confirm the bridge admits a bound native dispatch for this process: the active claim must match the run,
+ * task handle and host PID, and the backend must still show the dispatch as background-dispatched. Throws
+ * with the bridge's reason otherwise, so the caller never starts a worker it cannot prove is owned.
+ */
+export async function assertNativeDispatchAdmitted(
+	runId: string,
+	taskHandle: string,
+	ledgerPath: string,
+	ticketId: string,
+): Promise<void> {
+	const result = await runLedgerBridge<{ admitted: boolean; error?: string }>([
+		"admit",
+		"--ledger",
+		ledgerPath,
+		"--ticket-id",
+		ticketId,
+		"--run-id",
+		runId,
+		"--task-handle",
+		taskHandle,
+		"--host-pid",
+		String(process.pid),
+	]);
+	if (result.admitted === true) return;
+	const reason = result.error || "bridge did not admit the dispatch";
+	throw new Error(`Native dispatch not admitted for ${ticketId} (run ${runId}): ${reason}`);
 }
 
 /**
@@ -1371,6 +1410,7 @@ export class TopicReplenishmentEngine {
 				coveredTopics: Array.from(covered),
 				activeUsefulCount: currentRunning,
 				targetCapacity: this.targetCount,
+				hostPid: process.pid,
 			});
 			if (this.#verificationBlocked()) {
 				if (claimResult.claimed && claimResult.ticket) {

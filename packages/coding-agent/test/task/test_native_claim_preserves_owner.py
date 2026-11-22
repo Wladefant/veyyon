@@ -37,8 +37,8 @@ class NativeClaimOwner(unittest.TestCase):
         self.assertIn(result.returncode, (0, 1), result.stderr)
         return json.loads(result.stdout)
 
-    def claim(self):
-        result = self.run_bridge("claim", "--worker-id", "dispatcher")
+    def claim(self, *args):
+        result = self.run_bridge("claim", "--worker-id", "dispatcher", *args)
         self.assertTrue(result["claimed"], result)
         return result["ticket"]["runId"]
 
@@ -73,7 +73,10 @@ class NativeClaimOwner(unittest.TestCase):
         self.assertNotEqual(self.claim(), run)
 
     def test_recovery_keeps_live_claim_and_reclaims_only_absent_worker(self):
-        self.active()
+        self.dispatch(self.claim("--host-pid", str(os.getpid())))
+        data = self.data()
+        data["requests"]["ticket"]["native_claim"]["host"]["started"] += ":exited-owner"
+        self.ledger.write_text(json.dumps(data), encoding="utf-8")
         before = self.ledger.read_bytes()
         self.assertEqual(self.run_bridge("recover", "--running-worker-ids", "worker")["recovered"], [])
         self.assertEqual(self.ledger.read_bytes(), before)

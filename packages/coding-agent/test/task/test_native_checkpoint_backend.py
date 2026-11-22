@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -78,14 +79,55 @@ class NativeCheckpointBackend(unittest.TestCase):
     def write_requests(self, requests):
         self.ledger.write_text(json.dumps({"version": 2, "requests": requests}), encoding="utf-8")
 
-    def claim_raw(self):
-        return self.cli(self.bridge.cmd_claim, worker_id="dispatcher", covered_topics="",
-                        active_useful_count=0, target_capacity=1)
+    def claim_raw(self, host_pid=None, worker_id="dispatcher"):
+        return self.cli(self.bridge.cmd_claim, worker_id=worker_id, covered_topics="",
+                        host_pid=host_pid, active_useful_count=0, target_capacity=1)
 
-    def claim(self):
-        result = self.claim_raw()
+    def claim(self, host_pid=None, worker_id="dispatcher"):
+        result = self.claim_raw(host_pid=host_pid, worker_id=worker_id)
         self.assertTrue(result["claimed"], result)
         return result["ticket"]["runId"]
+
+    def admit(self, run_id, task_handle=HANDLE, host_pid=None, ticket_id=TICKET):
+        return self.cli(self.bridge.cmd_admit, ticket_id=ticket_id, run_id=run_id,
+                        task_handle=task_handle, host_pid=host_pid)
+
+    def start_live_owner(self):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        def _cleanup():
+            if proc.poll() is None:
+                if proc.stdin is not None:
+                    try:
+                        proc.stdin.close()
+                    except OSError:
+                        pass
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+
+        self.addCleanup(_cleanup)
+        self.assertIsNone(proc.poll())
+        return proc
+
+    def stop_owner(self, proc):
+        pid = proc.pid
+        if proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+        proc.wait(timeout=10)
+        self.assertIsNotNone(proc.poll())
+        return pid
 
     def dispatch(self, run_id, handle=HANDLE, ticket_id=TICKET):
         result = self.cli(self.bridge.cmd_record_dispatch, state_dir=str(self.scratch),
@@ -286,7 +328,8 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.record(new_run)["task_handle"], "agent://replacement")
 
     def test_orphaned_bound_recover_protects_live_handle_and_retires_absent_worker(self):
-        old_run = self.claim()
+        owner = self.start_live_owner()
+        old_run = self.claim(host_pid=owner.pid)
         with self.fail_ledger_rename():
             with self.assertRaises(OSError):
                 self.cli(self.bridge.cmd_record_dispatch, state_dir=str(self.scratch),
@@ -297,12 +340,14 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.ticket()["native_claim"]["state"], "active")
         self.assertEqual(self.ticket()["native_claim"]["task_handle"], HANDLE)
         self.assertEqual(self.ticket()["native_claim"]["worker_id"], "checkpoint-test")
+        self.assertEqual(self.ticket()["native_claim"]["host"]["pid"], owner.pid)
 
         live_bound = self.cli(self.bridge.cmd_recover, running_worker_ids="checkpoint-test")
         self.assertEqual(live_bound["recovered"], [], live_bound)
         self.assertEqual(self.record(old_run)["state"], "background_dispatched")
         self.assertEqual(self.ticket()["native_claim"]["state"], "active")
 
+        dead_pid = self.stop_owner(owner)
         orphaned = self.cli(self.bridge.cmd_recover, running_worker_ids="unrelated-worker")
         self.assertEqual(orphaned["recovered"], [TICKET], orphaned)
         self.assertEqual(orphaned["retired"], [TICKET], orphaned)
@@ -313,11 +358,15 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertNotIn("outcome", self.record(old_run))
         self.assertIsNone(self.backend.get_native_outcome(old_run))
 
-        new_run = self.claim()
+        new_run = self.claim(host_pid=os.getpid())
         self.assertNotEqual(new_run, old_run)
         self.assertEqual(self.record(new_run)["retry_of"], old_run)
         self.dispatch(new_run, "agent://recovered-replacement")
         self.assertEqual(self.record(new_run)["state"], "background_dispatched")
+        self.assertTrue(self.admit(new_run, "agent://recovered-replacement", host_pid=os.getpid())["admitted"])
+        stale_admit = self.admit(old_run, HANDLE, host_pid=dead_pid)
+        self.assertFalse(stale_admit["admitted"], stale_admit)
+        self.assertTrue(stale_admit.get("error"), stale_admit)
 
     def test_torn_terminal_write_recovers_exact_success_once(self):
         run_id = self.claim()
@@ -402,7 +451,9 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.record(beta_run)["state"], "finalized")
 
     def test_stale_unbound_rollback_fails_after_recovery_and_replacement_bind(self):
-        run_a = self.claim()
+        owner_a = self.start_live_owner()
+        run_a = self.claim(host_pid=owner_a.pid)
+        dead_pid = self.stop_owner(owner_a)
         rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
         self.assertEqual(rec["recovered"], [TICKET], rec)
         self.assertEqual(rec["retired"], [TICKET], rec)
@@ -411,7 +462,7 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertNotIn("outcome", self.record(run_a))
         self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
 
-        run_b = self.claim()
+        run_b = self.claim(host_pid=os.getpid())
         self.assertNotEqual(run_b, run_a)
         self.assertEqual(self.record(run_b)["retry_of"], run_a)
         self.dispatch(run_b, "agent://replacement-b")
@@ -424,6 +475,251 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.record(run_b), record_b)
         self.assertEqual(self.ticket()["native_claim"]["run_id"], run_b)
         self.assertEqual(self.ticket()["native_claim"]["task_handle"], "agent://replacement-b")
+        self.assertTrue(self.admit(run_b, "agent://replacement-b", host_pid=os.getpid())["admitted"])
+        stale_admit = self.admit(run_a, "agent://replacement-b", host_pid=dead_pid)
+        self.assertFalse(stale_admit["admitted"], stale_admit)
+        self.assertTrue(stale_admit.get("error"), stale_admit)
+
+    def test_live_same_host_owner_keeps_bound_and_prepared_claims_when_other_registry_is_empty(self):
+        self.write_requests({
+            "1-bound-live": self.make_request(prompt="Bound live owner"),
+            "2-prepared-live": self.make_request(prompt="Prepared live owner"),
+        })
+        bound_owner = self.start_live_owner()
+        bound_run = self.claim(host_pid=bound_owner.pid)
+        bound_host = self.ticket("1-bound-live")["native_claim"]["host"]
+        self.assertEqual(set(bound_host), {"name", "pid", "started"})
+        self.assertTrue(bound_host["started"])
+        self.assertIsInstance(bound_host["name"], str)
+        self.assertTrue(bound_host["name"].strip())
+        self.assertEqual(bound_host["pid"], bound_owner.pid)
+        self.dispatch(bound_run, "agent://live-bound", ticket_id="1-bound-live")
+        self.assertTrue(self.admit(bound_run, "agent://live-bound", host_pid=bound_owner.pid,
+                                   ticket_id="1-bound-live")["admitted"])
+
+        prepared_owner = self.start_live_owner()
+        prepared_run = self.claim(host_pid=prepared_owner.pid)
+        self.assertEqual(self.ticket("2-prepared-live")["native_claim"]["host"]["pid"], prepared_owner.pid)
+
+        for roster in ("", "foreign-sdk-worker"):
+            rec = self.cli(self.bridge.cmd_recover, running_worker_ids=roster)
+            self.assertEqual(rec["recovered"], [], rec)
+            self.assertNotIn("retired", rec)
+
+        self.assertEqual(self.ticket("1-bound-live")["native_claim"]["state"], "active")
+        self.assertEqual(self.ticket("1-bound-live")["native_claim"]["task_handle"], "agent://live-bound")
+        self.assertEqual(self.ticket("1-bound-live")["native_claim"]["host"], bound_host)
+        self.assertEqual(self.record(bound_run)["state"], "background_dispatched")
+        self.assertEqual(self.ticket("2-prepared-live")["native_claim"]["state"], "active")
+        self.assertIsNone(self.ticket("2-prepared-live")["native_claim"]["task_handle"])
+        self.assertEqual(self.record(prepared_run)["state"], "prepared")
+        self.assertTrue(self.admit(bound_run, "agent://live-bound", host_pid=bound_owner.pid,
+                                   ticket_id="1-bound-live")["admitted"])
+
+    def test_reused_pid_does_not_admit_or_pin_the_old_owner(self):
+        owner_a = self.start_live_owner()
+        old_run = self.claim(host_pid=owner_a.pid)
+        self.dispatch(old_run, "agent://owner-a")
+        req = self.ticket()
+        # The OS still reports this live PID. A different birth identity means
+        # it cannot be the process that owned the persisted claim.
+        req["native_claim"]["host"]["started"] += ":old-birth"
+        self.write_requests({TICKET: req})
+        rejected = self.admit(old_run, "agent://owner-a", host_pid=owner_a.pid)
+        self.assertFalse(rejected["admitted"], rejected)
+        self.assertIn("creation identity", rejected["error"])
+        recovered = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(recovered["recovered"], [TICKET], recovered)
+        self.assertEqual(self.record(old_run)["state"], "retired")
+        self.assertIsNone(owner_a.poll(), "Recovery must not signal the process holding the reused PID")
+        new_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_run, old_run)
+        self.dispatch(new_run, "agent://replacement-after-reuse")
+        self.assertTrue(self.admit(new_run, "agent://replacement-after-reuse", host_pid=os.getpid())["admitted"])
+
+    def test_owner_exit_recovery_repairs_and_admits_only_replacement_owner(self):
+        owner_a = self.start_live_owner()
+        old_run = self.claim(host_pid=owner_a.pid)
+        self.dispatch(old_run, "agent://owner-a")
+        self.assertTrue(self.admit(old_run, "agent://owner-a", host_pid=owner_a.pid)["admitted"])
+        wrong_pid = self.admit(old_run, "agent://owner-a", host_pid=os.getpid())
+        self.assertFalse(wrong_pid["admitted"], wrong_pid)
+        self.assertTrue(wrong_pid.get("error"), wrong_pid)
+
+        still_live = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(still_live["recovered"], [], still_live)
+        self.assertEqual(self.record(old_run)["state"], "background_dispatched")
+
+        dead_pid = self.stop_owner(owner_a)
+        repaired = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(repaired["recovered"], [TICKET], repaired)
+        self.assertEqual(repaired["retired"], [TICKET], repaired)
+        self.assertEqual(self.record(old_run)["state"], "retired")
+        self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
+        self.assertEqual(self.ticket()["history"][-1]["native_retired_run_id"], old_run)
+
+        for probe_pid in (dead_pid, os.getpid()):
+            stale = self.admit(old_run, "agent://owner-a", host_pid=probe_pid)
+            self.assertFalse(stale["admitted"], stale)
+            self.assertTrue(stale.get("error"), stale)
+
+        new_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_run, old_run)
+        self.assertEqual(self.record(new_run)["retry_of"], old_run)
+        self.dispatch(new_run, "agent://owner-b")
+        self.assertTrue(self.admit(new_run, "agent://owner-b", host_pid=os.getpid())["admitted"])
+
+        for args in (
+            (old_run, "agent://owner-a", dead_pid),
+            (old_run, "agent://owner-a", os.getpid()),
+            (new_run, "agent://owner-a", os.getpid()),
+            (new_run, "agent://owner-b", dead_pid),
+        ):
+            rejected = self.admit(*args)
+            self.assertFalse(rejected["admitted"], (args, rejected))
+            self.assertTrue(rejected.get("error"), (args, rejected))
+
+    def test_stale_queued_admit_rejected_after_rollback_and_replacement(self):
+        old_run = self.claim(host_pid=os.getpid())
+        self.dispatch(old_run, "agent://queued-old")
+        self.assertTrue(self.admit(old_run, "agent://queued-old", host_pid=os.getpid())["admitted"])
+
+        rolled = self.cli(self.bridge.cmd_rollback, ticket_id=TICKET, run_id=old_run,
+                          task_handle="agent://queued-old", previous_state="review",
+                          reason="cancelled while queued")
+        self.assertTrue(rolled["rolled_back"], rolled)
+        after_rollback = self.admit(old_run, "agent://queued-old", host_pid=os.getpid())
+        self.assertFalse(after_rollback["admitted"], after_rollback)
+        self.assertTrue(after_rollback.get("error"), after_rollback)
+
+        new_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_run, old_run)
+        self.dispatch(new_run, "agent://queued-new")
+        self.assertTrue(self.admit(new_run, "agent://queued-new", host_pid=os.getpid())["admitted"])
+        after_replace = self.admit(old_run, "agent://queued-old", host_pid=os.getpid())
+        self.assertFalse(after_replace["admitted"], after_replace)
+        self.assertTrue(after_replace.get("error"), after_replace)
+
+    def test_foreign_anonymous_roster_live_and_malformed_owners_preserved_and_legacy_direct_ops_work(self):
+        self.write_requests({
+            "1-foreign-dead": self.make_request(prompt="Foreign host dead numeric pid"),
+            "2-anonymous-legacy": self.make_request(prompt="Anonymous legacy claim"),
+            "3-dead-roster-live": self.make_request(prompt="Dead pid still in running roster"),
+            "4-malformed-host": self.make_request(prompt="Malformed host claim"),
+            "5-anonymous-rollback": self.make_request(prompt="Anonymous legacy rollback"),
+        })
+        foreign_proc = self.start_live_owner()
+        foreign_run = self.claim(host_pid=foreign_proc.pid)
+        self.dispatch(foreign_run, "agent://foreign-worker", ticket_id="1-foreign-dead")
+        foreign_pid = self.stop_owner(foreign_proc)
+
+        legacy_run = self.claim(host_pid=None)
+        self.dispatch(legacy_run, "agent://legacy-worker", ticket_id="2-anonymous-legacy")
+        self.assertNotIn("host", self.ticket("2-anonymous-legacy")["native_claim"])
+
+        roster_proc = self.start_live_owner()
+        roster_run = self.claim(host_pid=roster_proc.pid)
+        self.dispatch(roster_run, "agent://roster-worker", ticket_id="3-dead-roster-live")
+        self.stop_owner(roster_proc)
+
+        malformed_run = self.claim(host_pid=os.getpid())
+        self.dispatch(malformed_run, "agent://malformed-worker", ticket_id="4-malformed-host")
+
+        legacy_rb_run = self.claim(host_pid=None)
+        self.dispatch(legacy_rb_run, "agent://legacy-rb", ticket_id="5-anonymous-rollback")
+
+        ledger_data = json.loads(self.ledger.read_text(encoding="utf-8"))
+        ledger_data["requests"]["1-foreign-dead"]["native_claim"]["host"]["name"] = "foreign-sdk-host.invalid"
+        ledger_data["requests"]["4-malformed-host"]["native_claim"]["host"] = {"name": "local", "pid": 0}
+        self.ledger.write_text(json.dumps(ledger_data), encoding="utf-8")
+
+        rec = self.cli(self.bridge.cmd_recover, running_worker_ids="roster-worker")
+        self.assertEqual(rec["recovered"], [], rec)
+        self.assertNotIn("retired", rec)
+        for tid, rid in (
+            ("1-foreign-dead", foreign_run),
+            ("2-anonymous-legacy", legacy_run),
+            ("3-dead-roster-live", roster_run),
+            ("4-malformed-host", malformed_run),
+            ("5-anonymous-rollback", legacy_rb_run),
+        ):
+            self.assertEqual(self.ticket(tid)["native_claim"]["state"], "active", tid)
+            self.assertEqual(self.record(rid)["state"], "background_dispatched", tid)
+
+        foreign_admit = self.admit(foreign_run, "agent://foreign-worker", host_pid=foreign_pid,
+                                   ticket_id="1-foreign-dead")
+        self.assertFalse(foreign_admit["admitted"], foreign_admit)
+        self.assertTrue(foreign_admit.get("error"), foreign_admit)
+
+        done = self.cli(self.bridge.cmd_complete, ticket_id="2-anonymous-legacy", run_id=legacy_run,
+                        task_handle="agent://legacy-worker", agent_id=None,
+                        result_json=json.dumps(self.review_result(ticket_id="2-anonymous-legacy")),
+                        result_file=None, exit_code=0, error="")
+        self.assertTrue(done["completed"], done)
+        self.assertTrue(done["ok"], done)
+        self.assertEqual(self.ticket("2-anonymous-legacy")["state"], "awaiting authorization")
+        self.assertEqual(self.ticket("2-anonymous-legacy")["native_claim"]["state"], "retryable")
+
+        rolled = self.cli(self.bridge.cmd_rollback, ticket_id="5-anonymous-rollback", run_id=legacy_rb_run,
+                          task_handle="agent://legacy-rb", previous_state="review",
+                          reason="legacy direct rollback")
+        self.assertTrue(rolled["rolled_back"], rolled)
+        self.assertEqual(self.ticket("5-anonymous-rollback")["native_claim"]["state"], "retryable")
+        self.assertEqual(self.record(legacy_rb_run)["state"], "retired")
+
+    def test_admit_rejects_unbound_torn_bind_and_live_handle_mismatch_without_healing_while_projecting_terminal_outcome(self):
+        run_id = self.claim(host_pid=os.getpid())
+        unbound_admit = self.admit(run_id, HANDLE, host_pid=os.getpid())
+        self.assertFalse(unbound_admit["admitted"], unbound_admit)
+        self.assertTrue(unbound_admit.get("error"), unbound_admit)
+
+        with self.fail_ledger_rename():
+            with self.assertRaises(OSError):
+                self.cli(self.bridge.cmd_record_dispatch, state_dir=str(self.scratch),
+                         ticket_id=TICKET, run_id=run_id, task_handle=HANDLE)
+        torn_admit = self.admit(run_id, HANDLE, host_pid=os.getpid())
+        self.assertFalse(torn_admit["admitted"], torn_admit)
+        self.assertTrue(torn_admit.get("error"), torn_admit)
+
+        ledger_data = json.loads(self.ledger.read_text(encoding="utf-8"))
+        host_info = ledger_data["requests"][TICKET]["native_claim"]["host"]
+        ledger_data["requests"][TICKET]["native_claim"] = {
+            "version": 1, "state": "active", "worker_id": "other-worker",
+            "run_id": run_id, "task_handle": "agent://other-worker", "host": host_info,
+        }
+        self.ledger.write_text(json.dumps(ledger_data), encoding="utf-8")
+
+        mismatch_rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(mismatch_rec["recovered"], [], mismatch_rec)
+        self.assertTrue(mismatch_rec.get("errors"), mismatch_rec)
+        self.assertEqual(self.ticket()["native_claim"]["task_handle"], "agent://other-worker")
+        self.assertEqual(self.ticket()["native_claim"]["worker_id"], "other-worker")
+        self.assertEqual(self.record(run_id)["state"], "background_dispatched")
+        self.assertEqual(self.record(run_id)["task_handle"], HANDLE)
+        self.assertFalse(self.admit(run_id, "agent://other-worker", host_pid=os.getpid())["admitted"])
+        self.assertFalse(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
+
+        ledger_data = json.loads(self.ledger.read_text(encoding="utf-8"))
+        ledger_data["requests"][TICKET]["native_claim"] = {
+            "version": 1, "state": "active", "worker_id": "checkpoint-test",
+            "run_id": run_id, "task_handle": HANDLE,
+            "host": {"name": "foreign-terminal.invalid", "pid": os.getpid()},
+        }
+        self.ledger.write_text(json.dumps(ledger_data), encoding="utf-8")
+        self.assertFalse(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
+        with self.fail_ledger_rename():
+            with self.assertRaises(OSError):
+                self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=run_id,
+                         task_handle=HANDLE, agent_id=None,
+                         result_json=json.dumps(self.review_result()),
+                         result_file=None, exit_code=0, error="")
+
+        terminal_rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(terminal_rec["recovered"], [TICKET], terminal_rec)
+        self.assertNotIn("retired", terminal_rec)
+        self.assertEqual(self.ticket()["state"], "awaiting authorization")
+        self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
+        self.assertFalse(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
 
 
 if __name__ == "__main__":
