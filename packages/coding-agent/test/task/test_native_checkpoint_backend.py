@@ -907,7 +907,37 @@ class NativeCheckpointBackend(unittest.TestCase):
         }])
         self.assertEqual(self.ticket()["head"], self.head)
         self.assertFalse(self.ticket().get("evidence"))
+        self.git("update-ref", "HEAD", self.head, output_head)
         self.assertNotEqual(self.claim(host_pid=os.getpid()), old_run)
+
+    def test_torn_outcome_is_released_after_canonical_advance_outside_worker_stages(self):
+        self.write_requests({
+            TICKET: self.make_request(acceptance_criteria=self.make_criteria(), evidence=[], history=[]),
+        })
+        old_run = self.claim(host_pid=os.getpid())
+        self.dispatch(old_run)
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=old_run,
+                     task_handle=HANDLE, agent_id=None, result_json=json.dumps(self.review_result()),
+                     result_file=None, exit_code=0, error="")
+        self.assertTrue(self.record(old_run)["outcome"]["ok"])
+
+        self.request_ledger().update_request(
+            TICKET, state="awaiting authorization", actor="reviewer",
+            criterion_update={"id": "AC-1", "status": "verified", "evidence": "Independent scratch review"},
+            add_evidence={
+                "type": "review_verification", "summary": "Independent review",
+                "details": "Verified the current scratch commit", "head": self.head,
+            },
+        )
+        current_evidence = self.ticket()["evidence"]
+        rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(rec["reconciled_outcomes"], [{
+            "ticket_id": TICKET, "run_id": old_run, "ok": False, "discarded": True,
+            "state": "awaiting authorization",
+        }])
+        self.assertEqual(self.ticket()["evidence"], current_evidence)
+        self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
 
     def test_same_head_review_implementation_qa_review_aba_discards_old_result_and_permits_fresh_epoch_run(self):
         from worker_backend import request_stage_epoch
@@ -1256,13 +1286,8 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.ticket("2-rollback-retire")["native_claim"]["state"], "active")
         self.assertEqual(self.ticket("2-rollback-retire")["native_claim"]["run_id"], old_rb_run)
 
-        retried_rb = self.cli(
-            self.bridge.cmd_rollback, ticket_id="2-rollback-retire", run_id=old_rb_run,
-            task_handle="agent://rb-torn-a", previous_state="review",
-            reason="retry torn rollback",
-        )
-        self.assertTrue(retried_rb["rolled_back"], retried_rb)
-        self.assertEqual(retried_rb["retired_run_id"], old_rb_run)
+        recovered_rb = self.cli(self.bridge.cmd_recover, running_worker_ids="rb-torn-a")
+        self.assertEqual(recovered_rb["retired"], ["2-rollback-retire"], recovered_rb)
         self.assertEqual(self.ticket("2-rollback-retire")["native_claim"]["state"], "retryable")
         self.assertEqual(self.ticket("2-rollback-retire")["history"][-1]["native_retired_run_id"], old_rb_run)
         again_rb = self.cli(

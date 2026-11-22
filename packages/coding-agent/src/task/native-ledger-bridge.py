@@ -1215,7 +1215,7 @@ def cmd_recover(args: argparse.Namespace) -> int:
         for ticket_id, req in data.get("requests", {}).items():
             state = str(req.get("state") or "pending").lower()
             claim = active_native_claim(req)
-            if state not in {"implementation", "qa", "review"} or not claim:
+            if not claim:
                 continue
 
             host_status = claim_host_liveness(claim, current_host)
@@ -1303,13 +1303,14 @@ def cmd_recover(args: argparse.Namespace) -> int:
                     known_live_handle
                     and claim["task_handle"] is None
                     and backend_ticket.state == "background_dispatched"
+                    and claim.get("fence") == request_fence(req)
                 ):
                     claim["task_handle"] = bound_handle
                     claim["worker_id"] = bound_worker_id
                     req["updated_at"] = now_iso
                     ledger_modified = True
                     continue
-                if roster_live or host_status != "dead":
+                if backend_ticket.state != "retired" and (roster_live or host_status != "dead"):
                     continue
                 if backend_ticket.state == "prepared" and bound_handle is not None:
                     errors.append(f"{ticket_id}: prepared WorkerBackend run {run_id} unexpectedly has handle {bound_handle!r}")
