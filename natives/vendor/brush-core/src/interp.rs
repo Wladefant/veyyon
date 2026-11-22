@@ -82,6 +82,17 @@ pub trait SpawnObserver: Send + Sync {
 	/// command maps into it.
 	fn before_spawn(&self);
 
+	/// Spawn an owned Windows child on the blocking pool. Embedders can place
+	/// the child under teardown ownership before it starts running.
+	///
+	/// # Errors
+	///
+	/// Returns the spawn error or an error preparing the child for execution.
+	#[cfg(windows)]
+	fn spawn_windows(&self, mut command: tokio::process::Command) -> std::io::Result<tokio::process::Child> {
+		command.spawn()
+	}
+
 	/// Reports a freshly spawned external child. `pgid` is the child's process
 	/// group id when known (always its own pid under `NewProcessGroup`).
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>);

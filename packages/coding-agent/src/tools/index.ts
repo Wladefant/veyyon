@@ -33,7 +33,6 @@ import type { ContextFile } from "../discovery/capability/context-file";
 import type { Rule } from "../discovery/capability/rule";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
 import type { DiscoverableTool, DiscoverableToolSearchIndex, DiscoverableToolSource } from "../discovery/tool-index";
-import type { ProducerSecretOwner } from "../secrets/producer-owner";
 import type { NoopLoopGuard } from "../edit/hashline/noop-loop-guard";
 import { editResultCodec } from "../edit/result-codec";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -46,6 +45,7 @@ import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
+import type { ProducerSecretOwner } from "../secrets/producer-owner";
 import type { CustomMessage } from "../session/messages";
 import { agentsEnabled, resolveSessionMaxNestedSpawnDepth } from "../task/agent-settings";
 import type { AgentOutputManager } from "../task/output-manager";
@@ -402,9 +402,7 @@ export interface ToolSession extends ToolSessionLocalState {
 	/** Hook invoked after a task spawn's resolved agent identity is known. */
 	onSubagentStart?: (record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">) => void;
 	/** Clear spawn-only state when a task fails before its completion record is emitted. */
-	onSubagentStartFailed?: (
-		record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">,
-	) => void;
+	onSubagentStartFailed?: (record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">) => void;
 	/** Get the ArtifactManager backing this session (shared across parent + agents). */
 	getArtifactManager?: () => ArtifactManager | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
@@ -777,7 +775,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// One detector per session, so out-of-cwd activity is counted across the whole
 	// session rather than per tool, and a spawned agent starts from zero.
 	const rerootDetector = new RerootDetector();
-	const wrap = (tool: Tool): Tool => wrapToolWithRerootHint(wrapToolWithMetaNotice(tool, session), rerootDetector, session);
+	const wrap = (tool: Tool): Tool =>
+		wrapToolWithRerootHint(wrapToolWithMetaNotice(tool, session), rerootDetector, session);
 
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {

@@ -9,6 +9,8 @@ pub mod shell;
 mod which;
 #[cfg(windows)]
 pub mod windows;
+#[cfg(windows)]
+mod windows_job;
 
 pub use brush_core::commands::{ChildSessionAction, child_session_action};
 pub use shell::{
