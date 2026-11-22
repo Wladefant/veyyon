@@ -18,7 +18,10 @@ use windows_sys::Win32::{
 		Diagnostics::ToolHelp::{
 			CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 		},
-		JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
+		JobObjects::{
+			AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+			JobObjectBasicAccountingInformation, QueryInformationJobObject, TerminateJobObject,
+		},
 		Threading::{
 			CREATE_SUSPENDED, GetProcessIdOfThread, OpenThread, ResumeThread,
 			THREAD_QUERY_LIMITED_INFORMATION, THREAD_SUSPEND_RESUME,
@@ -102,6 +105,17 @@ impl RunJob {
 		}
 		!self.uncontained.load(Ordering::SeqCst)
 	}
+
+	/// Whether a process of this run may still be alive. A job that cannot be
+	/// queried counts as occupied. `pinned_live` is consulted only for a run that
+	/// has children outside the job, so the pinned-process fallback still decides.
+	pub(crate) fn is_occupied(&self, pinned_live: impl FnOnce() -> bool) -> bool {
+		let in_job = match self.job.get() {
+			Some(Some(job)) => active_processes(job).is_none_or(|count| count > 0),
+			_ => false,
+		};
+		in_job || (self.uncontained.load(Ordering::SeqCst) && pinned_live())
+	}
 }
 
 fn create_job() -> Option<OwnedHandle> {
@@ -114,6 +128,25 @@ fn create_job() -> Option<OwnedHandle> {
 	}
 	// SAFETY: Own the successful CreateJobObjectW result exactly once.
 	Some(unsafe { OwnedHandle::from_raw_handle(job) })
+}
+
+/// Live member count of `job` from its basic accounting record, or `None` when
+/// the query fails, so the caller keeps the job.
+fn active_processes(job: &OwnedHandle) -> Option<u32> {
+	let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+	// SAFETY: The job handle is owned and was created with full access rights,
+	// which include JOB_OBJECT_QUERY. `info` is writable and exactly the length
+	// this information class requires.
+	let ok = unsafe {
+		QueryInformationJobObject(
+			job.as_raw_handle(),
+			JobObjectBasicAccountingInformation,
+			(&raw mut info).cast(),
+			size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+			ptr::null_mut(),
+		)
+	};
+	(ok != 0).then_some(info.ActiveProcesses)
 }
 
 fn primary_thread(pid: u32) -> io::Result<OwnedHandle> {

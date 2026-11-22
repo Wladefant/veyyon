@@ -1845,6 +1845,13 @@ impl SpawnRegistry {
 		}
 		targets
 	}
+
+	/// Whether this run may still hold a live child. A later cancel in the same
+	/// persistent shell must reach such a run. See `RunJob::is_occupied`.
+	#[cfg(windows)]
+	pub(crate) fn is_occupied(&self) -> bool {
+		self.windows_job.is_occupied(|| !self.build_targets().is_empty())
+	}
 }
 
 /// Drop registry entries whose pinned process, process group, and — on

@@ -40,6 +40,23 @@ use crate::{
 
 struct ShellSessionCore {
 	shell: BrushShell,
+	/// Runs whose children may still be alive in this shell's job table. A later
+	/// cancel in this shell stops them, so an earlier background command cannot
+	/// outlive the cancel of a later run.
+	#[cfg(windows)]
+	occupied_runs: Vec<Arc<process::SpawnRegistry>>,
+}
+
+impl ShellSessionCore {
+	/// Keeps a finished run while one of its children is alive, so a later cancel
+	/// in this shell reaches it. Runs with nothing left are dropped here.
+	#[cfg(windows)]
+	fn retain_occupied_run(&mut self, run: Arc<process::SpawnRegistry>) {
+		self.occupied_runs.retain(|held| held.is_occupied());
+		if run.is_occupied() {
+			self.occupied_runs.push(run);
+		}
+	}
 }
 
 #[derive(Clone, Default)]
@@ -352,15 +369,18 @@ async fn run_shell_session(
 					.await?,
 				),
 			};
-			run_shell_command(
+			let result = run_shell_command(
 				session,
 				&run_config,
 				on_chunk,
 				tokio_cancel,
-				spawn_registry,
+				spawn_registry.clone(),
 				spawn_budget,
 			)
-			.await
+			.await;
+			#[cfg(windows)]
+			session.retain_occupied_run(spawn_registry);
+			result
 		}
 	});
 
@@ -383,6 +403,10 @@ async fn run_shell_session(
 			// If we can't acquire the lock, the session will be cleaned up when the
 			// holding task finishes.
 			if let Ok(mut guard) = session.try_lock() {
+				#[cfg(windows)]
+				if let Some(core) = guard.as_mut() {
+					terminate_occupied_runs(&mut core.occupied_runs).await;
+				}
 				*guard = None;
 			}
 			let _ = process_cancel_bridge.await;
@@ -927,7 +951,11 @@ async fn create_session_for_run(
 			.await?;
 	}
 
-	Ok(ShellSessionCore { shell })
+	Ok(ShellSessionCore {
+		shell,
+		#[cfg(windows)]
+		occupied_runs: Vec::new(),
+	})
 }
 
 async fn source_snapshot(
@@ -1405,6 +1433,8 @@ async fn run_shell_command_once(
 
 	if cancel_token.is_cancelled() {
 		terminate_background_jobs(&mut session.shell);
+		#[cfg(windows)]
+		terminate_occupied_runs(&mut session.occupied_runs).await;
 	}
 
 	drop(params);
@@ -1539,6 +1569,8 @@ async fn run_shell_command_streams(
 
 	if cancel_token.is_cancelled() {
 		terminate_background_jobs(&mut session.shell);
+		#[cfg(windows)]
+		terminate_occupied_runs(&mut session.occupied_runs).await;
 	}
 
 	if env_scope_pushed {
@@ -2105,6 +2137,17 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 		}
 	}
 }
+
+/// Stops every run this session retained for live children, then forgets them.
+/// Each run stops only its own job, so other runs and other shells keep theirs.
+#[cfg(windows)]
+async fn terminate_occupied_runs(runs: &mut Vec<Arc<process::SpawnRegistry>>) {
+	while let Some(run) = runs.last() {
+		terminate_run(run).await;
+		runs.pop();
+	}
+}
+
 fn terminate_background_jobs(shell: &mut BrushShell) {
 	#[cfg(not(windows))]
 	let mut targets = process::TerminationTargets::new();
@@ -6080,3 +6123,5 @@ mod a_windows_pipe_reader_does_not_starve_under_blocking_pool_saturation;
 mod a_windows_signal_preserves_its_host_and_ancestry;
 #[cfg(all(test, windows))]
 mod a_windows_spawn_offloads_from_scheduler;
+#[cfg(all(test, windows))]
+mod a_windows_timeout_stops_an_earlier_background_job_in_the_same_shell;

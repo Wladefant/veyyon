@@ -82,7 +82,7 @@ One-shot shell (`executeShell`) always creates and drops a fresh session per cal
 
 - `CancelToken` is constructed from `timeoutMs` and optional `AbortSignal`, then converted into the shared `veyyon_shell::cancel::CancelToken`.
 - On cancellation/timeout, shell cancellation token is triggered, descendant cleanup runs, then the task gets a 2-second graceful window before forced abort.
-- On Windows, the shell starts owned external commands suspended. It adds each child to a job for that run using the child's pinned process handle, then resumes it. The job tracks descendants even if an intermediate process exits. The shell does not terminate the job on normal completion or add explicitly detached commands to it. When Windows refuses job attachment, the shell uses the existing pinned-process walk for that child.
+- On Windows, the shell starts owned external commands suspended. It adds each child to a job for that run using the child's pinned process handle, then resumes it. The job tracks descendants even if an intermediate process exits. The shell does not terminate the job on normal completion or add explicitly detached commands to it. When Windows refuses job attachment, the shell uses the existing pinned-process walk for that child. A persistent shell keeps a finished run's job while the job still has live members. A later timeout or cancel in that shell stops those jobs. Other shells and explicitly detached commands are not touched.
 - Structured result flags are used:
   - timeout -> `exitCode` omitted, `timedOut: true`.
   - abort signal / `Shell.abort()` -> `exitCode` omitted, `cancelled: true`.
