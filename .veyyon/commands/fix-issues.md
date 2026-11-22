@@ -67,20 +67,61 @@ git -C "$MAIN" worktree add -B "fix/issue-<N>" "$WT" origin/main
 
 Branch naming: `fix/issue-<N>` (or `fix/issue-<N>-<slug>` if you'll open multiple). Path under `~/.veyyon/wt/<encoded-main-path>/...` matches the convention `pr_checkout` uses.
 
-#### d. Symlink build artifacts
+#### d. Link build artifacts safely (no MSYS deep-copy)
 
-From the new worktree, link build outputs from `$MAIN` so `bun check` / `cargo build` / native loaders skip rebuilds:
+From the new worktree, link build outputs from `$MAIN` so `bun check` / `cargo build` / native loaders skip rebuilds.
+
+**Safety rules:**
+- On Windows (Git Bash / MSYS2), bare `ln -snf` silently deep-copies directories unless `MSYS=winsymlinks:nativestrict` is set. **NEVER** run unguarded `ln -snf` on Windows.
+- **NEVER** run raw `rm -rf "$WT"` or unguarded recursive deletion on a worktree that contains true symlinks or NTFS junctions; tear down only through the canonical scoped removal engine (`veyyon worktree clear`) or unlink `target`, `node_modules`, and `*.node` links (`rmdir` for junctions, `rm -f` for symlinks) before `git worktree remove`.
+- Keep `@veyyon/*` workspace links pointing inside `$WT` (not `$MAIN`), matching `.githooks/pre-push`'s `link_node_modules` overlay, so workspace imports never resolve stale code from `$MAIN`.
 
 ```bash
 cd "$WT"
-ln -snf "$MAIN/target"       "$WT/target"
-ln -snf "$MAIN/node_modules" "$WT/node_modules"
+link_dir() {
+  if [ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]; then
+    MSYS=winsymlinks:nativestrict ln -snf "$1" "$2" 2>/dev/null || \
+      cmd //c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null
+  else
+    ln -snf "$1" "$2"
+  fi
+}
+
+link_dir "$MAIN/target" "$WT/target"
+
+# Overlay node_modules so third-party packages are linked and @veyyon/* workspace
+# members resolve inside $WT rather than leaking back to $MAIN.
+mkdir -p "$WT/node_modules/@veyyon"
+for entry in "$MAIN/node_modules"/* "$MAIN/node_modules"/.[!.]*; do
+  [ -e "$entry" ] || continue
+  name=${entry##*/}
+  [ "$name" = "@veyyon" ] && continue
+  if [ -d "$entry" ]; then
+    link_dir "$entry" "$WT/node_modules/$name"
+  elif [ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]; then
+    MSYS=winsymlinks:nativestrict ln -snf "$entry" "$WT/node_modules/$name" 2>/dev/null || ln -f "$entry" "$WT/node_modules/$name"
+  else
+    ln -snf "$entry" "$WT/node_modules/$name"
+  fi
+done
+for pkg in "$MAIN"/packages/* "$MAIN"/contracts/* "$MAIN"/hosts/* "$MAIN"/plugins/*; do
+  [ -f "$pkg/package.json" ] || continue
+  name=$(basename "$pkg")
+  rel=${pkg#"$MAIN"/}
+  [ -d "$WT/$rel" ] && link_dir "$WT/$rel" "$WT/node_modules/@veyyon/$name"
+done
 
 # Only the .node binaries are expensive to rebuild. The rest of
 # natives/bridge/bindings/native/ is tracked by git, so folder-level symlinks would
 # shadow real source files and break the fix.
 for f in "$MAIN"/natives/bridge/bindings/native/*.node; do
-  [ -e "$f" ] && ln -snf "$f" "$WT/natives/bridge/bindings/native/"
+  [ -e "$f" ] || continue
+  dst="$WT/natives/bridge/bindings/native/$(basename "$f")"
+  if [ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]; then
+    MSYS=winsymlinks:nativestrict ln -snf "$f" "$dst" 2>/dev/null || ln -f "$f" "$dst"
+  else
+    ln -snf "$f" "$dst"
+  fi
 done
 ```
 
@@ -140,7 +181,7 @@ Group worktree paths by status (`fixed` first), so the user can `cd` and push th
 - **MUST** reproduce on `main` in the current cwd **before** creating any worktree. No worktree until repro is confirmed.
 - **MUST** use parallel agents — one per issue.
 - **MUST** check for an existing PR first; if one exists and is reasonable, divert to `review-prs` flow instead of duplicating work.
-- **MUST** symlink `target`, `node_modules`, and the native `*.node` binaries before any build/test runs in the worktree. **MUST NOT** symlink the whole `natives/bridge/bindings/native/` directory that would shadow tracked source files.
+- **MUST** link `target`, the `node_modules` overlay (with `@veyyon/*` pointing inside `$WT`), and the native `*.node` binaries using strict native links or NTFS junctions (never bare MSYS `ln -s`, which deep-copies). **MUST NOT** symlink the whole `natives/bridge/bindings/native/` directory that would shadow tracked source files, and **MUST NOT** tear down linked worktrees with raw `rm -rf` (use `veyyon worktree clear` or unlink links before `git worktree remove`).
 - **MUST** use conventional commits with `Fixes #<N>` in the body.
 - **MUST NOT** push, open PRs, or comment on issues. Human handles delivery.
 - **MUST NOT** ship stubs, mocks-as-product-code, or "TODO: implement" placeholders as a fix.

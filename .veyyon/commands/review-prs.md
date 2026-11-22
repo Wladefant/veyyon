@@ -53,27 +53,66 @@ gh_PR=<NUMBER>
 
 Use the `github pr_checkout` tool, **not** raw `gh pr checkout`. That gives a dedicated worktree wired up for `pr_push` later.
 
-#### c. Symlink build artifacts (skip native rebuilds)
+#### c. Link build artifacts safely (no MSYS deep-copy)
 
-From inside the new worktree, link the heavy build outputs from the main checkout so `bun check` / `cargo build` / native loaders do not recompile:
+From inside the new worktree, link the heavy build outputs from the main checkout so `bun check` / `cargo build` / native loaders do not recompile.
+
+**Safety rules:**
+- On Windows (Git Bash / MSYS2), bare `ln -snf` silently deep-copies directories unless `MSYS=winsymlinks:nativestrict` is set. **NEVER** run unguarded `ln -snf` on Windows.
+- **NEVER** run raw `rm -rf "$WT"` or unguarded recursive deletion on a worktree that contains true symlinks or NTFS junctions; tear down only through the canonical scoped removal engine (`veyyon worktree clear`) or unlink `target`, `node_modules`, and `*.node` links (`rmdir` for junctions, `rm -f` for symlinks) before `git worktree remove`.
+- Keep `@veyyon/*` workspace links pointing inside `$WT` (not `$MAIN`), matching `.githooks/pre-push`'s `link_node_modules` overlay, so workspace imports never resolve stale code from `$MAIN`.
 
 ```bash
 MAIN="<absolute path to main worktree, e.g. ~/Projects/pi>"
 WT="$(pwd)"
 
-# Rust target dir + JS deps (root-level in this monorepo)
-ln -snf "$MAIN/target"        "$WT/target"
-ln -snf "$MAIN/node_modules"  "$WT/node_modules"
+link_dir() {
+  if [ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]; then
+    MSYS=winsymlinks:nativestrict ln -snf "$1" "$2" 2>/dev/null || \
+      cmd //c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null
+  else
+    ln -snf "$1" "$2"
+  fi
+}
+
+# Rust target dir + JS deps overlay (root-level in this monorepo)
+link_dir "$MAIN/target" "$WT/target"
+
+mkdir -p "$WT/node_modules/@veyyon"
+for entry in "$MAIN/node_modules"/* "$MAIN/node_modules"/.[!.]*; do
+  [ -e "$entry" ] || continue
+  name=${entry##*/}
+  [ "$name" = "@veyyon" ] && continue
+  if [ -d "$entry" ]; then
+    link_dir "$entry" "$WT/node_modules/$name"
+  elif [ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]; then
+    MSYS=winsymlinks:nativestrict ln -snf "$entry" "$WT/node_modules/$name" 2>/dev/null || ln -f "$entry" "$WT/node_modules/$name"
+  else
+    ln -snf "$entry" "$WT/node_modules/$name"
+  fi
+done
+for pkg in "$MAIN"/packages/* "$MAIN"/contracts/* "$MAIN"/hosts/* "$MAIN"/plugins/*; do
+  [ -f "$pkg/package.json" ] || continue
+  name=$(basename "$pkg")
+  rel=${pkg#"$MAIN"/}
+  [ -d "$WT/$rel" ] && link_dir "$WT/$rel" "$WT/node_modules/@veyyon/$name"
+done
 
 # Prebuilt native addon (avoids 30s+ napi-rs rebuild). Link only the .node
 # binaries — the rest of natives/bridge/bindings/native/ is tracked by git, so
 # folder-level symlinks would shadow PR-modified files and break review.
 for f in "$MAIN"/natives/bridge/bindings/native/*.node; do
-  [ -e "$f" ] && ln -snf "$f" "$WT/natives/bridge/bindings/native/"
+  [ -e "$f" ] || continue
+  dst="$WT/natives/bridge/bindings/native/$(basename "$f")"
+  if [ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]; then
+    MSYS=winsymlinks:nativestrict ln -snf "$f" "$dst" 2>/dev/null || ln -f "$f" "$dst"
+  else
+    ln -snf "$f" "$dst"
+  fi
 done
 ```
 
-Resolve `$MAIN` from the original cwd before `pr_checkout` (`git rev-parse --show-toplevel`). Use absolute paths in symlinks; the worktree lives outside the main repo so relative paths break.
+Resolve `$MAIN` from the original cwd before `pr_checkout` (`git rev-parse --show-toplevel`). Use absolute paths in links; the worktree lives outside the main repo so relative paths break.
 
 #### d. Rebase onto main
 
@@ -140,7 +179,7 @@ Followed by the worktree paths grouped by decision, so the user can `cd` and mer
 
 - **MUST** use parallel agents — one per PR — not a serial loop.
 - **MUST** use `github pr_checkout` (carries push metadata) — not raw `gh pr checkout`.
-- **MUST** symlink `target`, `node_modules`, and the native `*.node` binaries before any build/test runs in the worktree. **MUST NOT** symlink the whole `natives/bridge/bindings/native/` directory that would shadow tracked PR changes.
+- **MUST** link `target`, the `node_modules` overlay (with `@veyyon/*` pointing inside `$WT`), and the native `*.node` binaries using strict native links or NTFS junctions before any build/test runs in the worktree (never bare MSYS `ln -s`, which deep-copies). **MUST NOT** symlink the whole `natives/bridge/bindings/native/` directory that would shadow tracked PR changes, and **MUST NOT** tear down linked worktrees with raw `rm -rf` (use `veyyon worktree clear` or unlink links before `git worktree remove`).
 - **MUST NOT** push or merge. Human reviews and merges.
 - **MUST NOT** expand scope: fixes are limited to merge blockers on this PR's diff.
 - **MUST NOT** force-push over the PR author's history.

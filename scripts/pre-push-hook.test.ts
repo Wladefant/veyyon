@@ -73,6 +73,7 @@ async function runHook(options: {
 	 * - "failing": mdbook stub that exits with error code 1
 	 */
 	mdbook?: "missing" | "success" | "missing-assets" | "nested-assets-missing" | "failing";
+	extraBins?: Record<string, string>;
 }): Promise<HookRun> {
 	using dir = TempDir.createSync("veyyon-hooktest-");
 	// TempDir.path() is relative to the process cwd. The hook runs as a child
@@ -89,6 +90,7 @@ async function runHook(options: {
 		"bash",
 		"sh",
 		"rm",
+		"rmdir",
 		"mkdir",
 		"ln",
 		"readlink",
@@ -124,6 +126,13 @@ async function runHook(options: {
 			`#!/usr/bin/env bash\nif [ "$1" = "run" ] && [ "$2" = "check:ts" ]; then\n  pwd > ${JSON.stringify(marker)}\n  readlink -f node_modules/@veyyon/pkg > ${JSON.stringify(linkMarker)} 2>/dev/null || true\nfi\nexit ${options.bunExit ?? 0}\n`,
 		);
 		await Bun.$`chmod +x ${path.join(binDir, "bun")}`.quiet();
+	}
+	if (options.extraBins) {
+		for (const [name, content] of Object.entries(options.extraBins)) {
+			const binPath = path.join(binDir, name);
+			await Bun.write(binPath, content);
+			await Bun.$`chmod +x ${binPath}`.quiet();
+		}
 	}
 	// mdbook's own layout: the root page loads a stylesheet out of `book/css/`,
 	// a page one directory down loads the same file through `../css/`, and the
@@ -523,5 +532,46 @@ describe("pre-push hook", () => {
 		});
 		expect(run.exitCode).toBe(0);
 		expect(run.stderr).not.toContain("docs/handbook/book");
+	});
+
+	/**
+	 * On Windows/MSYS2, bare `ln -s` silently deep-copies directories unless
+	 * `MSYS=winsymlinks:nativestrict` is set. The hook must pass
+	 * `winsymlinks:nativestrict` and fail closed if native linking is unavailable.
+	 */
+	it("enforces MSYS=winsymlinks:nativestrict on Windows/MSYS and fails closed when linking is unavailable", async () => {
+		const run = await runHook({
+			stdin: `refs/heads/main ${SHA} refs/heads/main ${SHA}\n`,
+			bunExit: 0,
+			env: { MSYSTEM: "MINGW64", OS: "Windows_NT" },
+			extraBins: {
+				ln: `#!/usr/bin/env bash\necho "MSYS=\${MSYS:-}" >&2\nexit 1\n`,
+			},
+		});
+		expect(run.exitCode).not.toBe(0);
+		expect(run.stderr).toContain("MSYS=winsymlinks:nativestrict");
+		expect(run.stderr).toContain("without MSYS deep-copy");
+		expect(run.leftoverWorktrees).toEqual([]);
+	});
+
+	/**
+	 * NTFS junctions store absolute paths, so `readlink` on Windows returns
+	 * `<repoRoot>/packages/pkg` instead of `../../packages/pkg`. The hook must
+	 * still rewrite those workspace links to point inside the checkout.
+	 */
+	it("rewrites absolute repo-root workspace links into the throwaway checkout on Windows/MSYS", async () => {
+		const run = await runHook({
+			stdin: `refs/heads/main ${SHA} refs/heads/main ${SHA}\n`,
+			bunExit: 0,
+			env: { MSYSTEM: "MINGW64", OS: "Windows_NT" },
+			extraBins: {
+				readlink: `#!/usr/bin/env bash\nif [ "\${1:-}" = "-f" ]; then\n  PATH=/usr/bin:/bin exec readlink "$@"\nfi\nprintf '%s\\n' "$(pwd)/packages/pkg"\n`,
+			},
+		});
+		expect(run.exitCode).toBe(0);
+		expect(run.workspaceLinkTarget).toContain("veyyon-prepush-");
+		expect(run.workspaceLinkTarget).toEndWith("/packages/pkg");
+		expect(run.workspaceLinkTarget).not.toBe(path.join(run.repoRoot, "packages", "pkg"));
+		expect(run.leftoverWorktrees).toEqual([]);
 	});
 });

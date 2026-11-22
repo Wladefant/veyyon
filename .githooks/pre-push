@@ -68,6 +68,70 @@ repo_root=$(git rev-parse --show-toplevel)
 # So third-party packages are linked entry by entry (they are identical in both
 # trees and reinstalling them would cost far more than the check itself), and the
 # workspace links are rebuilt to point INSIDE the worktree.
+is_windows_msys() {
+	[ -n "${MSYSTEM:-}" ] || [ "${OS:-}" = "Windows_NT" ]
+}
+
+link_entry() {
+	src_path=$1
+	dst_path=$2
+	if is_windows_msys; then
+		if MSYS=winsymlinks:nativestrict ln -sfn "$src_path" "$dst_path" 2>/dev/null; then
+			return 0
+		fi
+		if [ -d "$src_path" ] && command -v cmd >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+			[ -L "$dst_path" ] && rm -f "$dst_path"
+			[ -d "$dst_path" ] && rmdir "$dst_path" 2>/dev/null || true
+			if cmd //c mklink /J "$(cygpath -w "$dst_path")" "$(cygpath -w "$src_path")" >/dev/null 2>&1; then
+				return 0
+			fi
+		elif [ -f "$src_path" ]; then
+			if ln -f "$src_path" "$dst_path" 2>/dev/null; then
+				return 0
+			fi
+		fi
+		echo "pre-push: REFUSED. Cannot link $dst_path -> $src_path without MSYS deep-copy." >&2
+		echo "          Enable Windows Developer Mode or push with VEYYON_SKIP_PREPUSH=1." >&2
+		return 1
+	fi
+	ln -sfn "$src_path" "$dst_path"
+}
+
+unlink_node_modules() {
+	dst="$1/node_modules"
+	[ -d "$dst" ] || [ -L "$dst" ] || return 0
+	if [ -L "$dst" ]; then
+		rm -f "$dst"
+		return 0
+	fi
+	if [ -d "$dst/@veyyon" ] && [ ! -L "$dst/@veyyon" ]; then
+		for entry in "$dst/@veyyon"/*; do
+			[ -L "$entry" ] || [ -e "$entry" ] || continue
+			if [ -L "$entry" ]; then
+				rm -f "$entry"
+			elif [ -d "$entry" ]; then
+				rmdir "$entry" 2>/dev/null || true
+			else
+				rm -f "$entry"
+			fi
+		done
+		rmdir "$dst/@veyyon" 2>/dev/null || true
+	elif [ -L "$dst/@veyyon" ]; then
+		rm -f "$dst/@veyyon"
+	fi
+	for entry in "$dst"/* "$dst"/.[!.]*; do
+		[ -L "$entry" ] || [ -e "$entry" ] || continue
+		if [ -L "$entry" ]; then
+			rm -f "$entry"
+		elif [ -d "$entry" ]; then
+			rmdir "$entry" 2>/dev/null || true
+		else
+			rm -f "$entry"
+		fi
+	done
+	rmdir "$dst" 2>/dev/null || true
+}
+
 link_node_modules() {
 	src="$repo_root/node_modules"
 	dst="$1/node_modules"
@@ -77,7 +141,7 @@ link_node_modules() {
 		[ -e "$entry" ] || continue
 		name=${entry##*/}
 		[ "$name" = "@veyyon" ] && continue
-		ln -sfn "$entry" "$dst/$name"
+		link_entry "$entry" "$dst/$name"
 	done
 	[ -d "$src/@veyyon" ] || return 0
 	mkdir -p "$dst/@veyyon"
@@ -85,6 +149,11 @@ link_node_modules() {
 		[ -e "$entry" ] || continue
 		name=${entry##*/}
 		target=$(readlink "$entry" 2>/dev/null || true)
+		if is_windows_msys && [ -n "$target" ] && command -v cygpath >/dev/null 2>&1; then
+			case "$target" in
+			[A-Za-z]:[\\/]*) target=$(cygpath -u "$target" 2>/dev/null || printf '%s' "$target") ;;
+			esac
+		fi
 		# Every workspace member is linked relative to the repository root, whatever root it sits
 		# under: `../../packages/ai`, `../../hosts/terminal/engine`, `../../plugins/web`,
 		# `../../kernel`. Matching `packages/*` alone sent the other eight back to the dirty tree,
@@ -92,22 +161,29 @@ link_node_modules() {
 		# identities in one program: `@veyyon/tui` resolved outside the checkout while a relative
 		# import of the same file resolved inside it.
 		case "$target" in
-		../../*) ln -sfn "$1/${target#../../}" "$dst/@veyyon/$name" ;;
-		*) ln -sfn "$entry" "$dst/@veyyon/$name" ;;
+		../../*) link_entry "$1/${target#../../}" "$dst/@veyyon/$name" ;;
+		"$repo_root"/*) link_entry "$1/${target#"$repo_root"/}" "$dst/@veyyon/$name" ;;
+		*) link_entry "$entry" "$dst/@veyyon/$name" ;;
 		esac
 	done
 }
 
 checkout=""
 cleanup() {
-	[ -n "$checkout" ] && git -C "$repo_root" worktree remove --force "$checkout" >/dev/null 2>&1 || true
+	[ -n "$checkout" ] || return 0
+	case "$checkout" in
+	*/veyyon-prepush-*) ;;
+	*) return 0 ;;
+	esac
+	unlink_node_modules "$checkout"
+	git -C "$repo_root" worktree remove --force "$checkout" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 for sha in $shas; do
 	short=$(git rev-parse --short "$sha")
-	checkout="${TMPDIR:-/tmp}/veyyon-prepush-$$-$short"
-	rm -rf "$checkout"
+	checkout=$(mktemp -d "${TMPDIR:-/tmp}/veyyon-prepush-$$-$short.XXXXXX")
+	rmdir "$checkout"
 	if ! git -C "$repo_root" worktree add -q --detach "$checkout" "$sha" 2>/dev/null; then
 		echo "pre-push: could not check out $short to verify it." >&2
 		echo "          Push with VEYYON_SKIP_PREPUSH=1 if you accept the risk." >&2
