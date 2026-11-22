@@ -465,6 +465,36 @@ describe("staged journal rewrite reads only new bytes", () => {
 		}
 	});
 
+	it("rejects every waiting grant on publish failure and lets the next batch retry", async () => {
+		const dir = temp("rewrite-grant-retry-");
+		const storage = new FileSessionStorage();
+		const root = SessionManager.create(dir, path.join(dir, "sessions", "project"), storage);
+		try {
+			await root.ensureOnDisk();
+			const journal = root.getSessionFile()!;
+			const artifactDir = path.join(await fsp.realpath(path.dirname(journal)), path.basename(journal, ".jsonl"));
+			const grants = ["One", "Two"].map(agentId => ({
+				type: "subagent_launch_grant" as const,
+				version: 1 as const,
+				rootSessionId: root.getSessionId(),
+				agentId,
+				childSessionId: crypto.randomUUID(),
+				sessionFile: path.join(artifactDir, `${agentId}.jsonl`),
+				grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
+			}));
+			const failure = spyOn(storage, "renameSync").mockImplementation(() => { throw new Error("injected journal failure"); });
+			const failed = await Promise.allSettled(grants.map(grant => root.appendSubagentLaunchGrant(grant)));
+			expect(failed.map(result => result.status)).toEqual(["rejected", "rejected"]);
+			expect(root.getSubagentLaunchGrants()).toEqual([]);
+			expect(await fsp.readFile(journal, "utf8")).not.toContain('"subagent_launch_grant"');
+			failure.mockRestore();
+			await Promise.all(grants.map(grant => root.appendSubagentLaunchGrant(grant)));
+			expect(root.getSubagentLaunchGrants()).toEqual(grants);
+		} finally {
+			await root.close();
+		}
+	});
+
 	for (const late of [false, true]) {
 		for (const tail of [false, true]) {
 			it(`preserves a peer launch grant ${late ? "after" : "before"} the snapshot during ${tail ? "tail" : "full"} rewrite`, async () => {

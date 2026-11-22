@@ -208,6 +208,12 @@ const NATIVE_MOVE_TARGET_GATE_OPTIONS = {
 };
 const NATIVE_OWNER_LOCK_OPTIONS = { retries: 1, queueWaitMs: 1 };
 
+interface GrantRequest {
+	record: SubagentLaunchGrant;
+	resolve(): void;
+	reject(error: unknown): void;
+}
+
 interface NativeOwnerRequest {
 	name: string;
 	resolve(handle: FileLockHandle): void;
@@ -625,6 +631,7 @@ export class SessionManager {
 	#grantsAmbiguous: string | undefined;
 	/** Serialize grant publication and rollback, independently of other entry writers. */
 	#grantTail = Promise.resolve();
+	#pendingGrants?: { file: string | undefined; requests: GrantRequest[] };
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
@@ -4313,20 +4320,35 @@ export class SessionManager {
 	 * recorded, or the journal's receipts are unverified.
 	 * Sibling requests already waiting on the same root share one durable publication.
 	 */
-	async appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
+	appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
 		const sessionFile = this.#sessionFile;
-		const publish = this.#grantTail.then(() => this.#publishSubagentLaunchGrant(record, sessionFile));
-		this.#grantTail = publish.catch(() => {});
-		return publish;
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		const request = { record, resolve, reject };
+		const pending = this.#pendingGrants;
+		if (pending && pending.file === sessionFile) {
+			pending.requests.push(request);
+		} else {
+			const batch = { file: sessionFile, requests: [request] };
+			this.#pendingGrants = batch;
+			this.#grantTail = this.#grantTail.then(async () => {
+				// Freeze membership before I/O. Later requests queue for the next durable publication.
+				if (this.#pendingGrants === batch) this.#pendingGrants = undefined;
+				try {
+					await this.#publishSubagentLaunchGrants(batch.requests, sessionFile);
+				} catch (error) {
+					for (const member of batch.requests) member.reject(error);
+				}
+			});
+		}
+		return promise;
 	}
 
-	async #publishSubagentLaunchGrant(record: SubagentLaunchGrant, sessionFile: string | undefined): Promise<void> {
-		if (!this.#persist || !sessionFile || this.#sessionFile !== sessionFile) {
-			throw new Error("Cannot record a subagent launch grant in a non-persistent session");
-		}
-		if (this.#grantsAmbiguous !== undefined) {
-			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
-		}
+	#checkLaunchGrant(
+		record: SubagentLaunchGrant,
+		sessionFile: string,
+		rootDir: string,
+		heldGrants: readonly SubagentLaunchGrant[],
+	): SubagentLaunchGrant {
 		const checked = validateSubagentLaunchGrant(record);
 		if (!checked.ok) throw new Error(`Invalid subagent launch grant: ${checked.problem}`);
 		const grant = checked.grant;
@@ -4334,10 +4356,8 @@ export class SessionManager {
 			throw new Error("Subagent launch grant names a different root session");
 		}
 		const rootName = path.basename(sessionFile);
-		const rootDir = await fs.promises.realpath(path.dirname(sessionFile));
 		if (
 			this.#sessionFile !== sessionFile ||
-			this.#sessionId !== grant.rootSessionId ||
 			path.basename(path.dirname(rootDir)).toLowerCase() !== "sessions" ||
 			!rootName.endsWith(`_${grant.rootSessionId}.jsonl`) ||
 			path.dirname(grant.sessionFile) !== path.join(rootDir, sessionFileStem(rootName))
@@ -4347,11 +4367,11 @@ export class SessionManager {
 		if (
 			grant.childSessionId === this.#sessionId ||
 			grant.agentId === this.#sessionId ||
-			path.resolve(grant.sessionFile) === path.resolve(this.#sessionFile)
+			path.resolve(grant.sessionFile) === path.resolve(sessionFile)
 		) {
 			throw new Error("Subagent launch grant identity collides with the root session");
 		}
-		for (const held of this.#grants) {
+		for (const held of heldGrants) {
 			if (
 				held.agentId === grant.agentId ||
 				held.childSessionId === grant.childSessionId ||
@@ -4360,11 +4380,37 @@ export class SessionManager {
 				throw new Error("Subagent launch grant repeats an identity already recorded for this root");
 			}
 		}
+		return grant;
+	}
+
+	async #publishSubagentLaunchGrants(requests: GrantRequest[], sessionFile: string | undefined): Promise<void> {
+		if (!this.#persist || !sessionFile || this.#sessionFile !== sessionFile) {
+			throw new Error("Cannot record a subagent launch grant in a non-persistent session");
+		}
+		const rootDir = await fs.promises.realpath(path.dirname(sessionFile));
+		if (this.#grantsAmbiguous !== undefined) {
+			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
+		}
+		const rootId = this.#sessionId;
 		const epoch = this.#diskEpoch;
 		const previousLines = this.#receiptLines;
 		const previousGrants = this.#grants;
-		this.#receiptLines = [...previousLines, serializeSubagentLaunchGrant(grant)];
-		this.#grants = [...previousGrants, grant];
+		const nextLines = [...previousLines];
+		const nextGrants = [...previousGrants];
+		const accepted: GrantRequest[] = [];
+		for (const request of requests) {
+			try {
+				const grant = this.#checkLaunchGrant(request.record, sessionFile, rootDir, nextGrants);
+				nextLines.push(serializeSubagentLaunchGrant(grant));
+				nextGrants.push(grant);
+				accepted.push(request);
+			} catch (error) {
+				request.reject(error);
+			}
+		}
+		if (accepted.length === 0) return;
+		this.#receiptLines = nextLines;
+		this.#grants = nextGrants;
 		this.#forceFileCreation = true;
 		try {
 			// The file backend waits for the replacement to be durable before we acknowledge the receipt.
@@ -4372,14 +4418,16 @@ export class SessionManager {
 			if (
 				this.#diskEpoch !== epoch ||
 				this.#sessionFile !== sessionFile ||
-				this.#sessionId !== grant.rootSessionId ||
+				this.#sessionId !== rootId ||
+				this.#grantsAmbiguous !== undefined ||
 				!this.#fileIsCurrent ||
 				this.#rewriteRequired
 			) {
 				throw new Error("Subagent launch grant was not published to the session journal");
 			}
+			for (const request of accepted) request.resolve();
 		} catch (error) {
-			if (this.#sessionFile === sessionFile && this.#sessionId === grant.rootSessionId) {
+			if (this.#sessionFile === sessionFile && this.#sessionId === rootId) {
 				this.#receiptLines = previousLines;
 				this.#grants = previousGrants;
 			}
