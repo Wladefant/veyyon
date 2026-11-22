@@ -455,6 +455,12 @@ def cmd_claim(args: argparse.Namespace) -> int:
                     task_type=str(chosen_req.get("task_type") or "feature"),
                 )
                 native_ticket = backend.prepare_native(wb_req)
+                if native_ticket.state == "blocked" and any(
+                    isinstance(entry, dict)
+                    and entry.get("native_rollback_run_id") == native_ticket.run_id
+                    for entry in history
+                ):
+                    native_ticket = backend.retry_native(native_ticket.run_id)
             except Exception as exc:
                 print(json.dumps({
                     "claimed": False,
@@ -571,6 +577,17 @@ def cmd_record_dispatch(args: argparse.Namespace) -> int:
     return 0
 
 
+def blocked_native_result(ticket_id: str, stage: str, reason: str) -> Dict[str, Any]:
+    return {
+        "request_id": ticket_id,
+        "stage": stage,
+        "verdict": "blocked",
+        "summary": reason,
+        "checks": [],
+        "artifacts": [],
+    }
+
+
 def cmd_rollback(args: argparse.Namespace) -> int:
     ledger_path = os.path.abspath(args.ledger)
     lock_path = ledger_path + ".lock"
@@ -597,6 +614,29 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         if args.task_handle and claim["task_handle"] != args.task_handle:
             print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native task handle"}))
             return 0
+
+        backend_rollback_run_id = None
+        if WorkerBackend is not None and claim["task_handle"]:
+            try:
+                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+                ticket = backend.get_native_dispatch(claim["run_id"])
+                if ticket.task_handle != claim["task_handle"]:
+                    raise ValueError("WorkerBackend no longer owns this native task handle")
+                if ticket.state == "background_dispatched":
+                    backend.complete_native(
+                        ticket.run_id,
+                        ticket.task_handle,
+                        blocked_native_result(ticket_id, ticket.request["stage"], reason),
+                    )
+                # Re-read after completion. A concurrent success must not be
+                # made retryable, and a repeated rollback must remain safe.
+                outcome = backend.get_native_outcome(ticket.run_id)
+                if outcome is None or outcome.ok or backend.get_native_dispatch(ticket.run_id).state != "blocked":
+                    raise ValueError("WorkerBackend did not block the rolled-back native run")
+                backend_rollback_run_id = ticket.run_id
+            except Exception as exc:
+                print(json.dumps({"rolled_back": False, "error": f"WorkerBackend rollback failed: {exc}"}))
+                return 0
 
         now_iso = get_iso_now()
         from_state = req.get("state") or "implementation"
@@ -629,6 +669,7 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             "from_state": from_state,
             "to_state": to_state,
             "reason": f"Rollback: {reason}",
+            **({"native_rollback_run_id": backend_rollback_run_id} if backend_rollback_run_id else {}),
         })
         data["updated_at"] = now_iso
 
@@ -745,7 +786,11 @@ def cmd_complete(args: argparse.Namespace) -> int:
         else:
             try:
                 backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
-                outcome = backend.complete_native(run_id, task_handle, structured_result)
+                result_for_backend = (
+                    blocked_native_result(ticket_id, structured_result.get("stage", "unknown"), args.error)
+                    if args.error else structured_result
+                )
+                outcome = backend.complete_native(run_id, task_handle, result_for_backend)
                 outcome_dict = outcome.to_dict()
             except Exception as exc:
                 outcome_dict = {
