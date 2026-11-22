@@ -278,7 +278,7 @@ describe("task spawn routing", () => {
 
 		const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
 		process.env.VEYYON_WORKFLOWS_DIR = scratch.join("no-worker-backend");
-		const result = await tool.execute("tc-verifier-spawn", {
+		const spawn = tool.execute("tc-verifier-spawn", {
 			agent: "reviewer",
 			name: "VerifierSpawn",
 			task: "Review this.",
@@ -286,7 +286,8 @@ describe("task spawn routing", () => {
 			runId: "run-verifier",
 			ledgerPath,
 			nativeDispatchBound: true,
-		} as TaskParams).finally(() => {
+		} as TaskParams);
+		const result = await spawn.finally(() => {
 			if (previousWorkflowsDir === undefined) {
 				delete process.env.VEYYON_WORKFLOWS_DIR;
 			} else {
