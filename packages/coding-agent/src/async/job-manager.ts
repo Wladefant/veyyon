@@ -322,7 +322,6 @@ export class AsyncJobManager {
 		return id;
 	}
 
-
 	/**
 	 * Cancel a single job by id. When `filter.ownerId` is set and does not
 	 * match the job's owner, the call is treated as not-found (returns false)
