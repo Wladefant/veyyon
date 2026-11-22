@@ -2243,24 +2243,29 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	marks.resolvedAt = performance.now();
 	const buildSessionOptions = childSessionOptionsBuilder(ctx, runModel);
 	ctx.setupPhase = "open-transcript";
-	const opening = openNativeTranscript(ctx.sessionFile, ctx.effectiveCwd, async sessionManager => {
-		marks.transcriptOpenedAt = performance.now();
-		monitor.abortSignal.throwIfAborted();
-		if (options.beforeChildStart) {
-			ctx.setupPhase = "record-launch-grant";
-			await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
-			marks.grantRecordedAt = performance.now();
+	const opening = openNativeTranscript(
+		ctx.sessionFile,
+		ctx.effectiveCwd,
+		async sessionManager => {
+			marks.transcriptOpenedAt = performance.now();
 			monitor.abortSignal.throwIfAborted();
-		}
-		if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
-		marks.sessionOpenedAt = performance.now();
-		ctx.setupPhase = "create-session";
-		const { session } = await createSubagentSession(
-			options.parentSessionId,
-			buildSessionOptions(sessionManager, ctx.settings),
-		);
-		return session;
-	}, options.beforeChildStart !== undefined);
+			if (options.beforeChildStart) {
+				ctx.setupPhase = "record-launch-grant";
+				await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+				marks.grantRecordedAt = performance.now();
+				monitor.abortSignal.throwIfAborted();
+			}
+			if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
+			marks.sessionOpenedAt = performance.now();
+			ctx.setupPhase = "create-session";
+			const { session } = await createSubagentSession(
+				options.parentSessionId,
+				buildSessionOptions(sessionManager, ctx.settings),
+			);
+			return session;
+		},
+		options.beforeChildStart !== undefined,
+	);
 	let session: AgentSession;
 	try {
 		session = await ctx.awaitAbortable(opening);
