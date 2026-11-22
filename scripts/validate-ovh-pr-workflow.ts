@@ -471,11 +471,15 @@ function validate(workflow: Workflow): void {
 			});
 			equal(run.status, 1);
 			equal(run.stdout?.includes("Per-file timeout (120s): hang.test.ts"), true);
-			equal(run.stdout?.includes("OVH_FILE_TOTAL selected=3 started=3 finished=3 zero_case=1 timed_out=1 skip=1"), true);
 			equal(
-				readFileSync(receipt, "utf8").match(/^started-test=.*$/gm),
-				["started-test=hang.test.ts", "started-test=skip.test.ts", "started-test=zero.test.ts"],
+				run.stdout?.includes("OVH_FILE_TOTAL selected=3 started=3 finished=3 zero_case=1 timed_out=1 skip=1"),
+				true,
 			);
+			equal(readFileSync(receipt, "utf8").match(/^started-test=.*$/gm), [
+				"started-test=hang.test.ts",
+				"started-test=skip.test.ts",
+				"started-test=zero.test.ts",
+			]);
 		} finally {
 			rmSync(sandbox, { recursive: true, force: true });
 		}

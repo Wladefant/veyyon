@@ -112,7 +112,9 @@ describe("OVH shard planner writes the selected plan", () => {
 		expect(assigned).toHaveLength(400);
 		expect(new Set(assigned)).toEqual(new Set(files));
 		for (const shard of plan.shards) {
-			const shardLines = (await readFile(path.join(output, `shard-${shard.index}.txt`), "utf8")).trimEnd().split("\n");
+			const shardLines = (await readFile(path.join(output, `shard-${shard.index}.txt`), "utf8"))
+				.trimEnd()
+				.split("\n");
 			expect(shardLines).toEqual(shard.files);
 		}
 	});
