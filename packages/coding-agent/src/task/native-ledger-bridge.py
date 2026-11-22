@@ -522,10 +522,12 @@ def project_native_outcome(
     run_id: str,
     outcome_dict: Mapping[str, Any],
     now_iso: Optional[str] = None,
+    *,
+    prepared_head: Optional[str] = None,
 ) -> bool:
     """
     Apply one canonical WorkerOutcome projection to a ledger request at most once.
-    Returns True if applied, False if this run_id was already projected.
+    Returns False for a duplicate or an outcome fenced by a newer request head.
     """
     if has_projected_native_outcome(req, run_id):
         req["native_claim"] = retryable_native_claim()
@@ -534,6 +536,27 @@ def project_native_outcome(
     ts = now_iso or get_iso_now()
     from_state = req.get("state") or "implementation"
     history = req.setdefault("history", [])
+    current_head = req.get("head")
+    if prepared_head is not None and current_head and (
+        current_head != prepared_head
+        or (
+            outcome_dict.get("ok") and outcome_dict.get("stage") in ("qa", "review")
+            and current_head != outcome_dict.get("head_sha")
+        )
+    ):
+        # A build can report a new output head, but it still belongs to the
+        # immutable input head captured when the backend prepared this run.
+        req["native_claim"] = retryable_native_claim()
+        req["updated_at"] = ts
+        history.append({
+            "actor": "TopicReplenishmentEngine",
+            "timestamp": ts,
+            "from_state": from_state,
+            "to_state": from_state,
+            "reason": "Discarded native outcome because the request head changed",
+            "stale_native_run_id": run_id,
+        })
+        return False
 
     if outcome_dict.get("ok"):
         next_state = from_state
@@ -1030,17 +1053,19 @@ def cmd_rollback(args: argparse.Namespace) -> int:
                         raise ValueError(
                             f"WorkerBackend run {claim['run_id']} is {backend_ticket.state!r} with no readable outcome"
                         )
-                    project_native_outcome(req, claim["run_id"], outcome.to_dict(), now_iso)
+                    applied = project_native_outcome(
+                        req, claim["run_id"], outcome.to_dict(), now_iso, prepared_head=backend_ticket.head_sha,
+                    )
                     data["updated_at"] = now_iso
                     write_ledger_atomic(ledger_path, data)
                     print(json.dumps({
                         "rolled_back": False,
                         "reconciled": True,
-                        "ok": outcome.ok,
+                        "ok": applied and outcome.ok,
                         "state": req["state"],
                         "error": (
                             f"WorkerBackend run {claim['run_id']} already reached terminal state "
-                            f"{backend_ticket.state!r}; applied canonical outcome instead of rolling back"
+                            f"{backend_ticket.state!r}; reconciled against the current request instead of rolling back"
                         ),
                     }))
                     return 0
@@ -1201,12 +1226,15 @@ def cmd_recover(args: argparse.Namespace) -> int:
                     )
                     continue
                 outcome_dict = outcome.to_dict()
-                project_native_outcome(req, run_id, outcome_dict, now_iso)
+                applied = project_native_outcome(
+                    req, run_id, outcome_dict, now_iso, prepared_head=backend_ticket.head_sha,
+                )
                 recovered.append(ticket_id)
                 reconciled_outcomes.append({
                     "ticket_id": ticket_id,
                     "run_id": run_id,
-                    "ok": bool(outcome_dict.get("ok")),
+                    "ok": applied and bool(outcome_dict.get("ok")),
+                    **({"discarded": True} if not applied else {}),
                     "state": req["state"],
                 })
                 ledger_modified = True
@@ -1329,10 +1357,12 @@ def cmd_complete(args: argparse.Namespace) -> int:
         completion_error = args.error or (
             f"Worker exited with code {args.exit_code}" if args.exit_code else None
         )
+        prepared_head = None
         if WorkerBackend is not None:
             try:
                 backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
                 ticket = backend.get_native_dispatch(run_id)
+                prepared_head = ticket.head_sha
                 if ticket.task_handle != task_handle or ticket.state == "retired":
                     raise ValueError(f"Native dispatch {run_id} is retired or no longer owns this handle")
                 result_for_backend = (
@@ -1372,16 +1402,17 @@ def cmd_complete(args: argparse.Namespace) -> int:
                 "blocked_reason": blocked_reason,
             }
         now_iso = get_iso_now()
-        project_native_outcome(req, run_id, outcome_dict, now_iso)
+        applied = project_native_outcome(req, run_id, outcome_dict, now_iso, prepared_head=prepared_head)
         data["updated_at"] = now_iso
         write_ledger_atomic(ledger_path, data)
         print(json.dumps({
             "completed": True,
-            "ok": outcome_dict["ok"],
+            "ok": applied and outcome_dict["ok"],
+            **({"discarded": True} if not applied else {}),
             "stage": outcome_dict.get("stage"),
             "state": req["state"],
             "blocked_reason": outcome_dict.get("blocked_reason"),
-            "head_sha": outcome_dict.get("head_sha"),
+            "head_sha": outcome_dict.get("head_sha") if applied else req.get("head"),
         }))
         return 0
 

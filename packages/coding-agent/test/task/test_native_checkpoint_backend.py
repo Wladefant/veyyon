@@ -406,6 +406,52 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertFalse(late["completed"], late)
         self.assertEqual(self.ticket(), ticket)
 
+    def test_torn_build_result_cannot_rewind_a_newer_request_head(self):
+        request = self.ticket()
+        request["state"] = "implementation"
+        request["stage"] = "build"
+        self.write_requests({TICKET: request})
+        run_id = self.claim()
+        self.dispatch(run_id)
+        tree = self.git("rev-parse", "HEAD^{tree}")
+
+        def advance_commit(parent, message):
+            head = self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                            "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", parent, "-m", message)
+            self.git("update-ref", "HEAD", head, parent)
+            return head
+
+        old_result_head = advance_commit(self.head, "worker output")
+        passing = {**self.review_result(), "stage": "build", "head_sha": old_result_head}
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=run_id,
+                     task_handle=HANDLE, agent_id=None, result_json=json.dumps(passing),
+                     result_file=None, exit_code=0, error="")
+        durable = self.record(run_id)
+        self.assertEqual(durable["state"], "finalized")
+        self.assertTrue(durable["outcome"]["ok"])
+        new_head = advance_commit(old_result_head, "new request head")
+        request = self.ticket()
+        request["head"] = new_head
+        self.write_requests({TICKET: request})
+
+        recovered = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(recovered["reconciled_outcomes"], [{
+            "ticket_id": TICKET, "run_id": run_id, "ok": False, "discarded": True,
+            "state": "implementation",
+        }])
+        request = self.ticket()
+        self.assertEqual(request["head"], new_head)
+        self.assertEqual(request["state"], "implementation")
+        self.assertFalse(request.get("evidence"))
+        self.assertEqual(request["native_claim"]["state"], "retryable")
+        self.assertEqual(self.record(run_id), durable)
+        self.assertEqual(self.cli(self.bridge.cmd_recover, running_worker_ids="")["recovered"], [])
+        next_attempt = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(next_attempt["claimed"], next_attempt)
+        self.assertEqual(next_attempt["ticket"]["head"], new_head)
+        self.assertNotEqual(next_attempt["ticket"]["runId"], run_id)
+
     def test_candidate_local_recurrence_refusal_claims_unrelated_eligible_ticket(self):
         self.write_requests({
             "alpha-blocked": self.make_request(prompt="Verify alpha commit", topic="Workflow"),
