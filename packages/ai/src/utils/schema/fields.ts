@@ -40,6 +40,18 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 };
 
 /**
+ * Gemini / Code Assist array validation keywords rejected on `parametersJsonSchema`.
+ * Kept separate from `UNSUPPORTED_SCHEMA_FIELDS` so Cloud Code Assist Claude
+ * declarations (`normalizeSchemaForCCA`) preserve them on `parameters`.
+ */
+export const GEMINI_UNSUPPORTED_ARRAY_FIELDS: Record<string, true> = {
+	uniqueItems: true,
+	contains: true,
+	minContains: true,
+	maxContains: true,
+};
+
+/**
  * Human-meaningful validation/decorative keywords that can be preserved in a
  * sibling description when a provider-specific normalizer strips them from the
  * wire schema.

@@ -701,12 +701,12 @@ function renameTempOverTargetSync(tmpPath: string, target: string, requireAtomic
 }
 
 /** Synchronous twin of {@link fsyncDirEntry}. */
-export function fsyncDirEntrySync(dir: string): void {
+export function fsyncDirEntrySync(dir: string, options?: { required?: boolean }): void {
 	let dirFd: number;
 	try {
 		dirFd = fs.openSync(dir, "r");
 	} catch (error) {
-		if (isDirectoryFsyncUnsupported(error)) return;
+		if (!options?.required && isDirectoryFsyncUnsupported(error)) return;
 		throw error;
 	}
 	closingAfterSync(
@@ -714,6 +714,7 @@ export function fsyncDirEntrySync(dir: string): void {
 			try {
 				fs.fsyncSync(dirFd);
 			} catch (error) {
+				if (options?.required) throw error;
 				rethrowUnlessDirectoryFsyncUnsupported(error);
 			}
 		},

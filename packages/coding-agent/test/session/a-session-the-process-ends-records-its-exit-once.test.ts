@@ -42,6 +42,7 @@ const EXPECTED_KIND: Record<string, SessionExitData["kind"]> = {
 	[postmortem.Reason.SIGINT]: "signal",
 	[postmortem.Reason.SIGTERM]: "signal",
 	[postmortem.Reason.SIGHUP]: "signal",
+	[postmortem.Reason.SIGBREAK]: "signal",
 	[postmortem.Reason.UNCAUGHT_EXCEPTION]: "fatal",
 	[postmortem.Reason.UNHANDLED_REJECTION]: "fatal",
 	[postmortem.Reason.MANUAL]: "normal",
@@ -62,7 +63,7 @@ interface Harness {
 	session: AgentSession;
 	sessionManager: SessionManager;
 	/** The callback the session handed `postmortem`, as the process would run it. */
-	runProcessCallback(reason: postmortem.Reason): void;
+	runProcessCallback(reason: postmortem.Reason, canWait?: boolean): void | Promise<void>;
 	/** How many times the session withdrew that callback from the process list. */
 	withdrawals(): number;
 	exitEntries(): SessionExitData[];
@@ -99,7 +100,7 @@ describe("a session the process ends records its exit once", () => {
 	 * counts the withdrawals of the registration this session made.
 	 */
 	const harness = async (): Promise<Harness> => {
-		const callbacks: Array<(reason: postmortem.Reason) => void | Promise<void>> = [];
+		const callbacks: Array<Parameters<typeof postmortem.register>[1]> = [];
 		let withdrawn = 0;
 		const realRegister = postmortem.register;
 		vi.spyOn(postmortem, "register").mockImplementation((id, callback) => {
@@ -140,9 +141,7 @@ describe("a session the process ends records its exit once", () => {
 		return {
 			session,
 			sessionManager,
-			runProcessCallback: reason => {
-				void callbacks[0](reason);
-			},
+			runProcessCallback: (reason, canWait = false) => callbacks[0](reason, canWait),
 			withdrawals: () => withdrawn,
 			exitEntries: () =>
 				sessionManager
@@ -180,6 +179,29 @@ describe("a session the process ends records its exit once", () => {
 		await h.session.dispose();
 		expect(h.exitEntries()).toHaveLength(1);
 		expect(h.exitEntries()[0]).toMatchObject({ reason: "sighup", kind: "signal" });
+	});
+
+	it("keeps the signal drain armed while dispose waits for the exit write", async () => {
+		const h = await harness();
+		const write = Promise.withResolvers<void>();
+		vi.spyOn(h.sessionManager, "flush").mockImplementationOnce(() => write.promise);
+		const disposing = h.session.dispose();
+		try {
+			expect(h.withdrawals()).toBe(0);
+			let signalDrained = false;
+			const signal = Promise.resolve(h.runProcessCallback(postmortem.Reason.SIGTERM, true)).then(() => {
+				signalDrained = true;
+			});
+			await Promise.resolve();
+			expect(signalDrained).toBe(false);
+			write.resolve();
+			await signal;
+		} finally {
+			write.resolve();
+			await disposing;
+		}
+		expect(h.withdrawals()).toBe(1);
+		expect(h.exitEntries()).toHaveLength(1);
 	});
 
 	it("withdraws the callback on dispose, so a later teardown neither writes nor reaches the session", async () => {

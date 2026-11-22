@@ -104,6 +104,7 @@ it("reopens a reusable persisted reviver at the child's latest cwd, and at no pr
 		// Parent B revives child A. The child opens in A, and A's `settings.json`
 		// changes nothing about it.
 		revived = await revive!();
+		await expect(revive!()).rejects.toThrow("Failed to acquire lock");
 		expect(revived.sessionManager.getCwd()).toBe(projectA);
 		expect(revived.secretsEnabled).toBe(parent.secretsEnabled);
 		// The persisted per-agent cap must survive a cold revive. At depth one,

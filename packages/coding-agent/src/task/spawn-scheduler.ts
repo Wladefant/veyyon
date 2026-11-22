@@ -25,6 +25,7 @@ export interface SpawnCall {
 	defaultAgent: string;
 	signal?: AbortSignal;
 	onUpdate?: AgentToolUpdateCallback<TaskToolDetails>;
+	grantRootSessionId?: string;
 }
 
 /** A spawn of the call with the agent it resolved to. */
@@ -103,6 +104,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
 	if (item.priority !== undefined) spawn.priority = item.priority;
 	if (item.ownershipLease !== undefined) spawn.ownershipLease = item.ownershipLease;
+	if (item.grants !== undefined) spawn.grants = item.grants;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
@@ -417,8 +419,8 @@ export class SpawnScheduler {
 	async runInline(call: SpawnCall, items: TaskItem[]): Promise<AgentToolResult<TaskToolDetails>> {
 		if (items.length === 1) {
 			const params = spawnParamsFor(call.params, items[0], call.defaultAgent);
-			const { toolCallId, signal, onUpdate } = call;
-			return this.#runAdmitted({ toolCallId, params, signal, onUpdate, index: 0, detached: false });
+			const { toolCallId, signal, onUpdate, grantRootSessionId } = call;
+			return this.#runAdmitted({ toolCallId, params, signal, onUpdate, grantRootSessionId, index: 0, detached: false });
 		}
 
 		const startTime = Date.now();
@@ -534,6 +536,7 @@ export class SpawnScheduler {
 			(spawn, _position, workerSignal) =>
 				this.#runAdmitted({
 					toolCallId: call.toolCallId,
+					grantRootSessionId: call.grantRootSessionId,
 					params: spawnParamsFor(call.params, spawn.item, call.defaultAgent),
 					signal: workerSignal,
 					onUpdate: onItemProgress
@@ -631,6 +634,7 @@ export class SpawnScheduler {
 					await reportProgress(`Running background task ${agentId}...`);
 					const result = await runSpawn(this.#session, this.#parentApprovalBypassed, {
 						toolCallId: call.toolCallId,
+						grantRootSessionId: call.grantRootSessionId,
 						params,
 						signal,
 						preAllocatedId: agentId,

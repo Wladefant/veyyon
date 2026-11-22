@@ -4,16 +4,16 @@
  * `send` is fire-and-forget: the bus routes the message to the recipient
  * (waking idle agents with a real turn, reviving parked ones via the
  * lifecycle manager, injecting a non-interrupting aside into busy ones) and
- * returns delivery receipts immediately. Replies are real turns by the
- * recipient, observed with `wait` (or the `await: true` send sugar). `inbox`
- * drains pending messages; `list` shows every addressable peer.
+ * returns a receipt or reports that delivery is still unconfirmed. Replies are
+ * real recipient turns, observed with `wait` or `await: true`.
+ * `inbox` drains pending messages; `list` shows every addressable peer.
  */
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
 import { parametersWireSchema } from "@veyyon/ai/utils/schema/wire";
+import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
 import {
 	type BuildIdentity,
 	formatBuildIdentity,
@@ -36,6 +36,10 @@ import type { ToolSession } from "..";
 import { isIrcEnabled } from "./irc-enabled";
 
 const DEFAULT_IRC_TIMEOUT_MS = 120_000;
+
+// A fire-and-forget send must give the caller its turn back even if the peer
+// cannot finish reviving or persisting the message.
+const IRC_SEND_RECEIPT_TIMEOUT_MS = 3_000;
 
 type IrcNoticeRuntime = {
 	sendSessionNotice: typeof sendSessionNotice;
@@ -102,6 +106,21 @@ function formatIncoming(msg: IrcMessage): string {
 	return `[${msg.id}] ${msg.from} [${source}]${replyTag}: ${msg.body}`;
 }
 
+/**
+ * Bounds the caller's wait without cancelling any delivery the bus started.
+ */
+function awaitSendReceipts(sends: Promise<unknown>, signal?: AbortSignal): Promise<unknown> {
+	const { promise: bound, resolve } = Promise.withResolvers<void>();
+	const stop = () => resolve();
+	const timer = setTimeout(stop, IRC_SEND_RECEIPT_TIMEOUT_MS);
+	if (signal?.aborted) stop();
+	else signal?.addEventListener("abort", stop, { once: true });
+	return Promise.race([sends, bound]).finally(() => {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", stop);
+	});
+}
+
 export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 	readonly name = "irc";
 	readonly approval = "read" as const;
@@ -115,12 +134,9 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		return parametersWireSchema(ircSchema.value);
 	}
 	readonly strict = true;
-	// Only the ops that block observe an interrupt. `list`, `inbox`, a
-	// fire-and-forget `send` and a `send` the tool rejects all return at once,
-	// and handing those the IRC abort signal meant a peer message arriving in the
-	// same batch replaced their result with a "skipped" placeholder: a malformed
-	// send then read as an interrupted wait and the caller never saw what was
-	// wrong with it.
+	// Keep fire-and-forget delivery results out of the IRC wait interrupt path.
+	// The sender must learn whether delivery was attempted instead of seeing
+	// a "skipped" placeholder which could prompt it to send again.
 	readonly interruptible = (args: Partial<IrcParams>): boolean =>
 		args.op === "wait" || (args.op === "send" && args.await === true);
 
@@ -354,17 +370,48 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 			// main UI would then show the same body once per other recipient.
 			// Matched by role, because a driving agent's id names its conversation.
 			const suppressRelay = targetRefs.some(ref => ref.kind === "main");
-			const receipts = await Promise.all(
-				targets.map(target =>
-					bus.send(
-						{ from: senderId, to: target, body: message, replyTo: params.replyTo },
-						// Awaited sends mark the sender as blocked on an answer so a
-						// busy recipient that cannot reach a step boundary (async
-						// disabled) auto-replies instead of stranding the sender.
-						{ expectsReply: params.await || undefined, suppressRelay: suppressRelay || undefined },
-					),
+			const legs: (IrcDeliveryReceipt | undefined)[] = targets.map(() => undefined);
+			const sends = Promise.all(
+				targets.map((target, index) =>
+					bus
+						.send(
+							{ from: senderId, to: target, body: message, replyTo: params.replyTo },
+							// Awaited sends mark the sender as blocked on an answer so a
+							// busy recipient that cannot reach a step boundary (async
+							// disabled) auto-replies instead of stranding the sender.
+							{ expectsReply: params.await || undefined, suppressRelay: suppressRelay || undefined },
+						)
+						.then(receipt => {
+							legs[index] = receipt;
+						}),
 				),
 			);
+			// The bus owns any legs still running when a fire-and-forget send returns.
+			await (params.await ? sends : awaitSendReceipts(sends, signal));
+			const receipts = legs.filter((receipt): receipt is IrcDeliveryReceipt => receipt !== undefined);
+			const receiptLines = receipts.map(receipt =>
+				receipt.outcome === "failed"
+					? `- ${receipt.to}: failed — ${receipt.error ?? "unknown error"}`
+					: `- ${receipt.to}: ${receipt.outcome}`,
+			);
+			const unconfirmed = targets.filter((_, index) => legs[index] === undefined);
+			if (unconfirmed.length > 0) {
+				const cause = signal?.aborted
+					? "The call was interrupted"
+					: `No receipt within ${formatDuration(IRC_SEND_RECEIPT_TIMEOUT_MS)}`;
+				return {
+					content: [
+						{
+							type: "text",
+							text: [
+								`${cause} for ${unconfirmed.join(", ")}. A delivery that already started can still finish, so do not resend.`,
+								...receiptLines,
+							].join("\n"),
+						},
+					],
+					details: { op: "send", from: senderId, to, receipts },
+				};
+			}
 
 			const lines: string[] = [];
 			const delivered = receipts.filter(receipt => receipt.outcome !== "failed");
@@ -375,13 +422,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 			} else {
 				lines.push(`Delivered to ${delivered.length} peer(s):`);
 			}
-			for (const receipt of receipts) {
-				lines.push(
-					receipt.outcome === "failed"
-						? `- ${receipt.to}: failed — ${receipt.error ?? "unknown error"}`
-						: `- ${receipt.to}: ${receipt.outcome}`,
-				);
-			}
+			lines.push(...receiptLines);
 
 			if (params.await && waiting && timeoutMs !== undefined) {
 				lines.push("");

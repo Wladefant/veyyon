@@ -16,6 +16,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@veyyon/utils";
+import { acquireFileLock, type FileLockHandle, tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { ArtifactManager } from "./artifacts";
@@ -62,6 +63,8 @@ import {
 	type SessionLifecycleState,
 	type SessionTitleSource,
 	type SessionTreeNode,
+	SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE,
+	type SubagentLaunchGrant,
 	TITLE_CHANGE_ENTRY_TYPE,
 	type TitleChangeEntry,
 	type UsageStatistics,
@@ -75,6 +78,13 @@ import {
 	type SessionInfo,
 } from "./session-listing";
 import {
+	hasDuplicateJsonMemberNames,
+	parseSubagentLaunchGrantLine,
+	serializeSubagentLaunchGrant,
+	validateSubagentLaunchGrant,
+} from "./session-launch-grants";
+import {
+	forEachFileLine,
 	type LoadedSessionFile,
 	loadEntriesFromFile,
 	loadSessionFile,
@@ -93,7 +103,9 @@ import {
 } from "./session-paths";
 import { prepareEntryForPersistence } from "./session-persistence";
 import {
+	fileObjectIdentity,
 	FileSessionStorage,
+	type JournalSnapshot,
 	MemorySessionStorage,
 	type PinnedSessionReader,
 	type SessionFileBody,
@@ -118,52 +130,6 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
  * bounded is bounded either way.
  */
 const CHUNK_TARGET_CHARS = 1 << 20;
-
-/**
- * JSON.parse silently takes the last duplicate object member. In a strict
- * failed-fork repair this could make a foreign line appear to have our ID.
- * Check raw member names after JSON syntax validation, including escaped-
- * equivalent names; nested objects retain independent name namespaces.
- */
-function hasDuplicateJsonMemberNames(raw: string): boolean {
-	const containers: Array<Set<string> | null> = [];
-	let index = 0;
-	while (index < raw.length) {
-		const char = raw[index];
-		if (char === '"') {
-			const start = index++;
-			while (index < raw.length) {
-				if (raw[index] === "\\") index += 2;
-				else if (raw[index] === '"') {
-					index++;
-					break;
-				} else index++;
-			}
-			const names = containers[containers.length - 1];
-			if (names) {
-				let following = index;
-				while (
-					raw[following] === " " ||
-					raw[following] === "\t" ||
-					raw[following] === "\r" ||
-					raw[following] === "\n"
-				)
-					following++;
-				if (raw[following] === ":") {
-					const name = JSON.parse(raw.slice(start, index)) as string;
-					if (names.has(name)) return true;
-					names.add(name);
-				}
-			}
-			continue;
-		}
-		if (char === "{") containers.push(new Set<string>());
-		else if (char === "[") containers.push(null);
-		else if (char === "}" || char === "]") containers.pop();
-		index++;
-	}
-	return false;
-}
 
 /**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is
@@ -216,6 +182,121 @@ function fileSafeTimestamp(iso: string): string {
 
 function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFileStem(sessionFile) : null;
+}
+
+const NATIVE_OWNER_LOCK = ".lock";
+const NATIVE_OWNER_TRANSITION = `${NATIVE_OWNER_LOCK}.transition`;
+const nativeRelocationGate = (directory: string): string => `${directory}.native-relocation`;
+// Keep leases outside the artifact tree. Close can retire its lease without
+// the relocation gate, and a concurrent move cannot carry off a retiring lease.
+const nativeOwnerDirectory = (directory: string): string => `${directory}.native-owners`;
+
+// Leave room for one turn to finish filesystem work after its retry deadline.
+const NATIVE_RELOCATION_WAIT = { contentionTimeoutMs: 5_000, queueWaitMs: 15_000 };
+const NATIVE_OPEN_GATE_OPTIONS = {
+	...NATIVE_RELOCATION_WAIT,
+	queueContext: { owner: "native-transcript", site: "native-transcript-open" },
+};
+const NATIVE_MOVE_SOURCE_GATE_OPTIONS = {
+	...NATIVE_RELOCATION_WAIT,
+	queueContext: { owner: "session-move", site: "native-relocation-source" },
+};
+const NATIVE_MOVE_TARGET_GATE_OPTIONS = {
+	retries: 1,
+	queueWaitMs: 1,
+	queueContext: { owner: "session-move", site: "native-relocation-target" },
+};
+const NATIVE_OWNER_LOCK_OPTIONS = { retries: 1, queueWaitMs: 1 };
+
+interface NativeOwnerRequest {
+	name: string;
+	resolve(handle: FileLockHandle): void;
+	reject(error: unknown): void;
+}
+
+// Only opens awaiting the same gate acquisition share a batch. Arrivals during
+// publication take a new turn, so a queued move does not wait for a growing batch.
+const pendingNativeOwnerBatches = new Map<string, NativeOwnerRequest[]>();
+
+function reserveNativeOwner(transcript: string): Promise<FileLockHandle> {
+	const directory = path.dirname(transcript);
+	const { promise, resolve, reject } = Promise.withResolvers<FileLockHandle>();
+	const request = { name: path.basename(transcript), resolve, reject };
+	const pending = pendingNativeOwnerBatches.get(directory);
+	if (pending) {
+		pending.push(request);
+	} else {
+		const batch = [request];
+		pendingNativeOwnerBatches.set(directory, batch);
+		void publishNativeOwners(directory, batch);
+	}
+	return promise;
+}
+
+async function publishNativeOwners(directory: string, batch: NativeOwnerRequest[]): Promise<void> {
+	let outcomes: PromiseSettledResult<FileLockHandle>[] | undefined;
+	try {
+		const gate = await acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS);
+		pendingNativeOwnerBatches.delete(directory);
+		try {
+			// Publish under the same gate that protects a move's owner scan and rename.
+			const owners = nativeOwnerDirectory(directory);
+			await fs.promises.mkdir(owners, { recursive: true });
+			outcomes = await Promise.allSettled(
+				batch.map(({ name }) => acquireFileLock(path.join(owners, name), NATIVE_OWNER_LOCK_OPTIONS)),
+			);
+		} finally {
+			await gate.release();
+		}
+	} catch (error) {
+		if (pendingNativeOwnerBatches.get(directory) === batch) pendingNativeOwnerBatches.delete(directory);
+		if (outcomes) {
+			// If returning the gate failed, no caller received these leases.
+			await Promise.allSettled(
+				outcomes.flatMap(result => (result.status === "fulfilled" ? [result.value.release()] : [])),
+			);
+		}
+		for (const request of batch) request.reject(error);
+		return;
+	}
+	for (const [index, result] of outcomes.entries()) {
+		const request = batch[index]!;
+		if (result.status === "fulfilled") request.resolve(result.value);
+		else request.reject(result.reason);
+	}
+}
+
+async function canonicalArtifactDirectory(directory: string): Promise<string> {
+	return fs.promises.realpath(directory).catch(async error => {
+		if (!isEnoent(error)) throw error;
+		return path.join(await fs.promises.realpath(path.dirname(directory)), path.basename(directory));
+	});
+}
+
+function nativeOwnerLockNames(directory: string): Promise<string[]> {
+	return fs.promises
+		.readdir(directory)
+		.then(names => names.filter(name => name.endsWith(NATIVE_OWNER_LOCK) || name.endsWith(NATIVE_OWNER_TRANSITION)))
+		.catch(error => {
+			if (!isEnoent(error)) throw error;
+			return [];
+		});
+}
+
+async function assertNoNativeOwners(directory: string): Promise<void> {
+	const owners = nativeOwnerDirectory(directory);
+	const names = await nativeOwnerLockNames(owners);
+	// Let the lock utility retire dead owners; never unlink a lease ourselves.
+	for (const name of names) {
+		const suffix = name.endsWith(NATIVE_OWNER_TRANSITION) ? NATIVE_OWNER_TRANSITION : NATIVE_OWNER_LOCK;
+		const transcript = name.slice(0, -suffix.length);
+		const owner = await tryWithFileLock(path.join(owners, transcript), async () => {});
+		if (!owner.acquired) throw new Error(`Cannot move session: active native transcript ${transcript}.`);
+	}
+	// Acquisition can succeed even if lock retirement later reports an error.
+	if (names.length && (await nativeOwnerLockNames(owners)).length) {
+		throw new Error(`Cannot move session: active native transcript in ${directory}.`);
+	}
 }
 
 /**
@@ -322,6 +403,7 @@ export type ReadonlySessionManager = Pick<
 	| "getEntriesThroughCheckpoint"
 	| "getTree"
 	| "getUsageStatistics"
+	| "getSubagentLaunchGrants"
 	| "putBlob"
 	| "putBlobSync"
 >;
@@ -331,6 +413,15 @@ export interface SessionManagerNoticeOptions {
 	operatorNotices?: OperatorNotices;
 	/** Canonical granularity controlling additive session telemetry. */
 	instrumentation?: InstrumentationLevel;
+}
+
+interface SessionOpenOptions extends SessionManagerNoticeOptions {
+	initialCwd?: string;
+	suppressBreadcrumb?: boolean;
+	/** Reserve this transcript until close. The caller must not switch to another transcript. */
+	exclusiveOwner?: boolean;
+	/** Refuse to bind a new launch to a transcript that already exists. Requires exclusive ownership. */
+	requireNew?: boolean;
 }
 
 export interface SessionManagerStateSnapshot {
@@ -351,6 +442,9 @@ export interface SessionManagerStateSnapshot {
 	lifecycleEnded: boolean;
 	header: SessionHeader;
 	entries: SessionEntry[];
+	receiptLines: string[];
+	grants: SubagentLaunchGrant[];
+	grantsAmbiguous: string | undefined;
 	publishedFileState?: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null;
 }
 
@@ -464,6 +558,7 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
+	#exclusiveOwner: { handle: FileLockHandle; closing?: Promise<void> } | undefined;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
 	#diskTail: Promise<void> = Promise.resolve();
 	#diskFailure: Error | undefined;
@@ -522,6 +617,14 @@ export class SessionManager {
 	 */
 	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null =
 		null;
+	/** Raw receipt lines this journal holds, in file order: ours and any preserved as read. Published in the head. */
+	#receiptLines: string[] = [];
+	/** The receipts in {@link #receiptLines} that validate for this root. */
+	#grants: SubagentLaunchGrant[] = [];
+	/** Why {@link #grants} cannot be trusted (malformed, stale, or duplicate receipt), or undefined. */
+	#grantsAmbiguous: string | undefined;
+	/** Serialize grant publication and rollback, independently of other entry writers. */
+	#grantTail = Promise.resolve();
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
@@ -817,7 +920,13 @@ export class SessionManager {
 		const lines: PublishedLines = { base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
 		yield header;
-		let bytes = yield* this.#entryLines(lines, 0, SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8"));
+		let offset = SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8");
+		for (const receipt of this.#receiptLines) {
+			const line = `${receipt}\n`;
+			offset += Buffer.byteLength(line, "utf-8");
+			yield line;
+		}
+		let bytes = yield* this.#entryLines(lines, 0, offset);
 		for (const raw of foreign) {
 			const line = raw.endsWith("\n") ? raw : `${raw}\n`;
 			bytes += Buffer.byteLength(line, "utf-8");
@@ -917,10 +1026,12 @@ export class SessionManager {
 		sessionFile: string,
 		epoch: number,
 		updatedFrom: number,
+		sourceSnapshot: JournalSnapshot | null | undefined,
 		canPublishSource?: (sourcePath?: string) => boolean,
 	): Promise<number> {
 		const options = {
 			commitGuard: (sourcePath?: string) => this.#diskEpoch === epoch && (canPublishSource?.(sourcePath) ?? true),
+			sourceSnapshot,
 		};
 		const plan = this.#tailRewritePlan(updatedFrom);
 		if (!plan || !this.#storage.rewriteTailAtomic) {
@@ -934,7 +1045,7 @@ export class SessionManager {
 		// The first entry's line starts where the old title slot and header end. A header of another
 		// length moves every kept line by the difference, once, before the tail is written.
 		const headBytes = lines.entryOffsets[0]!;
-		const head = this.#titleSlotLine() + this.#headerLine();
+		const head = this.#titleSlotLine() + this.#headerLine() + this.#receiptLines.map(line => `${line}\n`).join("");
 		const shift = Buffer.byteLength(head, "utf-8") - headBytes;
 		if (shift !== 0) {
 			const offsets = lines.entryOffsets;
@@ -991,13 +1102,12 @@ export class SessionManager {
 	 * unknown identity (a backend that reports none) answers `false` and pays for
 	 * the read.
 	 */
-	#fileIsExactlyAsPublished(): boolean {
+	#fileIsExactlyAsPublished(current?: Pick<SessionStorageStat, "identity" | "size">): boolean {
 		const expected = this.#publishedFileState;
 		if (expected === null || !this.#sessionFile) return false;
 		if (expected.identity === undefined) return false;
-		let current: SessionStorageStat;
 		try {
-			current = this.#storage.statSync(this.#sessionFile);
+			current ??= this.#storage.statSync(this.#sessionFile);
 		} catch {
 			return false;
 		}
@@ -1008,18 +1118,24 @@ export class SessionManager {
 	 * Re-read the session file and record any line this manager never wrote, so
 	 * the publish that follows carries it instead of deleting it.
 	 *
-	 * A read failure leaves the previous knowledge in place rather than blocking
-	 * the publish: losing the elision a rewrite was asked for is worse than
-	 * carrying a slightly stale foreign tail, and an unreadable file is reported
-	 * by the read paths already.
+	 * For file rewrites, return the exact boundary we inspected. Publication
+	 * must replay anything appended after that boundary. If we cannot read
+	 * the snapshot, leave the original journal in place.
 	 *
 	 * The read is skipped when the file is still byte-for-byte the one we
 	 * published, which is the ordinary case: a second writer is rare, and reading
 	 * a large transcript back to learn nothing is the single most expensive step
 	 * of a rewrite (246ms and 322MiB of a 253MiB session's 778ms and 1056MiB).
 	 */
-	async #refreshForeignLines(requireReadable = false): Promise<void> {
+	async #refreshForeignLines(requireReadable = false): Promise<JournalSnapshot | null | undefined> {
 		if (!this.#persist || !this.#sessionFile) return;
+		if (!requireReadable && this.#storage instanceof FileSessionStorage) {
+			const snapshot = this.#storage.snapshotJournal(this.#sessionFile);
+			if (snapshot && !this.#fileIsExactlyAsPublished(snapshot)) {
+				await this.#refreshFileForeignLines(this.#sessionFile, snapshot);
+			}
+			return snapshot;
+		}
 		// A fixed-width title update writes in place: inode and byte count stay the
 		// same. Strict failed-fork recovery must inspect its actual contents.
 		if (!requireReadable && this.#fileIsExactlyAsPublished()) return;
@@ -1032,7 +1148,7 @@ export class SessionManager {
 		try {
 			// Strict failed-fork recovery may not fall back to a lossy text reader:
 			// a backend without byte-strict UTF-8 support cannot prove it retained
-			// independent source bytes. Ordinary rewrites remain best-effort.
+			// independent source bytes. Other backends remain best-effort.
 			if (requireReadable) {
 				if (!this.#storage.readTextStrict) throw new Error("Cannot verify current session journal");
 				text = await this.#storage.readTextStrict(this.#sessionFile);
@@ -1044,6 +1160,64 @@ export class SessionManager {
 			return;
 		}
 		this.#adoptForeignLines(text, requireReadable);
+	}
+
+	async #refreshFileForeignLines(file: string, snapshot: JournalSnapshot): Promise<void> {
+		const foreign: string[] = [];
+		let liveWriterEntries = 0;
+		let ownReceipts: Map<string, number> | undefined;
+		const aborted = this.#abortedForkLifecycleLinesByFile.get(file);
+		const handle = await fs.promises.open(
+			file,
+			fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0),
+		);
+		try {
+			const stats = await handle.stat();
+			if (!stats.isFile() || fileObjectIdentity(stats) !== snapshot.identity || stats.size < snapshot.size) {
+				throw new Error(`Session journal was replaced or truncated during refresh: ${file}`);
+			}
+			let firstLine = true;
+			await forEachFileLine(
+				handle,
+				0,
+				(bytes, start, end) => {
+					if (firstLine) {
+						firstLine = false;
+						if (end - start >= 3 && bytes[start] === 0xef && bytes[start + 1] === 0xbb && bytes[start + 2] === 0xbf) {
+							start += 3;
+						}
+					}
+					if (start === end) return;
+					// Decode only the prefix of ordinary entries we already hold.
+					const leadingId = LEADING_ENTRY_ID.exec(bytes.toString("utf8", start, Math.min(start + 64, end)))?.[1];
+					if (leadingId !== undefined && this.#isOwnId(leadingId)) return;
+					const raw = bytes.toString("utf8", start, end);
+					let entry: { id?: unknown; type?: unknown; customType?: unknown } | null;
+					try {
+						entry = JSON.parse(raw);
+					} catch {
+						return;
+					}
+					if (entry?.type === SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE) {
+						// Match exact bytes with multiplicity: a duplicate must remain visible
+						// to the receipt validator on reopen, not disappear as an owned line.
+						ownReceipts ??= this.#ownReceiptCounts();
+						this.#retainForeignReceipt(raw, ownReceipts, foreign);
+						return;
+					}
+					const id = entry?.id;
+					if (typeof id !== "string" || !id || this.#isOwnId(id) || aborted?.has(id)) return;
+					if (entry?.type === "session" || entry?.type === SESSION_TITLE_SLOT_ENTRY_TYPE) return;
+					foreign.push(raw);
+					if (entry?.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries++;
+				},
+				undefined,
+				snapshot.size,
+			);
+		} finally {
+			await handle.close();
+		}
+		this.#recordForeignLines(foreign, liveWriterEntries);
 	}
 
 	/**
@@ -1081,6 +1255,25 @@ export class SessionManager {
 			return;
 		}
 		this.#adoptForeignLines(text, repairingFailedFork);
+	}
+
+	#ownReceiptCounts(): Map<string, number> {
+		const counts = new Map<string, number>();
+		for (const line of this.#receiptLines) counts.set(line, (counts.get(line) ?? 0) + 1);
+		return counts;
+	}
+
+	#retainForeignReceipt(raw: string, ownReceipts: Map<string, number>, foreign: string[], strict = false): void {
+		const ownCount = ownReceipts.get(raw) ?? 0;
+		if (ownCount > 0) {
+			ownReceipts.set(raw, ownCount - 1);
+			return;
+		}
+		if (strict) throw new Error("Cannot preserve unrecognized subagent launch grant during failed-fork repair");
+		// Preserve even invalid receipts verbatim. Only a fresh load can validate
+		// the complete receipt set and its identity collisions.
+		foreign.push(raw);
+		this.#grantsAmbiguous = "the journal contains an unrecognized subagent launch grant";
 	}
 
 	/**
@@ -1129,6 +1322,7 @@ export class SessionManager {
 				if (this.#isOwnId(entry.id)) missingPublishedIds.add(entry.id);
 			}
 		}
+		let ownReceipts: Map<string, number> | undefined;
 		const journalLines = text.split("\n");
 		for (let lineIndex = 0; lineIndex < journalLines.length; lineIndex++) {
 			const raw = journalLines[lineIndex]!;
@@ -1202,6 +1396,13 @@ export class SessionManager {
 			if (requireCompleteHistory && !seenSourceHeader) {
 				throw new Error("Cannot preserve journal entry before source header during failed-fork repair");
 			}
+			if (parsed.type === SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE) {
+				// Our receipts are published from memory in the head. Any other receipt is another writer's:
+				// carried as-is, never adopted, and refused outright by a strict repair.
+				ownReceipts ??= this.#ownReceiptCounts();
+				this.#retainForeignReceipt(raw, ownReceipts, foreign, requireCompleteHistory);
+				continue;
+			}
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
 			if (requireCompleteHistory && !id) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
@@ -1253,6 +1454,10 @@ export class SessionManager {
 		if (requireCompleteHistory && this.#hasTitleSlot && !seenTitleSlot) {
 			throw new Error("Cannot preserve missing session title slot during failed-fork repair");
 		}
+		this.#recordForeignLines(foreign, liveWriterEntries);
+	}
+
+	#recordForeignLines(foreign: string[], liveWriterEntries: number): void {
 		this.#foreignLines = foreign;
 		if (this.#reportedForeignWriter) return;
 		// A `session_exit` record is the last thing a run writes, so a foreign one is
@@ -1429,15 +1634,15 @@ export class SessionManager {
 	 * Callers then skip their post-publish state updates.
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
-		this.#atomicRewriteFenceEpoch = epoch;
 		const sessionFile = this.#sessionFile;
 		if (!sessionFile) return false;
+		this.#atomicRewriteFenceEpoch = epoch;
 		const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
 		const runRewrite = async (): Promise<boolean> => {
 			try {
 				do {
 					this.#atomicRewriteDirty = false;
-					await this.#closeWriterHandle();
+					if (this.#writer) await this.#closeWriterHandle();
 					if (!this.#sessionFile || this.#sessionFile !== sessionFile) return false;
 					if (this.#diskEpoch !== epoch) return false;
 					let originalState: SessionStorageStat | undefined;
@@ -1466,7 +1671,7 @@ export class SessionManager {
 							return false;
 						}
 					};
-					await this.#refreshForeignLines(repairingFailedFork);
+					const sourceSnapshot = await this.#refreshForeignLines(repairingFailedFork);
 					if (repairingFailedFork && !sourceUnchanged()) {
 						throw new Error("Original journal changed during failed-fork repair");
 					}
@@ -1482,6 +1687,7 @@ export class SessionManager {
 							sessionFile,
 							epoch,
 							updatedFrom,
+							sourceSnapshot,
 							repairingFailedFork
 								? (sourcePath?: string) => {
 										const unchanged = sourceUnchanged(sourcePath);
@@ -1524,10 +1730,21 @@ export class SessionManager {
 				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 			}
 		};
-		if (this.#storage.withJournalLock) {
-			return await this.#storage.withJournalLock(sessionFile, runRewrite);
+		try {
+			// Pending appends may already be queued behind another journal holder.
+			// Close before queueing the rewrite, or a later append could queue
+			// behind the rewrite that waits for it. The fence absorbs new appends.
+			await this.#closeWriterHandle();
+			if (this.#diskEpoch !== epoch) return false;
+			if (this.#storage.withJournalLock) {
+				return await this.#storage.withJournalLock(sessionFile, runRewrite);
+			}
+			return await runRewrite();
+		} catch (error) {
+			// Failed before runRewrite's own finally could release the fence: release it here.
+			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
+			throw error;
 		}
-		return await runRewrite();
 	}
 
 	/**
@@ -1957,6 +2174,7 @@ export class SessionManager {
 
 		this.#entries = [];
 		this.#index.clear();
+		this.#clearSubagentLaunchGrants();
 		this.#forgetForeignWriter();
 		this.#nextSequence = 1;
 		this.#lifecycleStarted = false;
@@ -2002,6 +2220,61 @@ export class SessionManager {
 		// Every loaded id is ours from here on, including one a later rewrite drops
 		// on purpose: that is what keeps the foreign-line merge from resurrecting it.
 		this.#forgetForeignWriter();
+	}
+
+	/** Forget every receipt: a fork, branch or new session starts with none of its source's. */
+	#clearSubagentLaunchGrants(): void {
+		this.#receiptLines = [];
+		this.#grants = [];
+		this.#grantsAmbiguous = undefined;
+	}
+
+	/**
+	 * Adopt the receipt lines a load read, keeping each line verbatim for the next publish. Receipts are
+	 * trusted only when every one validates, names this root, and has identities no other receipt holds.
+	 * Otherwise the session fails closed: reads and new receipts are refused until the journal is repaired.
+	 */
+	#adoptSubagentLaunchGrants(lines: readonly string[], rootSessionId: string): void {
+		const grants: SubagentLaunchGrant[] = [];
+		let problem: string | undefined;
+		for (const line of lines) {
+			const checked = parseSubagentLaunchGrantLine(line);
+			if (!checked.ok) {
+				problem ??= checked.problem;
+				continue;
+			}
+			const grant = checked.grant;
+			if (grant.rootSessionId !== rootSessionId) {
+				problem ??= "a receipt names another root session";
+				continue;
+			}
+			if (grant.childSessionId === rootSessionId || grant.agentId === rootSessionId) {
+				problem ??= "a receipt names the root session as its own child";
+				continue;
+			}
+			if (
+				(this.#sessionFile !== undefined && path.resolve(grant.sessionFile) === path.resolve(this.#sessionFile)) ||
+				grants.some(
+					held =>
+						held.agentId === grant.agentId ||
+						held.childSessionId === grant.childSessionId ||
+						held.sessionFile === grant.sessionFile,
+				)
+			) {
+				problem ??= "two receipts share an identity";
+				continue;
+			}
+			grants.push(grant);
+		}
+		this.#receiptLines = [...lines];
+		this.#grants = grants;
+		this.#grantsAmbiguous = problem;
+		if (problem === undefined) return;
+		logger.warn("Session subagent launch grants are unverified", { sessionFile: this.#sessionFile, problem });
+		this.#operatorNotices?.error(
+			"session",
+			`Subagent launch grants in ${this.#sessionFile} are unverified (${problem}). Child launches from this session are refused until its journal is repaired.`,
+		);
 	}
 
 	#allocateSequence(): number {
@@ -2183,6 +2456,9 @@ export class SessionManager {
 			// active header/array wholesale, so rollback needs no deep clone.
 			header: this.#header,
 			entries: this.#entries.slice(),
+			receiptLines: this.#receiptLines.slice(),
+			grants: this.#grants.slice(),
+			grantsAmbiguous: this.#grantsAmbiguous,
 			publishedFileState: this.#publishedFileState
 				? {
 						size: this.#publishedFileState.size,
@@ -2226,6 +2502,9 @@ export class SessionManager {
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
+		this.#receiptLines = snapshot.receiptLines.slice();
+		this.#grants = snapshot.grants.slice();
+		this.#grantsAmbiguous = snapshot.grantsAmbiguous;
 		if (snapshot.publishedFileState !== undefined) {
 			this.#publishedFileState = snapshot.publishedFileState
 				? {
@@ -2321,6 +2600,7 @@ export class SessionManager {
 
 		if (cold !== undefined) this.#cold = cold.payloads;
 		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[], cold?.usage);
+		this.#adoptSubagentLaunchGrants(loaded.receiptLines, header.id);
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
@@ -3027,6 +3307,7 @@ export class SessionManager {
 		this.#clearDiskError();
 		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
+		this.#clearSubagentLaunchGrants();
 
 		this.#setSessionId(nextSessionId);
 		this.#sessionFile = nextSessionFile;
@@ -3123,6 +3404,41 @@ export class SessionManager {
 					? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
 					: computeDefaultSessionDir(resolvedCwd, this.#storage));
 
+		if (this.#persist && this.#sessionFile && this.#storage instanceof FileSessionStorage) {
+			const nextFile = path.join(nextSessionDir, path.basename(this.#sessionFile));
+			const sourceDir = sessionFileStem(this.#sessionFile);
+			const relocating = nextFile !== this.#sessionFile;
+			if (relocating && this.#exclusiveOwner) throw new Error("Cannot move an active native transcript.");
+			if (relocating && sourceDir !== this.#sessionFile) {
+				await fs.promises.mkdir(path.dirname(sourceDir), { recursive: true });
+				const source = await canonicalArtifactDirectory(sourceDir);
+				// The gate is outside the tree being moved. Hold it across the scan,
+				// rename and header rewrite, including storage rollback on rewrite failure.
+				return withFileLock(
+					nativeRelocationGate(source),
+					async () => {
+						await assertNoNativeOwners(source);
+						await fs.promises.mkdir(nextSessionDir, { recursive: true });
+						const target = await canonicalArtifactDirectory(sessionFileStem(nextFile));
+						if (target === source) return this.#moveTo(resolvedCwd, nextSessionDir);
+						// Fail fast rather than deadlock with a competing move in the opposite direction.
+						return withFileLock(
+							nativeRelocationGate(target),
+							async () => {
+								await assertNoNativeOwners(target);
+								await this.#moveTo(resolvedCwd, nextSessionDir);
+							},
+							NATIVE_MOVE_TARGET_GATE_OPTIONS,
+						);
+					},
+					NATIVE_MOVE_SOURCE_GATE_OPTIONS,
+				);
+			}
+		}
+		return this.#moveTo(resolvedCwd, nextSessionDir);
+	}
+
+	async #moveTo(resolvedCwd: string, nextSessionDir: string): Promise<void> {
 		let sessionFileExisted = false;
 		const previousCwd = this.#cwd;
 		const previousSessionDir = this.#sessionDir;
@@ -3293,6 +3609,33 @@ export class SessionManager {
 		if (this.#foreignLines.length > 0)
 			throw new Error("Operator-answer journal is stale; reopen session before accepting");
 		if (this.#fileIsExactlyAsPublished()) return;
+		// The append path records its expected byte count before a contended writer
+		// reaches disk. Drain only this manager's writer before treating that gap
+		// as foreign history. Do not rewrite or adopt the file to make it match.
+		const writer = this.#writer;
+		if (writer?.isOpen()) {
+			const sessionFile = this.#sessionFile;
+			const sessionId = this.getSessionId();
+			const timeout = Promise.withResolvers<never>();
+			const timer = setTimeout(() => {
+				timeout.reject(new Error("Operator-answer journal is stale: timed out draining owned appends"));
+			}, 1_000);
+			try {
+				for (;;) {
+					const publishedSize = this.#publishedFileState?.size;
+					await Promise.race([writer.flush(), timeout.promise]);
+					if (this.#sessionFile !== sessionFile || this.getSessionId() !== sessionId)
+						throw new Error("Operator-answer session changed before journaling");
+					if (this.#foreignLines.length > 0)
+						throw new Error("Operator-answer journal is stale; reopen session before accepting");
+					if (this.#fileIsExactlyAsPublished()) return;
+					// A flush covers one snapshot of the writer's tail.
+					if (this.#writer !== writer || this.#publishedFileState?.size === publishedSize) break;
+				}
+			} finally {
+				clearTimeout(timer);
+			}
+		}
 		const state = this.#storage.existsStateSync(this.#sessionFile);
 		if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
 		if (state !== "present") throw new Error("Cannot verify current session journal");
@@ -3374,6 +3717,7 @@ export class SessionManager {
 		if (this.#index.leafId() !== capturedLeafId) return [];
 		if (loaded.cold !== undefined) this.#cold = loaded.cold.payloads;
 		this.#applyEntries(header, entries, loaded.cold?.usage);
+		this.#adoptSubagentLaunchGrants(loaded.receiptLines, header.id);
 		this.#lifecycleStarted = lifecycleStarted;
 		this.#lifecycleEnded = lifecycleEnded;
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
@@ -3494,7 +3838,16 @@ export class SessionManager {
 	}
 
 	/** Flush, then close the append writer. */
-	async close(): Promise<void> {
+	close(): Promise<void> {
+		const owner = this.#exclusiveOwner;
+		if (!owner) return this.#close();
+		if (!owner.closing) {
+			owner.closing = this.#close().finally(() => owner.handle.release());
+		}
+		return owner.closing;
+	}
+
+	async #close(): Promise<void> {
 		this.#endLifecycle("closed");
 		if (!this.#persist) return;
 		// A fault latched earlier in the session leaves entries that reached memory and
@@ -3954,6 +4307,100 @@ export class SessionManager {
 	}
 
 	/**
+	 * Durably record that this root authorized a child launch for the grants in `record`. Resolves only after
+	 * the receipt is published to this root's journal. Rejects, and keeps nothing in memory, when the receipt
+	 * is invalid, names another root, collides with this root's own identities, repeats an identity already
+	 * recorded, or the journal's receipts are unverified.
+	 */
+	async appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
+		const sessionFile = this.#sessionFile;
+		const publish = this.#grantTail.then(() => this.#publishSubagentLaunchGrant(record, sessionFile));
+		this.#grantTail = publish.catch(() => {});
+		return publish;
+	}
+
+	async #publishSubagentLaunchGrant(record: SubagentLaunchGrant, sessionFile: string | undefined): Promise<void> {
+		if (!this.#persist || !sessionFile || this.#sessionFile !== sessionFile) {
+			throw new Error("Cannot record a subagent launch grant in a non-persistent session");
+		}
+		if (this.#grantsAmbiguous !== undefined) {
+			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
+		}
+		const checked = validateSubagentLaunchGrant(record);
+		if (!checked.ok) throw new Error(`Invalid subagent launch grant: ${checked.problem}`);
+		const grant = checked.grant;
+		if (grant.rootSessionId !== this.#sessionId) {
+			throw new Error("Subagent launch grant names a different root session");
+		}
+		const rootName = path.basename(sessionFile);
+		const rootDir = await fs.promises.realpath(path.dirname(sessionFile));
+		if (
+			this.#sessionFile !== sessionFile ||
+			this.#sessionId !== grant.rootSessionId ||
+			path.basename(path.dirname(rootDir)).toLowerCase() !== "sessions" ||
+			!rootName.endsWith(`_${grant.rootSessionId}.jsonl`) ||
+			path.dirname(grant.sessionFile) !== path.join(rootDir, sessionFileStem(rootName))
+		) {
+			throw new Error("Subagent launch grants require the canonical root and child journal paths");
+		}
+		if (
+			grant.childSessionId === this.#sessionId ||
+			grant.agentId === this.#sessionId ||
+			path.resolve(grant.sessionFile) === path.resolve(this.#sessionFile)
+		) {
+			throw new Error("Subagent launch grant identity collides with the root session");
+		}
+		for (const held of this.#grants) {
+			if (
+				held.agentId === grant.agentId ||
+				held.childSessionId === grant.childSessionId ||
+				held.sessionFile === grant.sessionFile
+			) {
+				throw new Error("Subagent launch grant repeats an identity already recorded for this root");
+			}
+		}
+		const epoch = this.#diskEpoch;
+		const previousLines = this.#receiptLines;
+		const previousGrants = this.#grants;
+		this.#receiptLines = [...previousLines, serializeSubagentLaunchGrant(grant)];
+		this.#grants = [...previousGrants, grant];
+		this.#forceFileCreation = true;
+		try {
+			// The file backend waits for the replacement to be durable before we acknowledge the receipt.
+			await this.#rewriteAtomically(this.#entries.length);
+			if (
+				this.#diskEpoch !== epoch ||
+				this.#sessionFile !== sessionFile ||
+				this.#sessionId !== grant.rootSessionId ||
+				!this.#fileIsCurrent ||
+				this.#rewriteRequired
+			) {
+				throw new Error("Subagent launch grant was not published to the session journal");
+			}
+		} catch (error) {
+			if (this.#sessionFile === sessionFile && this.#sessionId === grant.rootSessionId) {
+				this.#receiptLines = previousLines;
+				this.#grants = previousGrants;
+			}
+			throw error;
+		}
+	}
+
+	/**
+	 * This root's verified launch receipts. Throws, rather than answering, while the journal's receipts are
+	 * unverified, so a caller cannot dispatch on a receipt set it cannot trust.
+	 */
+	getSubagentLaunchGrants(): SubagentLaunchGrant[] {
+		if (this.#grantsAmbiguous !== undefined) {
+			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
+		}
+		return this.#grants.map(grant => ({
+			...grant,
+			grants: { mergeRepos: [...grant.grants.mergeRepos], dismissRepos: [...grant.grants.dismissRepos] },
+		}));
+	}
+
+	/**
 	 * Append an effective-settings snapshot recording the resolved config that
 	 * governed the run. `kind: "full"` is the complete config written at session
 	 * start; `kind: "diff"` carries only keys that changed since the prior snapshot.
@@ -4342,6 +4789,7 @@ export class SessionManager {
 		this.#titleUpdatedAt = timestamp;
 		this.#hasTitleSlot = true;
 		this.#index.rebuild(this.#entries);
+		this.#clearSubagentLaunchGrants();
 		// A branch is a new file holding a prefix of the source: the source's foreign
 		// tail stays behind, and the prefix we kept is ours here.
 		this.#forgetForeignWriter();
@@ -4539,12 +4987,35 @@ export class SessionManager {
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: {
-			initialCwd?: string;
-			suppressBreadcrumb?: boolean;
-			operatorNotices?: OperatorNotices;
-			instrumentation?: InstrumentationLevel;
-		},
+		options?: SessionOpenOptions,
+	): Promise<SessionManager> {
+		if (!options?.exclusiveOwner) return SessionManager.#open(filePath, sessionDir, storage, options);
+		const resolved = path.resolve(filePath);
+		const parent = path.dirname(resolved);
+		await fs.promises.mkdir(parent, { recursive: true });
+		const transcript = await fs.promises.realpath(resolved).catch(async error => {
+			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
+			throw error;
+		});
+		const handle = await reserveNativeOwner(transcript);
+		try {
+			if (options.requireNew && storage.existsStateSync(transcript) !== "absent") {
+				throw new Error("A new launch grant requires a fresh child transcript");
+			}
+			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
+			manager.#exclusiveOwner = { handle };
+			return manager;
+		} catch (error) {
+			await handle.release();
+			throw error;
+		}
+	}
+
+	static async #open(
+		filePath: string,
+		sessionDir: string | undefined,
+		storage: SessionStorage,
+		options: SessionOpenOptions | undefined,
 	): Promise<SessionManager> {
 		await assertNotTerminalOwned(filePath);
 		const loaded = await loadSessionFile(filePath, storage, {
@@ -4582,9 +5053,9 @@ export class SessionManager {
 	/**
 	 * Lock-free peek for cold agent revival: returns the recorded working
 	 * directory (session header) and the latest `session_init` contract (system
-	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
-	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
-	 * null when the file can't be read, and reports it first unless the file is
+	 * prompt / tools / output schema) without reserving exclusive ownership. The
+	 * caller must open the transcript exclusively before it attaches a native agent.
+	 * Returns null when the file can't be read, and reports it first unless the file is
 	 * simply absent, so an unreadable session is not silently a missing one;
 	 * `init` is null for files written before `session_init` was recorded (no
 	 * faithful contract to rebuild from).

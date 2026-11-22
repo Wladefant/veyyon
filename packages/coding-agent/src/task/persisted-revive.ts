@@ -13,6 +13,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import type { EventBus } from "../utils/event-bus";
 import { createMCPProxyTools, createSubagentSettingsForCwd } from "./executor";
+import { openNativeTranscript, readNativeReviveInit } from "./native-transcript";
 
 /**
  * Ambient context the reviver needs at revive time. The parent artifact
@@ -81,78 +82,65 @@ export function createPersistedAgentReviverFactory(ctx: PersistedAgentReviveCont
 			taskDepth++;
 			parentId = parent?.parentId;
 		}
-		return async () => {
-			// Re-peek and re-open on EVERY invocation. This closure is reusable,
-			// and /move rewrites the persisted header after the factory first
-			// discovered it; retaining the factory-time peek would resurrect the
-			// old workspace and its project policy forever.
-			const current = await SessionManager.peekSessionInit(sessionFile);
-			if (!current?.init) {
-				throw new Error(`Cannot revive ${ref.id}: persisted session contract is missing`);
-			}
-			try {
-				await fs.stat(current.cwd);
-			} catch {
-				throw new Error(`Cannot revive ${ref.id}: persisted working directory is unavailable`);
-			}
-			const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
-				initialCwd: current.cwd,
-				suppressBreadcrumb: true,
+		return () =>
+			openNativeTranscript(sessionFile, peek.cwd, async reopened => {
+				// Read the current contract under the same ownership that protects the live session.
+				const init = await readNativeReviveInit(reopened, ref.id);
+				const runtimeCwd = reopened.getCwd();
+				const artifactManager = ctx.session.sessionManager.getArtifactManager();
+				if (artifactManager) reopened.adoptArtifactManager(artifactManager);
+				// Reuse the parent's live MCP connections via proxy tools (no
+				// re-discovery), exactly as the executor does for live agents.
+				const mcpManager = mcpManagerInstance();
+				const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
+				const { createAgentSession } = await import("../sdk");
+				const { session } = await createAgentSession({
+					cwd: runtimeCwd,
+					authStorage: ctx.authStorage,
+					modelRegistry: ctx.modelRegistry,
+					settings: await createSubagentSettingsForCwd(
+						ctx.settings,
+						runtimeCwd,
+						init.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
+					),
+					eventBus: ctx.eventBus,
+					sessionManager: reopened,
+					agentId: ref.id,
+					agentDisplayName: ref.displayName,
+					parentTaskPrefix: ref.id,
+					parentAgentId: ref.parentId,
+					taskDepth,
+					// Older files did not persist the resolved per-agent cap. Revive
+					// them as leaves rather than silently granting new spawn capacity.
+					maxNestedSpawnDepth: init.maxNestedSpawnDepth ?? Math.max(0, taskDepth - 1),
+					toolNames: init.tools,
+					outputSchema: init.outputSchema,
+					requireYieldTool: true,
+					systemPrompt: () => [init.systemPrompt],
+					// Old files predate persisted spawns: deny re-spawning rather than let
+					// createAgentSession default to wildcard ("*").
+					spawns: init.spawns ?? "",
+					hasUI: false,
+					enableLsp: ctx.enableLsp,
+					enableMCP: !mcpManager,
+					mcpManager,
+					asyncJobManager: liveAncestorAsyncJobManager(registry, ref.parentId),
+					customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				});
+				// Clamp the active set to the persisted list: createAgentSession's
+				// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
+				// the original run didn't carry. Unknown/missing names are ignored.
+				try {
+					await session.setActiveToolsByName(init.tools);
+				} catch (error) {
+					await session.dispose().catch(() => {});
+					throw error;
+				}
+				// A cold revive installs the turn sync itself; the live path does it in the
+				// executor. Without it the idle TTL would park the agent mid-turn.
+				syncStatusWithTurns(registry, ref.id, session);
+				return session;
 			});
-			// SessionManager.open owns cwd restoration and validation. Everything
-			// in the rebuilt runtime, including settings discovery, must use this
-			// one authority rather than either peek snapshot.
-			const runtimeCwd = reopened.getCwd();
-			const init = current.init;
-			const artifactManager = ctx.session.sessionManager.getArtifactManager();
-			if (artifactManager) reopened.adoptArtifactManager(artifactManager);
-			// Reuse the parent's live MCP connections via proxy tools (no
-			// re-discovery), exactly as the executor does for live agents.
-			const mcpManager = mcpManagerInstance();
-			const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
-			const { createAgentSession } = await import("../sdk");
-			const { session } = await createAgentSession({
-				cwd: runtimeCwd,
-				authStorage: ctx.authStorage,
-				modelRegistry: ctx.modelRegistry,
-				settings: await createSubagentSettingsForCwd(
-					ctx.settings,
-					runtimeCwd,
-					init.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
-				),
-				eventBus: ctx.eventBus,
-				sessionManager: reopened,
-				agentId: ref.id,
-				agentDisplayName: ref.displayName,
-				parentTaskPrefix: ref.id,
-				parentAgentId: ref.parentId,
-				taskDepth,
-				// Older files did not persist the resolved per-agent cap. Revive
-				// them as leaves rather than silently granting new spawn capacity.
-				maxNestedSpawnDepth: init.maxNestedSpawnDepth ?? Math.max(0, taskDepth - 1),
-				toolNames: init.tools,
-				outputSchema: init.outputSchema,
-				requireYieldTool: true,
-				systemPrompt: () => [init.systemPrompt],
-				// Old files predate persisted spawns: deny re-spawning rather than let
-				// createAgentSession default to wildcard ("*").
-				spawns: init.spawns ?? "",
-				hasUI: false,
-				enableLsp: ctx.enableLsp,
-				enableMCP: !mcpManager,
-				mcpManager,
-				asyncJobManager: liveAncestorAsyncJobManager(registry, ref.parentId),
-				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
-			});
-			// Clamp the active set to the persisted list: createAgentSession's
-			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
-			// the original run didn't carry. Unknown/missing names are ignored.
-			await session.setActiveToolsByName(init.tools);
-			// A cold revive installs the turn sync itself; the live path does it in the
-			// executor. Without it the idle TTL would park the agent mid-turn.
-			syncStatusWithTurns(registry, ref.id, session);
-			return session;
-		};
 	};
 }
 

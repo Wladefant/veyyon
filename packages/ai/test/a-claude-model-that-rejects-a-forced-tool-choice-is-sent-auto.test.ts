@@ -68,8 +68,10 @@ const DECISIONS: Readonly<Record<string, "forced" | "auto">> = {
 	"sonnet 6.0": "auto",
 	"fable 5.0": "auto",
 	"fable 5.1": "auto",
+	"fable 5.2": "auto",
 	"mythos 5.0": "auto",
 	"mythos 5.1": "auto",
+	"mythos 5.2": "auto",
 };
 
 const respondTool: Tool = {

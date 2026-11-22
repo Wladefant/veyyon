@@ -13,6 +13,7 @@ import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { withJournalLock } from "@veyyon/kernel/session/session-storage";
 import { TempDir } from "@veyyon/utils";
+import { enterIsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentProtocolHandler } from "../src/internal-urls/agent-protocol";
@@ -22,7 +23,6 @@ import { AgentSession } from "../src/session/agent-session";
 import { convertToLlm } from "../src/session/messages";
 import { IrcContinuationOutbox } from "../src/session/runtime/irc-inbox";
 import { IrcBus } from "../src/task/irc-bus";
-import * as laneAdmission from "../src/task/lane-admission";
 import { renderAgentUserPrompt } from "../src/task/spawn-run";
 import type { ToolSession } from "../src/tools";
 import { YieldTool } from "../src/tools/agent/yield";
@@ -90,101 +90,63 @@ async function session(
 
 describe("native retained child resume", () => {
 	for (const turnFails of [false, true]) {
-		it(`publishes a release reconciliation error once ${turnFails ? "after a failed prompt" : "after terminal yield"}`, async () => {
-			const parent = await session("owner", [{ content: ["Release failure received"], stopReason: "stop" }]);
-			const child = await session("worker", [yielded("B")], undefined, [], "sub");
-			if (turnFails) {
-				vi.spyOn(child.instance.agent, "prompt").mockRejectedValue(new Error("worker prompt also failed"));
-			}
-			const release = vi.fn(async () => {
-				throw new Error("lane release reconciliation required");
-			});
-			vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
-				slotId: "worker-slot",
-				leaseToken: "worker-lease",
-				release,
-			});
-			const registry = AgentRegistry.global();
-			registry.register({
-				id: "owner",
-				displayName: "Owner",
-				kind: "main",
-				scope: "test",
-				session: parent.instance,
-			});
-			registry.register({
-				id: "worker",
-				displayName: "Worker",
-				kind: "sub",
-				parentId: "owner",
-				scope: "test",
-				session: child.instance,
-			});
-			await child.instance.deliverIrcMessage({
-				id: "release-reconciliation",
-				from: "owner",
-				to: "worker",
-				body: "Return a result.",
-				ts: Date.now(),
-			});
-			await child.instance.waitForIdle();
-			await parent.instance.waitForIdle();
-			await child.instance.replayIrcContinuations();
+		it(`settles a retained child ${turnFails ? "after a failed prompt" : "after terminal yield"} without the legacy ledger`, async () => {
+			const isolated = enterIsolatedConfigRoot("native-irc-wake", { defaultProfile: true });
+			try {
+				const runDir = path.join(isolated.root, "run");
+				await fs.mkdir(runDir, { recursive: true });
+				await fs.writeFile(path.join(runDir, "lane-admission.json"), "invalid legacy ledger");
+				const parent = await session("owner", [{ content: ["Child result received"], stopReason: "stop" }]);
+				const child = await session("worker", [yielded("B")], undefined, [], "sub");
+				if (turnFails) {
+					spyOn(child.instance.agent, "prompt").mockRejectedValue(new Error("worker prompt failed"));
+				}
+				const registry = AgentRegistry.global();
+				registry.register({
+					id: "owner",
+					displayName: "Owner",
+					kind: "main",
+					scope: "test",
+					session: parent.instance,
+				});
+				registry.register({
+					id: "worker",
+					displayName: "Worker",
+					kind: "sub",
+					parentId: "owner",
+					scope: "test",
+					session: child.instance,
+				});
+				await child.instance.deliverIrcMessage({
+					id: "ledger-independent-wake",
+					from: "owner",
+					to: "worker",
+					body: "Return a result.",
+					ts: Date.now(),
+				});
+				await child.instance.waitForIdle();
+				await parent.instance.waitForIdle();
+				await child.instance.replayIrcContinuations();
 
-			const completions = parent.store
-				.getEntries()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
-			expect(completions).toHaveLength(1);
-			const [completion] = completions;
-			const content = completion?.type === "custom_message" ? completion.content : undefined;
-			expect(content).toContain("lane release reconciliation required");
-			expect(content).toContain('"source":"harness"');
-			if (turnFails) expect(content).toContain("worker prompt also failed");
-			expect(release).toHaveBeenCalledTimes(1);
+				const completions = parent.store
+					.getEntries()
+					.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+				expect(completions).toHaveLength(1);
+				const [completion] = completions;
+				const content = completion?.type === "custom_message" ? completion.content : undefined;
+				if (turnFails) {
+					expect(content).toContain("worker prompt failed");
+					expect(content).toContain('"source":"harness"');
+				} else {
+					expect(content).toContain('"value":"B"');
+				}
+				expect(await fs.readdir(runDir)).toEqual(["lane-admission.json"]);
+				expect(await fs.readFile(path.join(runDir, "lane-admission.json"), "utf8")).toBe("invalid legacy ledger");
+			} finally {
+				isolated.restore();
+			}
 		});
 	}
-
-	it("surfaces release reconciliation failure when a native wake is cancelled during admission", async () => {
-		const child = await session("worker", [], undefined, [], "sub");
-		const parent = await session("owner", []);
-		const registry = AgentRegistry.global();
-		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({
-			id: "worker",
-			displayName: "Worker",
-			kind: "sub",
-			parentId: "owner",
-			scope: "test",
-			session: child.instance,
-		});
-		const entered = Promise.withResolvers<AbortSignal>();
-		const admitted = Promise.withResolvers<laneAdmission.NativeHostLaneLease>();
-		vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockImplementation(({ signal }) => {
-			entered.resolve(signal!);
-			return admitted.promise;
-		});
-		const releaseFailure = new Error("lane release reconciliation required after cancellation");
-		const release = vi.fn(async () => {
-			throw releaseFailure;
-		});
-		await child.instance.deliverIrcMessage({
-			id: "cancelled-wake",
-			from: "owner",
-			to: "worker",
-			body: "Wake before cancellation.",
-			ts: Date.now(),
-		});
-		const signal = await entered.promise;
-		const idle = child.instance.waitForIdle();
-		void idle.catch(() => {});
-		await setImmediate();
-		child.instance.beginDispose();
-		admitted.resolve({ slotId: "worker-slot", leaseToken: "worker-lease", release });
-		expect(signal.aborted).toBe(true);
-		await expect(idle).rejects.toBe(releaseFailure);
-		expect(child.mock.calls).toHaveLength(0);
-		expect(release).toHaveBeenCalledTimes(1);
-	});
 
 	it("recovers an acknowledged receipt before provider input and consumes its root phase once", async () => {
 		const root = await session("root", []);

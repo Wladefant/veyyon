@@ -671,23 +671,41 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("substitutes the failing model id into provider-wildcard chain entries", async () => {
-		const primaryModel = getBundledModel("google", "gemini-2.5-flash");
-		const fallbackModel = getBundledModel("google-vertex", "gemini-2.5-flash");
-		if (!primaryModel || !fallbackModel) {
-			throw new Error("Expected bundled test models to exist");
+		const providers = ["wildcard-primary", "wildcard-fallback"] as const;
+		const modelId = "shared-test-model";
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "wildcard-models.json"));
+		for (const provider of providers) {
+			modelRegistry.registerProvider(provider, {
+				api: "openai-completions",
+				baseUrl: `https://${provider}.example.invalid/v1`,
+				apiKey: "literal:test-key",
+				models: [
+					{
+						id: modelId,
+						name: "Shared Test Model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 32_000,
+						maxTokens: 4_096,
+					},
+				],
+			});
 		}
+		const [primary, fallback] = providers;
+		const primaryModel = modelRegistry.find(primary, modelId);
+		if (!primaryModel) throw new Error(`Missing configured model: ${primary}/${modelId}`);
 
 		const requestedModels: string[] = [];
 		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
 		const agent = createFallbackAgent(primaryModel, requestedModels);
 
-		// `google-vertex/*` is not a fixed target: it must adopt the failing
-		// model's id (google/gemini-2.5-flash -> google-vertex/gemini-2.5-flash).
+		// The target names a provider, not a fixed model. It must use the active model's id.
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.maxRetries": 1,
 			"retry.fallbackChains": {
-				"google/*": ["google-vertex/*"],
+				[`${primary}/*`]: [`${fallback}/*`],
 			},
 		});
 
@@ -707,18 +725,15 @@ describe("AgentSession retry fallback", () => {
 		await session.prompt("Recover via id-preserving wildcard entry");
 		await session.waitForIdle();
 
-		expect(requestedModels).toEqual([
-			`${primaryModel.provider}/${primaryModel.id}`,
-			`${fallbackModel.provider}/${fallbackModel.id}`,
-		]);
-		expect(session.model?.provider).toBe("google-vertex");
-		expect(session.model?.id).toBe(primaryModel.id);
+		expect(requestedModels).toEqual([`${primary}/${modelId}`, `${fallback}/${modelId}`]);
+		expect(session.model?.provider).toBe(fallback);
+		expect(session.model?.id).toBe(modelId);
 		expect(fallbackAppliedEvents).toEqual([
 			{
 				type: "retry_fallback_applied",
-				from: `${primaryModel.provider}/${primaryModel.id}`,
-				to: `google-vertex/${primaryModel.id}`,
-				role: "google/*",
+				from: `${primary}/${modelId}`,
+				to: `${fallback}/${modelId}`,
+				role: `${primary}/*`,
 			},
 		]);
 	});

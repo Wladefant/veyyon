@@ -9,7 +9,11 @@ import { ANTHROPIC_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import type { ProviderAnthropicMessagesCapability } from "@veyyon/catalog/provider-models/wire-capabilities";
 import { providerWireCapabilities } from "@veyyon/catalog/provider-models/wire-capabilities";
 import { isAnthropicOAuthToken } from "@veyyon/catalog/utils";
-import { ANTHROPIC_WEB_SEARCH_TOOL, CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
+import {
+	ANTHROPIC_WEB_SEARCH_TOOL,
+	CLAUDE_CODE_ANTHROPIC_SDK_VERSION,
+	CLAUDE_CODE_VERSION as claudeCodeVersion,
+} from "@veyyon/catalog/wire/anthropic";
 import { parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
 import { getInstallId } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
@@ -180,7 +184,6 @@ function mergeAnthropicBetaHeader(callerHeaders: Record<string, string>, beta: s
 	return { "anthropic-beta": beta };
 }
 
-const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
 const contextManagementBeta = "context-management-2025-06-27";
 const structuredOutputsBeta = "structured-outputs-2025-12-15";
 const claudeCodeUtilityBetaDefaults = [
@@ -196,7 +199,6 @@ const claudeCodeAgentBetaDefaults = [
 	"interleaved-thinking-2025-05-14",
 	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
-	midConversationSystemBeta,
 	"advanced-tool-use-2025-11-20",
 ] as const;
 const claudeCodeAgentPostEffortBetas = ["extended-cache-ttl-2025-04-11"] as const;
@@ -516,7 +518,7 @@ function getCacheControl(
  * This re-export keeps the name callers already import.
  */
 export { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
-export const claudeAgentSdkVersion = "0.3.280";
+export const claudeAgentSdkVersion = "0.3.321";
 export const claudeClientVersion = "1.11187.4";
 export const claudeToolPrefix: string = "_";
 export const claudeCodeSystemInstruction = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
@@ -569,8 +571,8 @@ export function mapStainlessArch(arch: string): "x64" | "arm64" | "x86" | `other
 
 export const claudeCodeHeaders = {
 	"X-Stainless-Retry-Count": "0",
-	"X-Stainless-Runtime-Version": "v24.3.0",
-	"X-Stainless-Package-Version": "0.94.0",
+	"X-Stainless-Runtime-Version": "v26.12.1",
+	"X-Stainless-Package-Version": CLAUDE_CODE_ANTHROPIC_SDK_VERSION,
 	"X-Stainless-Runtime": "node",
 	"X-Stainless-Lang": "js",
 	"X-Stainless-Arch": mapStainlessArch(process.arch),
@@ -2804,9 +2806,6 @@ function buildAnthropicStreamBetas(
 		!extraBetas.includes(effortBeta)
 	) {
 		extraBetas.push(effortBeta);
-	}
-	if (model.compat.supportsMidConversationSystem && !extraBetas.includes(midConversationSystemBeta)) {
-		extraBetas.push(midConversationSystemBeta);
 	}
 	if (
 		model.reasoning &&
