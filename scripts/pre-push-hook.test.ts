@@ -38,6 +38,8 @@ interface HookRun {
 	leftoverWorktrees: string[];
 	/** The temp repo the hook ran in, so a test can assert a path is NOT inside it. */
 	repoRoot: string;
+	/** Value of MSYS observed by a stub `ln` (when recorded to binDir/ln-msys.log). */
+	lnMsysEnv: string;
 }
 
 /**
@@ -242,6 +244,8 @@ async function runHook(options: {
 	const ranCheck = await Bun.file(marker).exists();
 	const checkedIn = ranCheck ? (await Bun.file(marker).text()).trim() : "";
 	const workspaceLinkTarget = (await Bun.file(linkMarker).exists()) ? (await Bun.file(linkMarker).text()).trim() : "";
+	const lnMsysLog = path.join(binDir, "ln-msys.log");
+	const lnMsysEnv = (await Bun.file(lnMsysLog).exists()) ? (await Bun.file(lnMsysLog).text()).trim() : "";
 	const worktrees = (await Bun.$`git -C ${root} worktree list`.text())
 		.split("\n")
 		.filter(Boolean)
@@ -256,6 +260,7 @@ async function runHook(options: {
 		workspaceLinkTarget,
 		leftoverWorktrees: worktrees,
 		repoRoot: root,
+		lnMsysEnv,
 	};
 }
 
@@ -545,11 +550,11 @@ describe("pre-push hook", () => {
 			bunExit: 0,
 			env: { MSYSTEM: "MINGW64", OS: "Windows_NT" },
 			extraBins: {
-				ln: `#!/usr/bin/env bash\necho "MSYS=\${MSYS:-}" >&2\nexit 1\n`,
+				ln: `#!/usr/bin/env bash\nprintf '%s\\n' "MSYS=\${MSYS:-}" > "\${0%/*}/ln-msys.log"\nexit 1\n`,
 			},
 		});
 		expect(run.exitCode).not.toBe(0);
-		expect(run.stderr).toContain("MSYS=winsymlinks:nativestrict");
+		expect(run.lnMsysEnv).toContain("MSYS=winsymlinks:nativestrict");
 		expect(run.stderr).toContain("without MSYS deep-copy");
 		expect(run.leftoverWorktrees).toEqual([]);
 	});
