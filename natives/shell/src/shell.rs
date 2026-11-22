@@ -40,11 +40,6 @@ use crate::{
 
 struct ShellSessionCore {
 	shell: BrushShell,
-	/// Runs whose children may still be alive in this shell's job table. A later
-	/// cancel in this shell stops them, so an earlier background command cannot
-	/// outlive the cancel of a later run.
-	#[cfg(windows)]
-	occupied_runs: Vec<Arc<process::SpawnRegistry>>,
 	#[cfg(all(test, windows))]
 	drain_pauses: std::collections::VecDeque<(
 		tokio::sync::oneshot::Sender<()>,
@@ -52,16 +47,10 @@ struct ShellSessionCore {
 	)>,
 }
 
-impl ShellSessionCore {
-	/// A background task can still own the registry before it starts its child.
-	/// Drop an earlier run only when it cannot spawn again and has no live child.
-	#[cfg(windows)]
-	fn retain_occupied_run(&mut self, run: Arc<process::SpawnRegistry>) {
-		self.occupied_runs
-			.retain(|held| Arc::strong_count(held) > 1 || held.is_occupied());
-		self.occupied_runs.push(run);
-	}
-}
+/// Active and retained Windows runs, in session-lock acquisition order.
+/// The cancellation bridge can take earlier registries without that lock.
+#[cfg(windows)]
+type WindowsSessionRuns = parking_lot::Mutex<Vec<Arc<process::SpawnRegistry>>>;
 
 #[derive(Clone, Default)]
 struct ShellAbortState(Arc<TokioMutex<Option<AbortToken>>>);
@@ -185,6 +174,8 @@ pub struct Shell {
 	session:     Arc<TokioMutex<Option<ShellSessionCore>>>,
 	abort_state: ShellAbortState,
 	config:      ShellConfig,
+	#[cfg(windows)]
+	windows_runs: Arc<WindowsSessionRuns>,
 }
 
 impl Shell {
@@ -208,6 +199,8 @@ impl Shell {
 			session: Arc::new(TokioMutex::new(None)),
 			abort_state: ShellAbortState::default(),
 			config,
+			#[cfg(windows)]
+			windows_runs: Arc::default(),
 		}
 	}
 
@@ -231,6 +224,8 @@ impl Shell {
 			run_config,
 			on_chunk,
 			&mut cancel_token,
+			#[cfg(windows)]
+			self.windows_runs.clone(),
 		)
 		.await
 	}
@@ -337,6 +332,7 @@ async fn run_shell_session(
 	run_config: ShellRunConfig,
 	on_chunk: Option<Sender<String>>,
 	ct: &mut CancelToken,
+	#[cfg(windows)] windows_runs: Arc<WindowsSessionRuns>,
 ) -> Result<ShellRunResult> {
 	let tokio_cancel = CancellationToken::new();
 	let spawn_registry = Arc::new(process::SpawnRegistry::new());
@@ -344,9 +340,24 @@ async fn run_shell_session(
 	let process_cancel_bridge = tokio::spawn({
 		let tokio_cancel = tokio_cancel.clone();
 		let spawn_registry = spawn_registry.clone();
+		#[cfg(windows)]
+		let windows_runs = windows_runs.clone();
 		async move {
 			tokio_cancel.cancelled().await;
+			#[cfg(windows)]
+			let earlier_runs: Vec<_> = {
+				let mut runs = windows_runs.lock();
+				let earlier_count = runs
+					.iter()
+					.position(|run| Arc::ptr_eq(run, &spawn_registry))
+					.unwrap_or(0);
+				runs.drain(..earlier_count).collect()
+			};
 			terminate_run(&spawn_registry).await;
+			#[cfg(windows)]
+			for run in earlier_runs.into_iter().rev() {
+				terminate_run(&run).await;
+			}
 		}
 	});
 
@@ -357,8 +368,20 @@ async fn run_shell_session(
 		let at = ct.emplace_abort_token();
 		let spawn_registry = spawn_registry.clone();
 		let spawn_budget = spawn_budget.clone();
+		#[cfg(windows)]
+		let windows_runs = windows_runs.clone();
 		async move {
 			let mut session_guard = session.lock().await;
+			#[cfg(windows)]
+			{
+				let mut runs = windows_runs.lock();
+				if tokio_cancel.is_cancelled() {
+					return Err(Error::msg("Shell run cancelled while queued"));
+				}
+				// Another owner can still be about to spawn into this registry.
+				runs.retain(|run| Arc::strong_count(run) > 1 || run.is_occupied());
+				runs.push(spawn_registry.clone());
+			}
 			abort_state.set(at).await;
 
 			let session = match &mut *session_guard {
@@ -373,18 +396,15 @@ async fn run_shell_session(
 					.await?,
 				),
 			};
-			let result = run_shell_command(
+			run_shell_command(
 				session,
 				&run_config,
 				on_chunk,
 				tokio_cancel,
-				spawn_registry.clone(),
+				spawn_registry,
 				spawn_budget,
 			)
-			.await;
-			#[cfg(windows)]
-			session.retain_occupied_run(spawn_registry);
-			result
+			.await
 		}
 	});
 
@@ -403,15 +423,19 @@ async fn run_shell_session(
 				},
 			};
 			abort_state.clear().await;
-			// Use try_lock to avoid deadlocking if another task holds the session.
-			// If we can't acquire the lock, the session will be cleaned up when the
-			// holding task finishes.
+			// Process cleanup does not need the session lock. Reset the shell only
+			// if a later run has not taken it.
 			if let Ok(mut guard) = session.try_lock() {
 				#[cfg(windows)]
-				if let Some(core) = guard.as_mut() {
-					terminate_occupied_runs(&mut core.occupied_runs).await;
+				let can_reset = windows_runs
+					.lock()
+					.last()
+					.is_some_and(|run| Arc::ptr_eq(run, &spawn_registry));
+				#[cfg(not(windows))]
+				let can_reset = true;
+				if can_reset {
+					*guard = None;
 				}
-				*guard = None;
 			}
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellRunResult {
@@ -957,8 +981,6 @@ async fn create_session_for_run(
 
 	Ok(ShellSessionCore {
 		shell,
-		#[cfg(windows)]
-		occupied_runs: Vec::new(),
 		#[cfg(all(test, windows))]
 		drain_pauses: Default::default(),
 	})
@@ -1439,8 +1461,6 @@ async fn run_shell_command_once(
 
 	if cancel_token.is_cancelled() {
 		terminate_background_jobs(&mut session.shell);
-		#[cfg(windows)]
-		terminate_occupied_runs(&mut session.occupied_runs).await;
 	}
 
 	drop(params);
@@ -1581,8 +1601,6 @@ async fn run_shell_command_streams(
 
 	if cancel_token.is_cancelled() {
 		terminate_background_jobs(&mut session.shell);
-		#[cfg(windows)]
-		terminate_occupied_runs(&mut session.occupied_runs).await;
 	}
 
 	if env_scope_pushed {
@@ -2147,16 +2165,6 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 			};
 			time::sleep(pause).await;
 		}
-	}
-}
-
-/// Stops every run this session retained for live children, then forgets them.
-/// Each run stops only its own job, so other runs and other shells keep theirs.
-#[cfg(windows)]
-async fn terminate_occupied_runs(runs: &mut Vec<Arc<process::SpawnRegistry>>) {
-	while let Some(run) = runs.last() {
-		terminate_run(run).await;
-		runs.pop();
 	}
 }
 
