@@ -48,14 +48,13 @@ struct ShellSessionCore {
 }
 
 impl ShellSessionCore {
-	/// Keeps a finished run while one of its children is alive, so a later cancel
-	/// in this shell reaches it. Runs with nothing left are dropped here.
+	/// A background task can still own the registry before it starts its child.
+	/// Drop an earlier run only when it cannot spawn again and has no live child.
 	#[cfg(windows)]
 	fn retain_occupied_run(&mut self, run: Arc<process::SpawnRegistry>) {
-		self.occupied_runs.retain(|held| held.is_occupied());
-		if run.is_occupied() {
-			self.occupied_runs.push(run);
-		}
+		self.occupied_runs
+			.retain(|held| Arc::strong_count(held) > 1 || held.is_occupied());
+		self.occupied_runs.push(run);
 	}
 }
 
