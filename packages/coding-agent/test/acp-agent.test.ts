@@ -1724,7 +1724,9 @@ describe("ACP agent", () => {
 		await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
 		const replay = harness.updates.flatMap(({ update }) =>
 			(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
-			update.content.type === "text" ? [update.content.text] : [],
+			update.content.type === "text"
+				? [update.content.text]
+				: [],
 		);
 		expect(replay).toContain("EARLY-USER-ORIGINAL");
 		expect(replay).toContain("EARLY-ASSISTANT-ORIGINAL");
@@ -3345,6 +3347,42 @@ describe("ACP agent", () => {
 		finishPrompt();
 		harness.abortController.abort();
 		await Bun.sleep(0);
+	});
+
+	it.each(["close", "disconnect"])("rejects every queued prompt after session %s", async mode => {
+		const harness = await createHarness();
+		await harness.agent.initialize({ protocolVersion: 1, clientCapabilities: {} });
+		const { sessionId } = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(sessionId)!;
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		session.refreshExternalTurn = async () => {
+			entered.resolve();
+			await release.promise;
+			return [];
+		};
+		const prompt = (text: string) => harness.agent.prompt({ sessionId, prompt: [{ type: "text", text }] });
+		const active = Promise.allSettled([prompt("active")]);
+		try {
+			await entered.promise;
+			const queued = Promise.allSettled([prompt("queued A"), prompt("queued B"), prompt("queued C")]);
+			const closed = mode === "close" ? harness.agent.closeSession({ sessionId }) : session.whenDisposed;
+			if (mode === "disconnect") harness.abortController.abort();
+			release.resolve();
+			await closed;
+
+			for (const outcome of await queued) {
+				expect(outcome).toMatchObject({
+					status: "rejected",
+					reason: { code: "ACP_SESSION_CLOSED" },
+				});
+			}
+			expect(session.promptCalls).toEqual([]);
+		} finally {
+			release.resolve();
+			harness.abortController.abort();
+			await active;
+		}
 	});
 
 	it("keeps closeSession gated while cancel cleanup is pending", async () => {

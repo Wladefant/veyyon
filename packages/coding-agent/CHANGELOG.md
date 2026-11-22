@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
 ## [1.12.3] - 2026-11-21
 
 ### Added
