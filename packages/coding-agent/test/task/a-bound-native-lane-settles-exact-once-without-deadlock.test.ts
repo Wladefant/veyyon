@@ -225,6 +225,62 @@ describe("native replenishment lifecycle contracts", () => {
 		};
 	}
 
+	it("dispatches once when the same SDK loses both a claim reply and a bind reply", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		const run = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makePassResult(options));
+		const ticketId = "ticket-lost-replies";
+		const harness = await setupHarness({
+			settings: { "async.enabled": true },
+			initialRequests: {
+				[ticketId]: { prompt: "Recover one native run", state: "review", authorization: AUTHORIZATION },
+			},
+		});
+		const originalPythonPath = process.env.PYTHONPATH;
+		const pythonFixture = path.join(harness.root, "sitecustomize.py");
+		await fs.writeFile(
+			pythonFixture,
+			`import builtins
+import json
+import os
+from pathlib import Path
+import sys
+
+operation = sys.argv[1] if len(sys.argv) > 1 else None
+keys = {"claim": "claimed", "record-dispatch": "recorded"}
+if Path(sys.argv[0]).name == "native-ledger-bridge.py" and operation in keys:
+    emit = builtins.print
+    def drop_first_reply(*args, **kwargs):
+        if args and isinstance(args[0], str) and args[0].startswith("{"):
+            if json.loads(args[0]).get(keys[operation]) is True:
+                marker = Path(__file__).with_name(operation + "-reply-dropped")
+                try:
+                    marker.touch(exist_ok=False)
+                except FileExistsError:
+                    pass
+                else:
+                    os._exit(71)
+        emit(*args, **kwargs)
+    builtins.print = drop_first_reply
+`,
+		);
+		process.env.PYTHONPATH = [harness.root, originalPythonPath].filter(Boolean).join(path.delimiter);
+		try {
+			expect((await harness.engine.replenish([])).dispatchedCount).toBe(1);
+			await harness.session.asyncJobManager!.waitForAll();
+			expect(run).toHaveBeenCalledTimes(1);
+			expect((await fs.readdir(harness.root)).filter(name => name.endsWith("-reply-dropped")).sort()).toEqual([
+				"claim-reply-dropped",
+				"record-dispatch-reply-dropped",
+			]);
+			const ticket = (await harness.readLedger()).requests[ticketId];
+			expect(ticket.state).toBe("awaiting authorization");
+			expect(ticket.history?.filter(row => row.reason === "Claimed for native replenishment")).toHaveLength(1);
+		} finally {
+			if (originalPythonPath === undefined) delete process.env.PYTHONPATH;
+			else process.env.PYTHONPATH = originalPythonPath;
+		}
+	}, 20_000);
+
 	it("avoids lease re-entry deadlock and runs post-settlement replenishment for inline async=false workers", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],

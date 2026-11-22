@@ -116,7 +116,7 @@ interface SpawnLifecycleState {
 	agentName: string;
 	ticketId?: string;
 	runId?: string;
-	bound: boolean;
+	taskHandle?: string;
 	settled: boolean;
 }
 
@@ -777,8 +777,8 @@ async function runPreparedSpawn(
 			throw new Error("Native dispatch requires a run ID and ledger path");
 		}
 		if (!params.nativeDispatchBound) {
-			await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
-			lifecycleState.bound = true;
+			lifecycleState.taskHandle = `agent://${agentId}`;
+			await recordNativeDispatch(params.runId, lifecycleState.taskHandle, params.ledgerPath, params.ticketId);
 		}
 		await assertNativeDispatchAdmitted(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
 	}
@@ -841,7 +841,9 @@ export async function runSpawn(
 		agentName: request.params.agent?.trim() || "task",
 		ticketId: request.params.ticketId,
 		runId: request.params.runId,
-		bound: request.params.nativeDispatchBound === true,
+		taskHandle: request.params.nativeDispatchBound && request.preAllocatedId
+			? `agent://${request.preAllocatedId}`
+			: undefined,
 		settled: false,
 	};
 	const notifyStartFailed = async (reason: string): Promise<void> => {
@@ -853,8 +855,7 @@ export async function runSpawn(
 				agentName: lifecycleState.agentName,
 				ticketId: lifecycleState.ticketId,
 				runId: lifecycleState.runId,
-				taskHandle:
-					lifecycleState.bound && lifecycleState.agentId ? `agent://${lifecycleState.agentId}` : undefined,
+				taskHandle: lifecycleState.taskHandle,
 				reason,
 				detached: request.detached,
 			});

@@ -601,7 +601,7 @@ export class SpawnScheduler {
 				agentName,
 				ticketId: params.ticketId,
 				runId: params.runId,
-				taskHandle: params.nativeDispatchBound ? `agent://${agentId}` : undefined,
+				taskHandle: `agent://${agentId}`,
 				reason,
 				detached,
 			});
@@ -618,11 +618,13 @@ export class SpawnScheduler {
 		const failures: string[] = [];
 		for (const spawn of batch.jobs) {
 			const params = spawnParamsFor(call.params, spawn.item, call.defaultAgent);
+			let bindAttempted = params.nativeDispatchBound === true;
 			try {
 				if (params.ticketId && !params.nativeDispatchBound) {
 					if (!params.runId?.trim() || !params.ledgerPath?.trim()) {
 						throw new Error("Native dispatch requires a run ID and ledger path");
 					}
+					bindAttempted = true;
 					await recordNativeDispatch(params.runId, `agent://${spawn.agentId}`, params.ledgerPath, params.ticketId);
 					params.nativeDispatchBound = true;
 				}
@@ -631,7 +633,7 @@ export class SpawnScheduler {
 				started.push({ agentId: spawn.agentId, jobId });
 			} catch (error) {
 				const reason = errorMessage(error);
-				if (params.nativeDispatchBound && params.ticketId) {
+				if (bindAttempted && params.ticketId) {
 					await this.#notifyStartFailed(params, spawn.agentId, spawn.progress.agent, reason, true);
 				}
 				failures.push(`${spawn.agentId}: ${reason}`);

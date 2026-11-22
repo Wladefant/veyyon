@@ -659,7 +659,7 @@ async function runTests(): Promise<void> {
 		const liveRosterAfterCompletion = currentRoster.filter(worker => worker.id !== "worker-1");
 		const failOutcome = await engineFailing.replenish(liveRosterAfterCompletion);
 		assert.equal(failOutcome.status, "error");
-		assert.ok(failOutcome.reason?.includes("claimed ticket rolled back to pending"));
+		assert.ok(failOutcome.reason?.includes("claim released"));
 
 		// Rollback is retryable: the claim is released and the failure remains in history,
 		// not in the blocker field that eligibility intentionally rejects.

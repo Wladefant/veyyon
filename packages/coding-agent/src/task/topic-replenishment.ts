@@ -20,6 +20,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -281,6 +282,7 @@ export interface ClaimTicketOptions {
 	workerId?: string;
 	/** PID of the deploying SDK process; recovery treats its live state as keep-live evidence on this host. */
 	hostPid?: number;
+	claimId?: string;
 	customFilter?: (ticket: LedgerRequestItem) => boolean;
 }
 
@@ -337,6 +339,7 @@ export interface ClaimTicketResult {
 	claimed: boolean;
 	ticket?: ClaimedTicket;
 	reason?: string;
+	replyUnconfirmed?: boolean;
 	blockedTopics?: BlockedTopicInfo[];
 	uncoveredTopics?: string[];
 }
@@ -789,6 +792,15 @@ export async function runLedgerBridge<T = unknown>(
 	return promise;
 }
 
+async function replayLedgerBridge<T>(args: string[]): Promise<T> {
+	try {
+		return await runLedgerBridge<T>(args);
+	} catch {
+		// The first process may have committed before losing its reply.
+		return await runLedgerBridge<T>(args);
+	}
+}
+
 /**
  * Cross-process OS-level advisory file lock backed by native-ledger-bridge / Python FileLock.
  * Uses msvcrt.locking on Windows and fcntl.flock on POSIX.
@@ -889,6 +901,7 @@ export async function claimNextAuthorizedTicket(
 		args.push("--worker-id", options.workerId);
 	}
 	if (options?.hostPid !== undefined) args.push("--host-pid", String(options.hostPid));
+	if (options?.claimId !== undefined) args.push("--claim-id", options.claimId);
 	if (options?.coveredTopics && options.coveredTopics.length > 0) {
 		args.push("--covered-topics", options.coveredTopics.join(","));
 	}
@@ -896,7 +909,8 @@ export async function claimNextAuthorizedTicket(
 		args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
 	try {
-		const result = await runLedgerBridge<ClaimTicketResult & { blocked_topics?: BlockedTopicInfo[] }>(args);
+		const call = options?.claimId === undefined ? runLedgerBridge : replayLedgerBridge;
+		const result = await call<ClaimTicketResult & { blocked_topics?: BlockedTopicInfo[] }>(args);
 		if (!result.blockedTopics && result.blocked_topics) {
 			result.blockedTopics = result.blocked_topics;
 		}
@@ -905,6 +919,7 @@ export async function claimNextAuthorizedTicket(
 		return {
 			claimed: false,
 			reason: `Bridge execution failed: ${err}`,
+			replyUnconfirmed: options?.claimId !== undefined,
 		};
 	}
 }
@@ -960,7 +975,10 @@ export async function recordNativeDispatch(
 		taskHandle,
 	];
 	args.push("--ledger", ledgerPath, "--ticket-id", ticketId);
-	await runLedgerBridge(args);
+	const result = await replayLedgerBridge<{ recorded: boolean; run_id: string; task_handle: string }>(args);
+	if (!result.recorded || result.run_id !== runId || result.task_handle !== taskHandle) {
+		throw new Error("Native dispatch reply did not confirm the requested run and handle");
+	}
 }
 
 /**
@@ -1099,6 +1117,7 @@ export class TopicReplenishmentEngine {
 	#cycleOptions?: ReplenishmentCycleOptions;
 	#claimedPreviousStates = new Map<string, string>();
 	#rolledBackRuns = new Set<string>();
+	#pendingClaimId?: string;
 	#pendingPostLease: {
 		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[];
 		options?: ReplenishmentCycleOptions;
@@ -1406,12 +1425,26 @@ export class TopicReplenishmentEngine {
 			}
 			if (!stepMem.admitted) break;
 
+			const claimId = (this.#pendingClaimId ??= randomUUID());
 			const claimResult = await claimNextAuthorizedTicket(this.ledgerPath, {
 				coveredTopics: Array.from(covered),
 				activeUsefulCount: currentRunning,
 				targetCapacity: this.targetCount,
 				hostPid: process.pid,
+				claimId,
 			});
+			if (claimResult.replyUnconfirmed) {
+				return {
+					reconciliation,
+					memoryAdmission,
+					dispatchedTickets,
+					dispatchedCount: dispatchedTickets.length,
+					blockedTopics: allBlockedTopics,
+					status: "error",
+					reason: claimResult.reason,
+				};
+			}
+			this.#pendingClaimId = undefined;
 			if (this.#verificationBlocked()) {
 				if (claimResult.claimed && claimResult.ticket) {
 					const rollback = await this.rollbackClaimedTicket(
@@ -1478,8 +1511,8 @@ export class TopicReplenishmentEngine {
 					blockedTopics: allBlockedTopics,
 					status: "error",
 					reason: rollback.rolled_back
-						? `Failed to dispatch ticket ${ticket.id}: ${err} (claimed ticket rolled back to ${ticket.previousState ?? "pending"})`
-						: `Failed to dispatch ticket ${ticket.id}: ${err} (claim was already reassigned and remains intact)`,
+						? `Failed to dispatch ticket ${ticket.id}: ${err} (claim released)`
+						: `Failed to dispatch ticket ${ticket.id}: ${err} (claim release not confirmed)`,
 				};
 			}
 		}

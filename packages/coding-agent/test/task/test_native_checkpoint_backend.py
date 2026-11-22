@@ -79,10 +79,12 @@ class NativeCheckpointBackend(unittest.TestCase):
     def write_requests(self, requests):
         self.ledger.write_text(json.dumps({"version": 2, "requests": requests}), encoding="utf-8")
 
-    def claim_raw(self, host_pid=None, worker_id="dispatcher"):
+    def claim_raw(self, host_pid=None, worker_id="dispatcher", claim_id=None):
+        kwargs = {}
+        if claim_id is not None:
+            kwargs["claim_id"] = claim_id
         return self.cli(self.bridge.cmd_claim, worker_id=worker_id, covered_topics="",
-                        host_pid=host_pid, active_useful_count=0, target_capacity=1)
-
+                        host_pid=host_pid, active_useful_count=0, target_capacity=1, **kwargs)
     def claim(self, host_pid=None, worker_id="dispatcher"):
         result = self.claim_raw(host_pid=host_pid, worker_id=worker_id)
         self.assertTrue(result["claimed"], result)
@@ -1467,6 +1469,273 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.ticket("build-vs-qa")["state"], "QA")
         self.assertEqual(self.ticket("build-vs-qa")["head"], h1)
 
+
+    def test_delayed_owned_rollback_after_same_head_reopen_retires_only_old_run_and_preserves_request(self):
+        from worker_backend import request_stage_epoch
+
+        self.write_requests({
+            TICKET: self.make_request(
+                state="review",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+        claimed = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(claimed["claimed"], claimed)
+        self.assertEqual(claimed["ticket"]["id"], TICKET)
+        old_run = claimed["ticket"]["runId"]
+        cached_prev = claimed["ticket"]["previousState"]
+        self.assertEqual(cached_prev, "review")
+        self.dispatch(old_run, "agent://rb-reopen-old")
+        self.assertTrue(self.admit(old_run, "agent://rb-reopen-old", host_pid=os.getpid())["admitted"])
+
+        ledger = self.request_ledger()
+        ledger.update_request(
+            TICKET,
+            state="implementation",
+            blocker="Waiting on follow-up implementation",
+            add_evidence={
+                "id": "ev-reopen-impl",
+                "criterion_id": "AC-1",
+                "type": "review_finding",
+                "summary": "Review reopened request to implementation",
+                "details": "Follow-up implementation required at same head",
+            },
+            actor="reviewer",
+            reason="Reopen review to implementation at same head",
+        )
+        self.assertEqual(self.ticket()["state"], "implementation")
+        self.assertEqual(self.ticket()["head"], self.head)
+        self.assertEqual(self.ticket()["blocker"], "Waiting on follow-up implementation")
+        self.assertEqual([ev["id"] for ev in self.ticket()["evidence"]], ["ev-reopen-impl"])
+        self.assertEqual(request_stage_epoch(self.ticket()), 1)
+
+        stale_admit = self.admit(old_run, "agent://rb-reopen-old", host_pid=os.getpid())
+        self.assertFalse(stale_admit["admitted"], stale_admit)
+        self.assertTrue(stale_admit.get("error"), stale_admit)
+
+        rb = self.cli(
+            self.bridge.cmd_rollback,
+            ticket_id=TICKET,
+            run_id=old_run,
+            task_handle="agent://rb-reopen-old",
+            previous_state=cached_prev,
+            reason="delayed owned rollback after same-head reopen",
+        )
+        self.assertTrue(rb["rolled_back"], rb)
+        self.assertEqual(self.record(old_run)["state"], "retired")
+        self.assertEqual(self.record(old_run)["task_handle"], "agent://rb-reopen-old")
+
+        ticket = self.ticket()
+        self.assertEqual(ticket["state"], "implementation")
+        self.assertEqual(ticket["head"], self.head)
+        self.assertEqual(ticket["blocker"], "Waiting on follow-up implementation")
+        self.assertEqual([ev["id"] for ev in ticket["evidence"]], ["ev-reopen-impl"])
+        self.assertEqual(ticket["native_claim"]["state"], "retryable")
+        self.assertEqual(ticket["history"][-1]["native_retired_run_id"], old_run)
+        self.assertEqual(request_stage_epoch(ticket), 1)
+
+        ledger.update_request(TICKET, clear_blocker=True, actor="reviewer", reason="Blocker cleared")
+        next_claim = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(next_claim["claimed"], next_claim)
+        self.assertEqual(next_claim["ticket"]["id"], TICKET)
+        self.assertNotEqual(next_claim["ticket"]["runId"], old_run)
+        self.assertEqual(next_claim["ticket"]["stage"], "build")
+        self.assertEqual(self.ticket()["native_claim"]["fence"]["epoch"], 1)
+
+        self.write_requests({
+            "aba-reopen": self.make_request(
+                state="review",
+                prompt="Verify ABA rollback after reopen",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+        # Same-head review -> implementation -> QA -> review ABA before delayed owned rollback
+        aba_claimed = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(aba_claimed["claimed"], aba_claimed)
+        self.assertEqual(aba_claimed["ticket"]["id"], "aba-reopen")
+        aba_old_run = aba_claimed["ticket"]["runId"]
+        self.dispatch(aba_old_run, "agent://rb-reopen-aba-old", ticket_id="aba-reopen")
+        self.assertTrue(self.admit(aba_old_run, "agent://rb-reopen-aba-old", host_pid=os.getpid(),
+                                   ticket_id="aba-reopen")["admitted"])
+
+        ledger.update_request(
+            "aba-reopen",
+            state="implementation",
+            actor="reviewer",
+            reason="ABA reopen to implementation",
+        )
+        ledger.update_request(
+            "aba-reopen",
+            state="QA",
+            actor="builder",
+            reason="ABA ready for QA at same head",
+        )
+        ledger.update_request(
+            "aba-reopen",
+            state="review",
+            actor="qa-worker",
+            criterion_update={
+                "id": "AC-1",
+                "status": "verified",
+                "evidence": "Verified scratch commit in QA",
+            },
+            add_evidence={
+                "id": "ev-qa-aba-rb",
+                "criterion_id": "AC-1",
+                "type": "qa_verification",
+                "summary": "QA verified scratch commit for ABA rollback",
+                "details": "Verified head in scratch repository",
+            },
+            reason="ABA QA passed on same head",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket("aba-reopen")), 3)
+        self.assertFalse(self.admit(aba_old_run, "agent://rb-reopen-aba-old", host_pid=os.getpid(),
+                                    ticket_id="aba-reopen")["admitted"])
+
+        aba_rb = self.cli(
+            self.bridge.cmd_rollback,
+            ticket_id="aba-reopen",
+            run_id=aba_old_run,
+            task_handle="agent://rb-reopen-aba-old",
+            previous_state="review",
+            reason="delayed owned rollback after same-head ABA",
+        )
+        self.assertTrue(aba_rb["rolled_back"], aba_rb)
+        self.assertEqual(self.record(aba_old_run)["state"], "retired")
+        aba_ticket = self.ticket("aba-reopen")
+        self.assertEqual(aba_ticket["state"], "review")
+        self.assertEqual(aba_ticket["head"], self.head)
+        self.assertEqual([ev["id"] for ev in aba_ticket["evidence"]], ["ev-qa-aba-rb"])
+        self.assertEqual(aba_ticket["native_claim"]["state"], "retryable")
+        self.assertEqual(request_stage_epoch(aba_ticket), 3)
+
+        aba_new = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(aba_new["claimed"], aba_new)
+        self.assertEqual(aba_new["ticket"]["id"], "aba-reopen")
+        self.assertNotEqual(aba_new["ticket"]["runId"], aba_old_run)
+        self.assertEqual(self.ticket("aba-reopen")["native_claim"]["fence"]["epoch"], 3)
+
+    def test_lost_claim_output_after_ledger_rename_replays_with_claim_id_for_live_owner(self):
+        owner_a = self.start_live_owner()
+        owner_b = self.start_live_owner()
+        self.write_requests({
+            "1-claim-first": self.make_request(topic="Desktop GUI", prompt="First eligible ticket"),
+            "2-claim-second": self.make_request(topic="Workflow", prompt="Second eligible ticket"),
+        })
+        claim_id = "claim-gen-lost-output-1"
+        real_print = print
+
+        def _emit_then_fail(*args, **kwargs):
+            real_print(*args, **kwargs)
+            raise BrokenPipeError("lost claim output after reply emission")
+
+        with redirect_stdout(io.StringIO()), patch("builtins.print", side_effect=_emit_then_fail), \
+                self.assertRaises(BrokenPipeError):
+            self.bridge.cmd_claim(argparse.Namespace(
+                ledger=str(self.ledger), timeout=10, worker_id="dispatcher", covered_topics="",
+                host_pid=owner_a.pid, active_useful_count=0, target_capacity=1, claim_id=claim_id,
+            ))
+
+        first_ticket = self.ticket("1-claim-first")
+        self.assertEqual(first_ticket["native_claim"]["state"], "active")
+        self.assertIsNone(first_ticket["native_claim"]["task_handle"])
+        self.assertEqual(first_ticket["native_claim"]["host"]["pid"], owner_a.pid)
+        self.assertEqual(len(first_ticket["history"]), 1)
+        original_run_id = first_ticket["native_claim"]["run_id"]
+        self.assertNotIn("native_claim", self.ticket("2-claim-second"))
+
+        mismatch = self.claim_raw(host_pid=owner_b.pid, claim_id=claim_id)
+        self.assertFalse(mismatch["claimed"], mismatch)
+        self.assertNotIn("native_claim", self.ticket("2-claim-second"))
+        self.assertEqual(self.ticket("1-claim-first")["native_claim"]["run_id"], original_run_id)
+        self.assertEqual(self.ticket("1-claim-first")["native_claim"]["host"]["pid"], owner_a.pid)
+        self.assertIsNone(self.ticket("1-claim-first")["native_claim"]["task_handle"])
+
+        replay = self.claim_raw(host_pid=owner_a.pid, claim_id=claim_id)
+        self.assertTrue(replay["claimed"], replay)
+        self.assertEqual(replay["ticket"]["id"], "1-claim-first")
+        self.assertEqual(replay["ticket"]["topic"], "Desktop GUI")
+        self.assertEqual(replay["ticket"]["runId"], original_run_id)
+        self.assertEqual(len(self.ticket("1-claim-first")["history"]), 1)
+        self.assertIsNone(self.ticket("1-claim-first")["native_claim"]["task_handle"])
+
+        self.dispatch(original_run_id, "agent://lost-claim-ok", ticket_id="1-claim-first")
+        self.assertTrue(self.admit(original_run_id, "agent://lost-claim-ok", host_pid=owner_a.pid,
+                                   ticket_id="1-claim-first")["admitted"])
+
+    def _assert_bind_replay_and_wrong_handle_refused(self, run_id, owner_pid, handle):
+        wrong_out = io.StringIO()
+        with redirect_stdout(wrong_out):
+            wrong_code = self.bridge.cmd_record_dispatch(argparse.Namespace(
+                ledger=str(self.ledger), state_dir=str(self.scratch), timeout=10,
+                ticket_id=TICKET, run_id=run_id, task_handle="agent://wrong-handle",
+            ))
+        wrong = json.loads(wrong_out.getvalue())
+        self.assertEqual(wrong_code, 1, wrong)
+        self.assertFalse(wrong["recorded"], wrong)
+
+        replayed = self.cli(
+            self.bridge.cmd_record_dispatch,
+            state_dir=str(self.scratch),
+            ticket_id=TICKET,
+            run_id=run_id,
+            task_handle=handle,
+        )
+        self.assertTrue(replayed["recorded"], replayed)
+        self.assertEqual(replayed["run_id"], run_id)
+        self.assertEqual(replayed["task_handle"], handle)
+        self.assertEqual(self.record(run_id)["state"], "background_dispatched")
+        self.assertEqual(self.record(run_id)["task_handle"], handle)
+        self.assertEqual(self.ticket()["native_claim"]["state"], "active")
+        self.assertEqual(self.ticket()["native_claim"]["run_id"], run_id)
+        self.assertEqual(self.ticket()["native_claim"]["task_handle"], handle)
+        self.assertTrue(self.admit(run_id, handle, host_pid=owner_pid)["admitted"])
+        self.assertFalse(self.admit(run_id, "agent://wrong-handle", host_pid=owner_pid)["admitted"])
+
+    def test_lost_bind_response_at_backend_only_boundary_replays_and_admits_owner(self):
+        owner = self.start_live_owner()
+        run_id = self.claim(host_pid=owner.pid)
+        handle = "agent://bind-backend-only"
+
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(
+                self.bridge.cmd_record_dispatch,
+                state_dir=str(self.scratch),
+                ticket_id=TICKET,
+                run_id=run_id,
+                task_handle=handle,
+            )
+        self.assertEqual(self.record(run_id)["state"], "background_dispatched")
+        self.assertEqual(self.record(run_id)["task_handle"], handle)
+        self.assertIsNone(self.ticket()["native_claim"]["task_handle"])
+
+        self._assert_bind_replay_and_wrong_handle_refused(run_id, owner.pid, handle)
+
+    def test_lost_bind_response_at_fully_durable_boundary_replays_and_admits_owner(self):
+        owner = self.start_live_owner()
+        run_id = self.claim(host_pid=owner.pid)
+        handle = "agent://bind-fully-durable"
+        real_print = print
+
+        def _emit_then_fail(*args, **kwargs):
+            real_print(*args, **kwargs)
+            raise BrokenPipeError("lost bind output after reply emission")
+
+        with redirect_stdout(io.StringIO()), patch("builtins.print", side_effect=_emit_then_fail), \
+                self.assertRaises(BrokenPipeError):
+            self.bridge.cmd_record_dispatch(argparse.Namespace(
+                ledger=str(self.ledger), state_dir=str(self.scratch), timeout=10,
+                ticket_id=TICKET, run_id=run_id, task_handle=handle,
+            ))
+        self.assertEqual(self.record(run_id)["state"], "background_dispatched")
+        self.assertEqual(self.record(run_id)["task_handle"], handle)
+        self.assertEqual(self.ticket()["native_claim"]["task_handle"], handle)
+
+        self._assert_bind_replay_and_wrong_handle_refused(run_id, owner.pid, handle)
 
 if __name__ == "__main__":
     unittest.main()
