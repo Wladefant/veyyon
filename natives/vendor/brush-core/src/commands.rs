@@ -709,7 +709,17 @@ pub(crate) async fn execute_external_command(
 	if let Some(observer) = context.params.spawn_observer() {
 		observer.before_spawn();
 	}
-	match sys::process::spawn(cmd).await {
+	#[cfg(windows)]
+	let spawned = match context.params.spawn_observer().filter(|_| !context.params.detach_reparent) {
+		Some(observer) => {
+			let observer = std::sync::Arc::clone(observer);
+			sys::process::spawn_with_op(cmd, move |command| observer.spawn_windows(command)).await
+		},
+		None => sys::process::spawn(cmd).await,
+	};
+	#[cfg(not(windows))]
+	let spawned = sys::process::spawn(cmd).await;
+	match spawned {
 		Ok(child) => {
 			// Retrieve the pid.
 			#[expect(clippy::cast_possible_wrap)]

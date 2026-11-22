@@ -1,5 +1,9 @@
 import { errorMessage, exponentialBackoffDelay, logger, settleWithin } from "@veyyon/utils";
-import { currentProducerSecretOwner, runWithProducerSecretOwner, type ProducerSecretOwner } from "../secrets/producer-owner";
+import {
+	currentProducerSecretOwner,
+	type ProducerSecretOwner,
+	runWithProducerSecretOwner,
+} from "../secrets/producer-owner";
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;

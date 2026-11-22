@@ -7,6 +7,7 @@
 ### Fixed
 
 - A stalled shell output callback no longer hides a completed command's exit status. Results mark incomplete capture and retain up to 64 KiB of diagnostics when no callback succeeded.
+- A Windows shell timeout stops descendants even if an intermediate process has exited ([#1182](https://github.com/Wladefant/veyyon/issues/1182)).
 
 ## [1.10.7] - 2026-11-16
 

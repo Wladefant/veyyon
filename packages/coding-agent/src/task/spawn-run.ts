@@ -20,7 +20,7 @@ import { agentPrompts } from "../prompts/agent/rows";
 import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry, mainAgentIdFor, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID, mainAgentIdFor } from "../registry/agent-registry";
 import type { AgentSpawnRecord } from "../tools";
 import { TOOL } from "../tools/core/builtin-names";
 import {
