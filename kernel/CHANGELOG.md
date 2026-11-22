@@ -7,6 +7,8 @@
 ### Fixed
 
 - Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+- Publish queued sibling launch grants in one durable root journal replacement instead of copying the transcript for each child ([#1232](https://github.com/Wladefant/veyyon/issues/1232)).
+
 ### Added
 
 - Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
