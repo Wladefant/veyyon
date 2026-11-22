@@ -455,7 +455,7 @@ function validate(workflow: Workflow): void {
 				.replaceAll("${{ matrix.index }}", "0")
 				.replaceAll("${{ matrix.count }}", "1")
 				.replaceAll("${{ matrix.files }}", "3");
-			const run = spawnSync("bash", ["-c", command], {
+			const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", command], {
 				cwd: sandbox,
 				env: {
 					...process.env,

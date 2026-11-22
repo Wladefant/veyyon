@@ -533,8 +533,11 @@ jobs:
             if [[ "$FLEET_ADAPTER" == "true" ]]; then junit_args=(--reporter=junit --reporter-outfile="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"); fi
             file_start="${EPOCHREALTIME/./}"
             # Bound a stuck file independently of the 12-minute shard wrapper.
-            timeout --verbose --kill-after=5s 120s bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" "${junit_args[@]}" 2>&1 | tee "$log"
-            pipeline_status=("${PIPESTATUS[@]}")
+            if timeout --verbose --kill-after=5s 120s bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" "${junit_args[@]}" 2>&1 | tee "$log"; then
+              pipeline_status=(0 0)
+            else
+              pipeline_status=("${PIPESTATUS[@]}")
+            fi
             rc=${pipeline_status[0]}
             elapsed_ms=$(( (${EPOCHREALTIME/./} - file_start) / 1000 ))
             if ((pipeline_status[1] != 0)); then echo "::error::Could not save test log: $file"; exit 1; fi
