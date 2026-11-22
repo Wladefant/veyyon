@@ -1425,13 +1425,13 @@ export class TopicReplenishmentEngine {
 			}
 			if (!stepMem.admitted) break;
 
-			const claimId = (this.#pendingClaimId ??= randomUUID());
+			this.#pendingClaimId ??= randomUUID();
 			const claimResult = await claimNextAuthorizedTicket(this.ledgerPath, {
 				coveredTopics: Array.from(covered),
 				activeUsefulCount: currentRunning,
 				targetCapacity: this.targetCount,
 				hostPid: process.pid,
-				claimId,
+				claimId: this.#pendingClaimId,
 			});
 			if (claimResult.replyUnconfirmed) {
 				return {

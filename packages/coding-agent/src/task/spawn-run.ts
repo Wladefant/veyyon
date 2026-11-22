@@ -841,9 +841,8 @@ export async function runSpawn(
 		agentName: request.params.agent?.trim() || "task",
 		ticketId: request.params.ticketId,
 		runId: request.params.runId,
-		taskHandle: request.params.nativeDispatchBound && request.preAllocatedId
-			? `agent://${request.preAllocatedId}`
-			: undefined,
+		taskHandle:
+			request.params.nativeDispatchBound && request.preAllocatedId ? `agent://${request.preAllocatedId}` : undefined,
 		settled: false,
 	};
 	const notifyStartFailed = async (reason: string): Promise<void> => {

@@ -227,7 +227,9 @@ describe("native replenishment lifecycle contracts", () => {
 
 	it("dispatches once when the same SDK loses both a claim reply and a bind reply", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
-		const run = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makePassResult(options));
+		const run = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => makePassResult(options));
 		const ticketId = "ticket-lost-replies";
 		const harness = await setupHarness({
 			settings: { "async.enabled": true },
