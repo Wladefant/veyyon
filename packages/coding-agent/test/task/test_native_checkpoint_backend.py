@@ -165,6 +165,35 @@ class NativeCheckpointBackend(unittest.TestCase):
             "artifacts": [],
         }
 
+    def request_ledger(self):
+        from ledger import RequestLedger
+
+        return RequestLedger(
+            ledger_path=str(self.ledger),
+            decisions_path=str(self.scratch / "decisions.json"),
+        )
+
+    def make_criteria(self):
+        return [{
+            "id": "AC-1",
+            "description": "Verify the scratch commit",
+            "status": "pending",
+            "evidence": "",
+            "head": None,
+            "verified_head": None,
+            "verified_at": None,
+            "verified_by": None,
+        }]
+
+    def advance_commit(self, parent, message):
+        tree = self.git("rev-parse", "HEAD^{tree}")
+        head = self.git(
+            "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", parent, "-m", message,
+        )
+        self.git("update-ref", "HEAD", head, parent)
+        return head
+
     def complete(self, error=""):
         run_id = self.claim()
         self.dispatch(run_id)
@@ -729,9 +758,11 @@ class NativeCheckpointBackend(unittest.TestCase):
 
         ledger_data = json.loads(self.ledger.read_text(encoding="utf-8"))
         host_info = ledger_data["requests"][TICKET]["native_claim"]["host"]
+        fence_info = ledger_data["requests"][TICKET]["native_claim"].get("fence")
         ledger_data["requests"][TICKET]["native_claim"] = {
             "version": 1, "state": "active", "worker_id": "other-worker",
             "run_id": run_id, "task_handle": "agent://other-worker", "host": host_info,
+            **({"fence": fence_info} if fence_info is not None else {}),
         }
         self.ledger.write_text(json.dumps(ledger_data), encoding="utf-8")
 
@@ -746,13 +777,14 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertFalse(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
 
         ledger_data = json.loads(self.ledger.read_text(encoding="utf-8"))
+        fence_info = ledger_data["requests"][TICKET]["native_claim"].get("fence")
         ledger_data["requests"][TICKET]["native_claim"] = {
             "version": 1, "state": "active", "worker_id": "checkpoint-test",
             "run_id": run_id, "task_handle": HANDLE,
             "host": {"name": "foreign-terminal.invalid", "pid": os.getpid()},
+            **({"fence": fence_info} if fence_info is not None else {}),
         }
         self.ledger.write_text(json.dumps(ledger_data), encoding="utf-8")
-        self.assertFalse(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
         with self.fail_ledger_rename():
             with self.assertRaises(OSError):
                 self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=run_id,
@@ -766,6 +798,622 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.assertEqual(self.ticket()["state"], "awaiting authorization")
         self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
         self.assertFalse(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
+
+    def test_torn_review_and_same_head_reopen_to_implementation_stays_implementation(self):
+        from worker_backend import request_stage_epoch
+
+        self.write_requests({
+            TICKET: self.make_request(
+                state="review",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+        self.assertEqual(request_stage_epoch(self.ticket()), 0)
+
+        claimed = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(claimed["claimed"], claimed)
+        run_id = claimed["ticket"]["runId"]
+        self.assertEqual(
+            self.ticket()["native_claim"]["fence"],
+            {"state": "review", "stage": "review", "epoch": 0, "head": self.head},
+        )
+        self.assertEqual(self.record(run_id)["request"]["request_epoch"], 0)
+        self.assertEqual(self.backend.get_native_dispatch(run_id).request["request_epoch"], 0)
+        self.dispatch(run_id, HANDLE)
+        self.assertTrue(self.admit(run_id, HANDLE, host_pid=os.getpid())["admitted"])
+
+        passing = self.review_result()
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=run_id,
+                     task_handle=HANDLE, agent_id=None, result_json=json.dumps(passing),
+                     result_file=None, exit_code=0, error="")
+        durable = self.record(run_id)
+        self.assertEqual(durable["state"], "finalized")
+        self.assertTrue(durable["outcome"]["ok"])
+
+        ledger = self.request_ledger()
+        ledger.update_request(
+            TICKET,
+            state="implementation",
+            actor="reviewer",
+            authorization_update={"notes": "Reopened to implementation at same head"},
+            reason="Follow-up implementation requested on same head",
+        )
+        self.assertEqual(self.ticket()["state"], "implementation")
+        self.assertEqual(self.ticket()["head"], self.head)
+        self.assertEqual(request_stage_epoch(self.ticket()), 1)
+        stale_admit = self.admit(run_id, HANDLE, host_pid=os.getpid())
+        self.assertFalse(stale_admit["admitted"], stale_admit)
+        self.assertTrue(stale_admit.get("error"), stale_admit)
+
+        rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(rec["recovered"], [TICKET], rec)
+        self.assertNotIn("retired", rec)
+        self.assertEqual(rec["reconciled_outcomes"], [{
+            "ticket_id": TICKET, "run_id": run_id, "ok": False, "discarded": True,
+            "state": "implementation",
+        }])
+        ticket = self.ticket()
+        self.assertEqual(ticket["state"], "implementation")
+        self.assertEqual(ticket["head"], self.head)
+        self.assertFalse(ticket.get("evidence"))
+        self.assertEqual(ticket["native_claim"]["state"], "retryable")
+        self.assertEqual(request_stage_epoch(ticket), 1)
+        self.assertEqual(self.record(run_id), durable)
+        self.assertEqual(self.cli(self.bridge.cmd_recover, running_worker_ids="")["recovered"], [])
+
+        next_claim = self.claim_raw(host_pid=os.getpid())
+        self.assertTrue(next_claim["claimed"], next_claim)
+        next_run = next_claim["ticket"]["runId"]
+        self.assertNotEqual(next_run, run_id)
+        self.assertEqual(next_claim["ticket"]["stage"], "build")
+        self.assertEqual(
+            self.ticket()["native_claim"]["fence"],
+            {"state": "implementation", "stage": "build", "epoch": 1, "head": self.head},
+        )
+        self.assertEqual(self.record(next_run)["request"]["request_epoch"], 1)
+
+    def test_torn_build_and_same_stage_head_aba_discards_old_result(self):
+        from worker_backend import request_stage_epoch
+
+        self.write_requests({
+            TICKET: self.make_request(
+                state="implementation", acceptance_criteria=self.make_criteria(),
+                evidence=[], history=[],
+            ),
+        })
+        old_run = self.claim(host_pid=os.getpid())
+        self.dispatch(old_run)
+        output_head = self.advance_commit(self.head, "first build output")
+        passing = {**self.review_result(), "stage": "build", "head_sha": output_head}
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=old_run,
+                     task_handle=HANDLE, agent_id=None, result_json=json.dumps(passing),
+                     result_file=None, exit_code=0, error="")
+        self.assertTrue(self.record(old_run)["outcome"]["ok"])
+
+        ledger = self.request_ledger()
+        ledger.update_request(TICKET, head=output_head, actor="tester")
+        ledger.update_request(TICKET, head=self.head, actor="tester")
+        self.assertEqual(self.ticket()["state"], "implementation")
+        self.assertEqual(self.ticket()["head"], self.head)
+        self.assertEqual(request_stage_epoch(self.ticket()), 2)
+        rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(rec["reconciled_outcomes"], [{
+            "ticket_id": TICKET, "run_id": old_run, "ok": False, "discarded": True,
+            "state": "implementation",
+        }])
+        self.assertEqual(self.ticket()["head"], self.head)
+        self.assertFalse(self.ticket().get("evidence"))
+        self.assertNotEqual(self.claim(host_pid=os.getpid()), old_run)
+
+    def test_same_head_review_implementation_qa_review_aba_discards_old_result_and_permits_fresh_epoch_run(self):
+        from worker_backend import request_stage_epoch
+
+        self.write_requests({
+            TICKET: self.make_request(
+                state="review",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+        old_run = self.claim(host_pid=os.getpid())
+        self.assertEqual(
+            self.ticket()["native_claim"]["fence"],
+            {"state": "review", "stage": "review", "epoch": 0, "head": self.head},
+        )
+        self.dispatch(old_run, "agent://aba-old-review")
+        passing = self.review_result()
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=old_run,
+                     task_handle="agent://aba-old-review", agent_id=None,
+                     result_json=json.dumps(passing), result_file=None, exit_code=0, error="")
+        self.assertEqual(self.record(old_run)["state"], "finalized")
+
+        ledger = self.request_ledger()
+        ledger.update_request(
+            TICKET,
+            state="implementation",
+            actor="reviewer",
+            authorization_update={"notes": "Rework requested for ABA check"},
+            reason="Return from review to implementation",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket()), 1)
+        ledger.update_request(
+            TICKET,
+            state="QA",
+            actor="builder",
+            reason="Implementation ready for QA at same head",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket()), 2)
+        ledger.update_request(
+            TICKET,
+            state="review",
+            actor="qa-worker",
+            criterion_update={
+                "id": "AC-1",
+                "status": "verified",
+                "evidence": "Verified scratch commit in QA",
+            },
+            add_evidence={
+                "id": "ev-qa-aba",
+                "criterion_id": "AC-1",
+                "type": "qa_verification",
+                "summary": "QA verified scratch commit",
+                "details": "Verified head in scratch repository",
+            },
+            reason="QA passed on same head",
+        )
+        self.assertEqual(self.ticket()["state"], "review")
+        self.assertEqual(self.ticket()["head"], self.head)
+        self.assertEqual(request_stage_epoch(self.ticket()), 3)
+
+        rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(rec["recovered"], [TICKET], rec)
+        self.assertNotIn("retired", rec)
+        self.assertEqual(rec["reconciled_outcomes"], [{
+            "ticket_id": TICKET, "run_id": old_run, "ok": False, "discarded": True,
+            "state": "review",
+        }])
+        ticket = self.ticket()
+        self.assertEqual(ticket["state"], "review")
+        self.assertEqual(ticket["head"], self.head)
+        self.assertEqual([ev["id"] for ev in ticket["evidence"]], ["ev-qa-aba"])
+        self.assertFalse(any(
+            e.get("actor") == "WorkerBackend" and e.get("native_run_id") == old_run
+            for e in ticket["history"]
+        ))
+        self.assertEqual(ticket["native_claim"]["state"], "retryable")
+        self.assertEqual(request_stage_epoch(ticket), 3)
+
+        late = self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=old_run,
+                        task_handle="agent://aba-old-review", agent_id=None,
+                        result_json=json.dumps(passing), result_file=None, exit_code=0, error="")
+        self.assertFalse(late["completed"], late)
+        self.assertEqual(self.ticket(), ticket)
+
+        new_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_run, old_run)
+        self.assertEqual(
+            self.ticket()["native_claim"]["fence"],
+            {"state": "review", "stage": "review", "epoch": 3, "head": self.head},
+        )
+        self.assertEqual(self.record(new_run)["request"]["request_epoch"], 3)
+        self.assertEqual(self.backend.get_native_dispatch(new_run).request["request_epoch"], 3)
+        self.dispatch(new_run, "agent://aba-new-review")
+        self.assertTrue(self.admit(new_run, "agent://aba-new-review", host_pid=os.getpid())["admitted"])
+
+        done = self.cli(self.bridge.cmd_complete, ticket_id=TICKET, run_id=new_run,
+                        task_handle="agent://aba-new-review", agent_id=None,
+                        result_json=json.dumps(passing), result_file=None, exit_code=0, error="")
+        self.assertTrue(done["completed"], done)
+        self.assertTrue(done["ok"], done)
+        self.assertNotIn("discarded", done)
+        self.assertEqual(self.ticket()["state"], "awaiting authorization")
+        self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
+        self.assertEqual(len(self.ticket()["evidence"]), 2)
+        self.assertEqual(self.record(new_run)["state"], "finalized")
+        self.assertEqual(self.record(old_run)["state"], "finalized")
+
+    def test_active_claim_same_head_aba_refuses_late_admit_and_complete_then_allows_fresh_epoch_run(self):
+        from worker_backend import request_stage_epoch
+
+        self.write_requests({
+            TICKET: self.make_request(
+                state="review",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+        old_run = self.claim(host_pid=os.getpid())
+        self.dispatch(old_run, "agent://aba-live-old")
+
+        ledger = self.request_ledger()
+        ledger.update_request(
+            TICKET,
+            state="implementation",
+            actor="reviewer",
+            authorization_update={"notes": "Rework requested while old run bound"},
+            reason="Return from review to implementation",
+        )
+        ledger.update_request(
+            TICKET,
+            state="QA",
+            actor="builder",
+            reason="Implementation ready for QA at same head",
+        )
+        ledger.update_request(
+            TICKET,
+            state="review",
+            actor="qa-worker",
+            criterion_update={
+                "id": "AC-1",
+                "status": "verified",
+                "evidence": "Verified scratch commit in QA",
+            },
+            add_evidence={
+                "id": "ev-qa-aba-live",
+                "criterion_id": "AC-1",
+                "type": "qa_verification",
+                "summary": "QA verified scratch commit",
+                "details": "Verified head in scratch repository",
+            },
+            reason="QA passed on same head",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket()), 3)
+        self.assertFalse(self.admit(old_run, "agent://aba-live-old", host_pid=os.getpid())["admitted"])
+
+        stale_done = self.cli(
+            self.bridge.cmd_complete, ticket_id=TICKET, run_id=old_run,
+            task_handle="agent://aba-live-old", agent_id=None,
+            result_json=json.dumps(self.review_result()), result_file=None, exit_code=0, error="",
+        )
+        self.assertTrue(stale_done["completed"], stale_done)
+        self.assertFalse(stale_done["ok"], stale_done)
+        self.assertTrue(stale_done.get("discarded"), stale_done)
+        self.assertEqual(stale_done["state"], "review")
+        self.assertEqual(self.ticket()["state"], "review")
+        self.assertEqual([ev["id"] for ev in self.ticket()["evidence"]], ["ev-qa-aba-live"])
+        self.assertEqual(self.ticket()["native_claim"]["state"], "retryable")
+        self.assertEqual(self.record(old_run)["state"], "finalized")
+
+        new_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_run, old_run)
+        self.assertEqual(self.record(new_run)["request"]["request_epoch"], 3)
+        self.dispatch(new_run, "agent://aba-live-new")
+        self.assertTrue(self.admit(new_run, "agent://aba-live-new", host_pid=os.getpid())["admitted"])
+        fresh_done = self.cli(
+            self.bridge.cmd_complete, ticket_id=TICKET, run_id=new_run,
+            task_handle="agent://aba-live-new", agent_id=None,
+            result_json=json.dumps(self.review_result()), result_file=None, exit_code=0, error="",
+        )
+        self.assertTrue(fresh_done["completed"], fresh_done)
+        self.assertTrue(fresh_done["ok"], fresh_done)
+        self.assertEqual(self.ticket()["state"], "awaiting authorization")
+        self.assertEqual(self.record(new_run)["state"], "finalized")
+
+    def test_unrelated_same_stage_ledger_note_preserves_matching_result(self):
+        from worker_backend import request_stage_epoch
+
+        self.write_requests({
+            "1-note-recover": self.make_request(
+                state="review",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+            "2-note-direct": self.make_request(
+                state="review",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+
+        run_rec = self.claim(host_pid=os.getpid())
+        self.assertEqual(
+            self.ticket("1-note-recover")["native_claim"]["fence"],
+            {"state": "review", "stage": "review", "epoch": 0, "head": self.head},
+        )
+        self.dispatch(run_rec, "agent://note-rec", ticket_id="1-note-recover")
+
+        ledger = self.request_ledger()
+        ledger.update_request(
+            "1-note-recover",
+            next_action="Awaiting review completion",
+            actor="coordinator",
+            reason="Unrelated same-stage coordination note",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket("1-note-recover")), 0)
+        self.assertTrue(self.admit(run_rec, "agent://note-rec", host_pid=os.getpid(),
+                                   ticket_id="1-note-recover")["admitted"])
+
+        passing_rec = self.review_result(ticket_id="1-note-recover")
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id="1-note-recover", run_id=run_rec,
+                     task_handle="agent://note-rec", agent_id=None,
+                     result_json=json.dumps(passing_rec), result_file=None, exit_code=0, error="")
+        ledger.update_request(
+            "1-note-recover",
+            next_action="Post-crash audit note",
+            actor="coordinator",
+            reason="Second unrelated same-stage note",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket("1-note-recover")), 0)
+
+        rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(rec["recovered"], ["1-note-recover"], rec)
+        self.assertEqual(rec["reconciled_outcomes"], [{
+            "ticket_id": "1-note-recover", "run_id": run_rec, "ok": True,
+            "state": "awaiting authorization",
+        }])
+        self.assertEqual(self.ticket("1-note-recover")["state"], "awaiting authorization")
+        self.assertEqual(self.ticket("1-note-recover")["native_claim"]["state"], "retryable")
+        self.assertEqual(len(self.ticket("1-note-recover")["evidence"]), 1)
+        self.assertEqual(self.record(run_rec)["state"], "finalized")
+        self.assertEqual(self.record(run_rec)["request"]["request_epoch"], 0)
+
+        run_dir = self.claim(host_pid=os.getpid())
+        self.dispatch(run_dir, "agent://note-direct", ticket_id="2-note-direct")
+        ledger.update_request(
+            "2-note-direct",
+            next_action="Direct same-stage note",
+            actor="coordinator",
+            reason="Same-stage note before completion",
+        )
+        self.assertEqual(request_stage_epoch(self.ticket("2-note-direct")), 0)
+        done = self.cli(
+            self.bridge.cmd_complete, ticket_id="2-note-direct", run_id=run_dir,
+            task_handle="agent://note-direct", agent_id=None,
+            result_json=json.dumps(self.review_result(ticket_id="2-note-direct")),
+            result_file=None, exit_code=0, error="",
+        )
+        self.assertTrue(done["completed"], done)
+        self.assertTrue(done["ok"], done)
+        self.assertNotIn("discarded", done)
+        self.assertEqual(self.ticket("2-note-direct")["state"], "awaiting authorization")
+        self.assertEqual(len(self.ticket("2-note-direct")["evidence"]), 1)
+
+    def test_injected_retire_complete_ledger_rename_retries_idempotently_and_refuses_stale_old_run(self):
+        self.write_requests({
+            "1-recover-retire": self.make_request(prompt="Torn recovery retirement rename"),
+            "2-rollback-retire": self.make_request(prompt="Torn rollback retirement rename"),
+        })
+
+        owner_a = self.start_live_owner()
+        old_rec_run = self.claim(host_pid=owner_a.pid)
+        self.dispatch(old_rec_run, "agent://retire-torn-a", ticket_id="1-recover-retire")
+        self.assertTrue(self.admit(old_rec_run, "agent://retire-torn-a", host_pid=owner_a.pid,
+                                   ticket_id="1-recover-retire")["admitted"])
+        dead_pid = self.stop_owner(owner_a)
+
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(self.record(old_rec_run)["state"], "retired")
+        self.assertEqual(self.record(old_rec_run)["task_handle"], "agent://retire-torn-a")
+        self.assertIsNone(self.backend.get_native_outcome(old_rec_run))
+        self.assertEqual(self.ticket("1-recover-retire")["native_claim"]["state"], "active")
+        self.assertEqual(self.ticket("1-recover-retire")["native_claim"]["run_id"], old_rec_run)
+        self.assertFalse(self.admit(old_rec_run, "agent://retire-torn-a", host_pid=dead_pid,
+                                    ticket_id="1-recover-retire")["admitted"])
+        self.assertFalse(self.admit(old_rec_run, "agent://retire-torn-a", host_pid=os.getpid(),
+                                    ticket_id="1-recover-retire")["admitted"])
+
+        retried_rec = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(retried_rec["recovered"], ["1-recover-retire"], retried_rec)
+        self.assertEqual(retried_rec["retired"], ["1-recover-retire"], retried_rec)
+        self.assertEqual(self.ticket("1-recover-retire")["native_claim"]["state"], "retryable")
+        self.assertEqual(self.ticket("1-recover-retire")["history"][-1]["native_retired_run_id"], old_rec_run)
+        self.assertEqual(self.record(old_rec_run)["state"], "retired")
+        self.assertIsNone(self.backend.get_native_outcome(old_rec_run))
+        self.assertEqual(self.cli(self.bridge.cmd_recover, running_worker_ids="")["recovered"], [])
+
+        new_rec_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_rec_run, old_rec_run)
+        self.assertEqual(self.record(new_rec_run)["retry_of"], old_rec_run)
+        self.dispatch(new_rec_run, "agent://retire-fresh-b", ticket_id="1-recover-retire")
+        self.assertTrue(self.admit(new_rec_run, "agent://retire-fresh-b", host_pid=os.getpid(),
+                                   ticket_id="1-recover-retire")["admitted"])
+
+        self.assertFalse(self.admit(old_rec_run, "agent://retire-torn-a", host_pid=os.getpid(),
+                                    ticket_id="1-recover-retire")["admitted"])
+        stale_rec_complete = self.cli(
+            self.bridge.cmd_complete, ticket_id="1-recover-retire", run_id=old_rec_run,
+            task_handle="agent://retire-torn-a", agent_id=None,
+            result_json=json.dumps(self.review_result(ticket_id="1-recover-retire")),
+            result_file=None, exit_code=0, error="",
+        )
+        self.assertFalse(stale_rec_complete["completed"], stale_rec_complete)
+        stale_rec_rollback = self.cli(
+            self.bridge.cmd_rollback, ticket_id="1-recover-retire", run_id=old_rec_run,
+            task_handle="agent://retire-torn-a", previous_state="review", reason="stale rollback",
+        )
+        self.assertFalse(stale_rec_rollback["rolled_back"], stale_rec_rollback)
+        self.assertEqual(self.ticket("1-recover-retire")["native_claim"]["run_id"], new_rec_run)
+        self.assertEqual(self.record(new_rec_run)["state"], "background_dispatched")
+
+        done_rec = self.cli(
+            self.bridge.cmd_complete, ticket_id="1-recover-retire", run_id=new_rec_run,
+            task_handle="agent://retire-fresh-b", agent_id=None,
+            result_json=json.dumps(self.review_result(ticket_id="1-recover-retire")),
+            result_file=None, exit_code=0, error="",
+        )
+        self.assertTrue(done_rec["completed"], done_rec)
+        self.assertTrue(done_rec["ok"], done_rec)
+        self.assertEqual(self.ticket("1-recover-retire")["state"], "awaiting authorization")
+
+        old_rb_run = self.claim(host_pid=os.getpid())
+        self.dispatch(old_rb_run, "agent://rb-torn-a", ticket_id="2-rollback-retire")
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_rollback, ticket_id="2-rollback-retire", run_id=old_rb_run,
+                     task_handle="agent://rb-torn-a", previous_state="review",
+                     reason="torn rollback ledger rename")
+        self.assertEqual(self.record(old_rb_run)["state"], "retired")
+        self.assertEqual(self.ticket("2-rollback-retire")["native_claim"]["state"], "active")
+        self.assertEqual(self.ticket("2-rollback-retire")["native_claim"]["run_id"], old_rb_run)
+
+        retried_rb = self.cli(
+            self.bridge.cmd_rollback, ticket_id="2-rollback-retire", run_id=old_rb_run,
+            task_handle="agent://rb-torn-a", previous_state="review",
+            reason="retry torn rollback",
+        )
+        self.assertTrue(retried_rb["rolled_back"], retried_rb)
+        self.assertEqual(retried_rb["retired_run_id"], old_rb_run)
+        self.assertEqual(self.ticket("2-rollback-retire")["native_claim"]["state"], "retryable")
+        self.assertEqual(self.ticket("2-rollback-retire")["history"][-1]["native_retired_run_id"], old_rb_run)
+        again_rb = self.cli(
+            self.bridge.cmd_rollback, ticket_id="2-rollback-retire", run_id=old_rb_run,
+            task_handle="agent://rb-torn-a", previous_state="review",
+            reason="duplicate retry rollback",
+        )
+        self.assertFalse(again_rb["rolled_back"], again_rb)
+
+        new_rb_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_rb_run, old_rb_run)
+        self.assertEqual(self.record(new_rb_run)["retry_of"], old_rb_run)
+        self.dispatch(new_rb_run, "agent://rb-fresh-b", ticket_id="2-rollback-retire")
+        self.assertTrue(self.admit(new_rb_run, "agent://rb-fresh-b", host_pid=os.getpid(),
+                                   ticket_id="2-rollback-retire")["admitted"])
+        self.assertFalse(self.admit(old_rb_run, "agent://rb-torn-a", host_pid=os.getpid(),
+                                    ticket_id="2-rollback-retire")["admitted"])
+        self.assertFalse(self.cli(
+            self.bridge.cmd_complete, ticket_id="2-rollback-retire", run_id=old_rb_run,
+            task_handle="agent://rb-torn-a", agent_id=None,
+            result_json=json.dumps(self.review_result(ticket_id="2-rollback-retire")),
+            result_file=None, exit_code=0, error="",
+        )["completed"])
+        done_rb = self.cli(
+            self.bridge.cmd_complete, ticket_id="2-rollback-retire", run_id=new_rb_run,
+            task_handle="agent://rb-fresh-b", agent_id=None,
+            result_json=json.dumps(self.review_result(ticket_id="2-rollback-retire")),
+            result_file=None, exit_code=0, error="",
+        )
+        self.assertTrue(done_rb["completed"], done_rb)
+        self.assertTrue(done_rb["ok"], done_rb)
+        self.assertEqual(self.ticket("2-rollback-retire")["state"], "awaiting authorization")
+
+    def test_backend_epoch_index_matrix_and_stage_head_contract(self):
+        from worker_backend import WorkerBackendError, WorkerRequest, request_stage_epoch
+
+        self.assertEqual(request_stage_epoch({"history": []}), 0)
+        self.assertEqual(request_stage_epoch({"history": [
+            {"from_state": None, "to_state": "pending"},
+            {"from_state": "pending", "to_state": "implementation"},
+            {"from_state": "implementation", "to_state": "build"},
+            {"from_state": "QA", "to_state": "qa"},
+        ]}), 0)
+        self.assertEqual(request_stage_epoch({"history": [
+            {"from_state": None, "to_state": "pending"},
+            {"from_state": "pending", "to_state": "implementation"},
+            {"from_state": "implementation", "to_state": "QA"},
+            {"from_state": "QA", "to_state": "QA"},
+            {"from_state": "QA", "to_state": "review"},
+            {"from_state": "review", "to_state": "implementation"},
+        ]}), 3)
+
+        for bad_epoch in (-1, "1", True):
+            bad = self.backend.prepare_native(WorkerRequest(
+                request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+                head_sha=self.head, model="test-model", agent_role="task",
+                prompt="Check epoch validation", request_epoch=bad_epoch,
+            ))
+            self.assertEqual(bad.state, "blocked", (bad_epoch, bad))
+            self.assertTrue(bad.blocked_reason, (bad_epoch, bad))
+
+        t0 = self.backend.prepare_native(WorkerRequest(
+            request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+            head_sha=self.head, model="test-model", agent_role="task",
+            prompt="Epoch 0 attempt", request_epoch=None,
+        ))
+        self.assertEqual(t0.state, "prepared", t0)
+        self.assertEqual(t0.request["request_epoch"], 0)
+        self.assertEqual(self.record(t0.run_id)["request"]["request_epoch"], 0)
+        self.assertEqual(self.backend.prepare_native(WorkerRequest(
+            request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+            head_sha=self.head, model="test-model", agent_role="task",
+            prompt="Epoch 0 equal reuse", request_epoch=0,
+        )).run_id, t0.run_id)
+
+        blocked_while_prepared = self.backend.prepare_native(WorkerRequest(
+            request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+            head_sha=self.head, model="test-model", agent_role="task",
+            prompt="Epoch 1 while prepared", request_epoch=1,
+        ))
+        self.assertEqual(blocked_while_prepared.state, "blocked", blocked_while_prepared)
+        self.assertTrue(blocked_while_prepared.blocked_reason, blocked_while_prepared)
+
+        self.backend.record_native_dispatch(t0.run_id, "agent://epoch-0")
+        blocked_while_active = self.backend.prepare_native(WorkerRequest(
+            request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+            head_sha=self.head, model="test-model", agent_role="task",
+            prompt="Epoch 1 while bound", request_epoch=1,
+        ))
+        self.assertEqual(blocked_while_active.state, "blocked", blocked_while_active)
+        self.assertTrue(blocked_while_active.blocked_reason, blocked_while_active)
+
+        self.backend.retire_native(t0.run_id, "agent://epoch-0", "retired epoch 0")
+        t1 = self.backend.prepare_native(WorkerRequest(
+            request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+            head_sha=self.head, model="test-model", agent_role="task",
+            prompt="Epoch 1 after terminal", request_epoch=1,
+        ))
+        self.assertEqual(t1.state, "prepared", t1)
+        self.assertNotEqual(t1.run_id, t0.run_id)
+        self.assertEqual(t1.request["request_epoch"], 1)
+        with self.assertRaises(WorkerBackendError):
+            self.backend.retry_native(t0.run_id)
+
+        self.backend.record_native_dispatch(t1.run_id, "agent://epoch-1")
+        out1 = self.backend.complete_native(t1.run_id, "agent://epoch-1", self.review_result("epoch-matrix"))
+        self.assertTrue(out1.ok, out1)
+
+        lower = self.backend.prepare_native(WorkerRequest(
+            request_id="epoch-matrix", stage="review", repo_root=str(self.repo),
+            head_sha=self.head, model="test-model", agent_role="task",
+            prompt="Stale epoch 0", request_epoch=0,
+        ))
+        self.assertEqual(lower.state, "blocked", lower)
+        self.assertTrue(lower.blocked_reason, lower)
+        self.assertIsNone(lower.task_handle)
+
+        self.write_requests({
+            "build-vs-qa": self.make_request(
+                state="implementation",
+                acceptance_criteria=self.make_criteria(),
+                evidence=[],
+                history=[],
+            ),
+        })
+        build_run = self.claim(host_pid=os.getpid())
+        self.dispatch(build_run, "agent://build-output", ticket_id="build-vs-qa")
+        h1 = self.advance_commit(self.head, "build output head")
+        build_result = {**self.review_result("build-vs-qa"), "stage": "build", "head_sha": h1}
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.cli(self.bridge.cmd_complete, ticket_id="build-vs-qa", run_id=build_run,
+                     task_handle="agent://build-output", agent_id=None,
+                     result_json=json.dumps(build_result), result_file=None, exit_code=0, error="")
+        rec_build = self.cli(self.bridge.cmd_recover, running_worker_ids="")
+        self.assertEqual(rec_build["reconciled_outcomes"], [{
+            "ticket_id": "build-vs-qa", "run_id": build_run, "ok": True, "state": "QA",
+        }])
+        self.assertEqual(self.ticket("build-vs-qa")["state"], "QA")
+        self.assertEqual(self.ticket("build-vs-qa")["head"], h1)
+
+        qa_run = self.claim(host_pid=os.getpid())
+        self.dispatch(qa_run, "agent://qa-moved-head", ticket_id="build-vs-qa")
+        h2 = self.advance_commit(h1, "unexpected head drift during QA")
+        qa_result = {**self.review_result("build-vs-qa"), "stage": "qa", "head_sha": h2}
+        qa_done = self.cli(self.bridge.cmd_complete, ticket_id="build-vs-qa", run_id=qa_run,
+                           task_handle="agent://qa-moved-head", agent_id=None,
+                           result_json=json.dumps(qa_result), result_file=None, exit_code=0, error="")
+        self.assertTrue(qa_done["completed"], qa_done)
+        self.assertFalse(qa_done["ok"], qa_done)
+        self.assertEqual(self.ticket("build-vs-qa")["state"], "QA")
+        self.assertEqual(self.ticket("build-vs-qa")["head"], h1)
 
 
 if __name__ == "__main__":

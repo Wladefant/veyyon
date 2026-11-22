@@ -268,7 +268,39 @@ def get_iso_now() -> str:
 
 
 BASE_NATIVE_CLAIM_KEYS = frozenset({"version", "state", "worker_id", "run_id", "task_handle"})
-ACTIVE_NATIVE_CLAIM_KEYS = BASE_NATIVE_CLAIM_KEYS | frozenset({"host"})
+ACTIVE_NATIVE_CLAIM_KEYS = BASE_NATIVE_CLAIM_KEYS | frozenset({"host", "fence"})
+
+
+def lifecycle_stage(state: Any) -> Optional[str]:
+    if not isinstance(state, str) or not state.strip():
+        return None
+    value = state.strip().lower()
+    return "build" if value in ("pending", "implementation", "build") else value
+
+
+def request_epoch(req: Mapping[str, Any]) -> int:
+    if WorkerBackend is not None:
+        # The installed backend and adapter compute the same epoch.
+        from worker_backend import request_stage_epoch
+        return request_stage_epoch(req)
+    epoch = 0
+    for entry in req.get("history") or []:
+        if not isinstance(entry, dict):
+            continue
+        before, after = lifecycle_stage(entry.get("from_state")), lifecycle_stage(entry.get("to_state"))
+        if entry.get("native_head_changed") is True or (before and after and before != after):
+            epoch += 1
+    return epoch
+
+
+def request_fence(req: Mapping[str, Any]) -> Dict[str, Any]:
+    state = str(req.get("state") or "pending").lower()
+    return {
+        "state": state,
+        "stage": str(req.get("stage") or lifecycle_stage(state) or "build").lower(),
+        "epoch": request_epoch(req),
+        "head": req.get("head"),
+    }
 
 
 def local_host_name() -> str:
@@ -417,7 +449,7 @@ def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
     if type(claim["version"]) is not int or claim["version"] != 1:
         return "Unsupported native claim version"
     if claim["state"] == "retryable":
-        if "host" in claim:
+        if "host" in claim or "fence" in claim:
             return "Malformed native claim"
         if any(claim[key] is not None for key in ("worker_id", "run_id", "task_handle")):
             return "Retryable native claim still has an execution identity"
@@ -443,6 +475,16 @@ def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
             return "Invalid native claim host PID"
         if "started" in host and (not isinstance(host["started"], str) or not host["started"].strip()):
             return "Invalid native claim host start identity"
+    if "fence" in claim:
+        fence = claim["fence"]
+        if (
+            not isinstance(fence, dict) or set(fence) != {"state", "stage", "epoch", "head"}
+            or not isinstance(fence["state"], str) or not fence["state"]
+            or not isinstance(fence["stage"], str) or not fence["stage"]
+            or type(fence["epoch"]) is not int or fence["epoch"] < 0
+            or (fence["head"] is not None and not isinstance(fence["head"], str))
+        ):
+            return "Malformed native claim request fence"
     return None
 
 
@@ -536,14 +578,23 @@ def project_native_outcome(
     ts = now_iso or get_iso_now()
     from_state = req.get("state") or "implementation"
     history = req.setdefault("history", [])
+    claim = active_native_claim(req)
+    captured = claim.get("fence") if claim else None
+    stale_generation = (
+        (captured is None and WorkerBackend is not None)
+        or (captured is not None and (
+            captured != request_fence(req)
+            or (outcome_dict.get("ok") and WorkerBackend is not None and outcome_dict.get("stage") != captured["stage"])
+        ))
+    )
     current_head = req.get("head")
-    if prepared_head is not None and current_head and (
+    if stale_generation or (prepared_head is not None and current_head and (
         current_head != prepared_head
         or (
             outcome_dict.get("ok") and outcome_dict.get("stage") in ("qa", "review")
             and current_head != outcome_dict.get("head_sha")
         )
-    ):
+    )):
         # A build can report a new output head, but it still belongs to the
         # immutable input head captured when the backend prepared this run.
         req["native_claim"] = retryable_native_claim()
@@ -553,7 +604,7 @@ def project_native_outcome(
             "timestamp": ts,
             "from_state": from_state,
             "to_state": from_state,
-            "reason": "Discarded native outcome because the request head changed",
+            "reason": "Discarded native outcome because the request head, stage or epoch changed",
             "stale_native_run_id": run_id,
         })
         return False
@@ -585,6 +636,7 @@ def project_native_outcome(
             "to_state": next_state,
             "reason": f"Stage {outcome_dict.get('stage')} validated successfully",
             "native_run_id": run_id,
+            **({"native_head_changed": True} if req.get("head") != current_head else {}),
         })
     else:
         reason = outcome_dict.get("blocked_reason") or "Worker verification failed"
@@ -769,11 +821,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
         for _, cand_id, cand_topic, cand_req in candidates:
             cand_from_state = cand_req.get("state") or "pending"
             cand_prompt = cand_req.get("prompt", "")
-            cand_stage = str(cand_req.get("stage") or (
-                "qa" if str(cand_from_state).lower() == "qa"
-                else "review" if str(cand_from_state).lower() == "review"
-                else "build"
-            ))
+            candidate_fence = request_fence(cand_req)
+            cand_stage = candidate_fence["stage"]
             cand_repo_root = str(cand_req.get("repo_root") or os.getcwd())
             cand_head_sha = cand_req.get("head")
             cand_result_schema = None
@@ -786,6 +835,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
                         stage=cand_stage,
                         repo_root=cand_repo_root,
                         head_sha=cand_head_sha,
+                        request_epoch=candidate_fence["epoch"],
                         model=str(cand_req.get("model") or os.environ.get("VEYYON_DEFAULT_MODEL") or ""),
                         agent_role=str(cand_req.get("agent_role") or "task"),
                         prompt=cand_prompt,
@@ -837,6 +887,9 @@ def cmd_claim(args: argparse.Namespace) -> int:
                     or native_ticket.blocked_reason
                     or not isinstance(native_ticket.run_id, str)
                     or not native_ticket.run_id.strip()
+                    or (native_ticket.request.get("request_epoch") or 0) != candidate_fence["epoch"]
+                    or native_ticket.request.get("stage") != candidate_fence["stage"]
+                    or (cand_head_sha is not None and native_ticket.head_sha != cand_head_sha)
                 ):
                     refusal = (
                         native_ticket.blocked_reason
@@ -906,6 +959,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
         native_claim: Dict[str, Any] = {
             "version": 1, "state": "active", "worker_id": worker_id,
             "run_id": run_id, "task_handle": None,
+            "fence": request_fence(chosen_req),
         }
         if host is not None:
             native_claim["host"] = host
@@ -964,6 +1018,9 @@ def cmd_record_dispatch(args: argparse.Namespace) -> int:
                 or not is_valid_task_handle(task_handle)
                 or claim["task_handle"] not in (None, task_handle)):
             print(json.dumps({"recorded": False, "error": "Ledger claim no longer owns this native dispatch"}))
+            return 1
+        if claim.get("fence") != request_fence(req) and (WorkerBackend is not None or "fence" in claim):
+            print(json.dumps({"recorded": False, "error": "Native claim's request head, stage or epoch changed"}))
             return 1
         ticket = None
         if WorkerBackend is not None:
@@ -1484,6 +1541,8 @@ def cmd_admit(args: argparse.Namespace) -> int:
 
         if claim["task_handle"] != task_handle:
             return _admit_refusal("Ledger claim no longer owns this native task handle")
+        if claim.get("fence") != request_fence(req) and (WorkerBackend is not None or "fence" in claim):
+            return _admit_refusal("Native claim's request head, stage or epoch changed")
 
         if "host" in claim:
             claim_host = claim["host"]
