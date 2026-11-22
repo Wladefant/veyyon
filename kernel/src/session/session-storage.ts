@@ -992,7 +992,7 @@ export class FileSessionStorage implements SessionStorage {
 				return allowed;
 			};
 			try {
-				const publishScope = this.#captureStagedPublishScope(fpath, tempPath);
+				const publishScope = this.#captureStagedPublishScope(fpath, tempPath, options?.sourceSnapshot);
 				writeChunksSync(tempPath, body);
 				if (!commitGuard()) throw new Error("Original journal changed before synchronous publication");
 				this.#withStagedPublishScope(publishScope, () => {
@@ -1330,7 +1330,9 @@ export class FileSessionStorage implements SessionStorage {
 	/** The common case checks only a stat. Never reread the staged body or the old journal. */
 	#prepareStagedJournalPublish(scope: StagedPublishScope): void {
 		if (scope.backupPath && fs.lstatSync(scope.targetPath, { throwIfNoEntry: false })) {
-			throw new Error(`Session journal reappeared during EPERM replacement; original retained at ${scope.backupPath}`);
+			throw new Error(
+				`Session journal reappeared during EPERM replacement; original retained at ${scope.backupPath}`,
+			);
 		}
 		const original = scope.backupPath ?? scope.targetPath;
 		const stats = fs.lstatSync(original, { throwIfNoEntry: false });
