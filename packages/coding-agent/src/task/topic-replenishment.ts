@@ -18,6 +18,7 @@
  *    Missing executor fails immediately before claiming or incrementing counts.
  * 7. On worker dispatch error, claimed tickets are rolled back to pending with audit history.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
@@ -301,12 +302,19 @@ export interface VerificationWorkerStart {
 	agentName: string;
 	runId?: string;
 	ticketId?: string;
+	taskHandle?: string;
+	reason?: string;
 }
 
 export interface ReplenishmentCycleOptions {
 	onCleanup?: () => Promise<void> | void;
 	dispatchWorker?: (ticket: ClaimedTicket) => Promise<unknown>;
 	memoryProvider?: MemoryMeasurementProvider;
+}
+
+export interface WorkerCompleteOptions extends ReplenishmentCycleOptions {
+	/** Skip synchronous replenishment while an outer async-manager job slot is still held. */
+	deferReplenish?: boolean;
 }
 
 export interface BlockedTopicInfo {
@@ -899,7 +907,7 @@ export async function rollbackClaimedTicket(
 	ledgerPath: string,
 	ticketId: string,
 	reason: string,
-	options: { lockTimeoutMs?: number; runId: string; previousState: string },
+	options: { lockTimeoutMs?: number; runId: string; previousState?: string; taskHandle?: string },
 ): Promise<{ rolled_back: boolean; error?: string }> {
 	const args = [
 		"rollback",
@@ -912,8 +920,11 @@ export async function rollbackClaimedTicket(
 		"--run-id",
 		options.runId,
 		"--previous-state",
-		options.previousState,
+		options.previousState ?? "auto",
 	];
+	if (options.taskHandle) {
+		args.push("--task-handle", options.taskHandle);
+	}
 	if (options.lockTimeoutMs) {
 		args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
@@ -996,8 +1007,14 @@ export async function recoverOrphanedClaims(
 
 // --- Native Dispatch Engine ---
 
+interface ActiveLeaseFrame {
+	readonly keys: ReadonlySet<string>;
+	readonly postLeaseCallbacks: Map<string, Array<() => void>>;
+}
+
 const replenishmentTails = new Map<string, Promise<void>>();
-const replenishmentReservations = new Map<string, Set<string>>();
+const replenishmentReservations = new Map<string, Map<string, string>>();
+const activeReplenishmentLeases = new AsyncLocalStorage<ActiveLeaseFrame>();
 
 async function withReplenishmentLease<T>(key: string, run: () => Promise<T>): Promise<T> {
 	const previous = replenishmentTails.get(key) ?? Promise.resolve();
@@ -1008,12 +1025,26 @@ async function withReplenishmentLease<T>(key: string, run: () => Promise<T>): Pr
 	const tail = previous.then(() => reservation);
 	replenishmentTails.set(key, tail);
 	await previous;
+	const parentFrame = activeReplenishmentLeases.getStore();
+	const keys = new Set(parentFrame?.keys);
+	keys.add(key);
+	const postLeaseCallbacks = new Map(parentFrame?.postLeaseCallbacks);
+	postLeaseCallbacks.set(key, []);
+	const frame: ActiveLeaseFrame = { keys, postLeaseCallbacks };
+	let result: T;
 	try {
-		return await run();
+		result = await activeReplenishmentLeases.run(frame, run);
 	} finally {
 		release();
 		if (replenishmentTails.get(key) === tail) replenishmentTails.delete(key);
 	}
+	const callbacks = frame.postLeaseCallbacks.get(key);
+	if (callbacks && callbacks.length > 0) {
+		for (const callback of callbacks) {
+			callback();
+		}
+	}
+	return result;
 }
 
 export class TopicReplenishmentEngine {
@@ -1027,6 +1058,11 @@ export class TopicReplenishmentEngine {
 	readonly memoryProvider?: MemoryMeasurementProvider;
 	#verificationWorkers = new Map<string, VerificationWorkerStart>();
 	#cycleOptions?: ReplenishmentCycleOptions;
+	#claimedPreviousStates = new Map<string, string>();
+	#rolledBackRuns = new Set<string>();
+	#pendingPostLease: { roster: readonly (NativeActorSnapshot | Record<string, unknown>)[]; options?: ReplenishmentCycleOptions } | null = null;
+	#postLeaseScheduled = false;
+	#pendingReplenishPromise: Promise<void> | null = null;
 
 	constructor(options?: TopicReplenishmentEngineOptions) {
 		this.ledgerPath = options?.ledgerPath ?? getDefaultLedgerPath();
@@ -1050,8 +1086,108 @@ export class TopicReplenishmentEngine {
 		this.#verificationWorkers.set(key, event);
 	}
 
-	onWorkerStartFailed(event: VerificationWorkerStart): void {
+	async onWorkerStartFailed(event: VerificationWorkerStart): Promise<{ rolledBack: boolean }> {
 		this.#removeVerificationWorker(event);
+		this.#releaseReservation(event.ticketId, event.runId);
+		if (!event.ticketId || !event.runId || !fs.existsSync(this.ledgerPath)) {
+			return { rolledBack: false };
+		}
+		const claimKey = `${event.ticketId}\0${event.runId}`;
+		const previousState = this.#claimedPreviousStates.get(claimKey);
+		const rollback = await this.rollbackClaimedTicket(
+			event.ticketId,
+			event.reason || "Subagent failed before completion",
+			event.runId,
+			previousState,
+			event.taskHandle,
+		);
+		if (rollback.rolled_back) {
+			this.#claimedPreviousStates.delete(claimKey);
+			this.#rolledBackRuns.add(claimKey);
+			if (this.#rolledBackRuns.size > 1000) {
+				const oldest = this.#rolledBackRuns.values().next().value;
+				if (oldest !== undefined) this.#rolledBackRuns.delete(oldest);
+			}
+		}
+		return { rolledBack: rollback.rolled_back };
+	}
+
+	#releaseReservation(ticketId?: string, runId?: string): void {
+		if (!ticketId) return;
+		const reservations = replenishmentReservations.get(this.ledgerPath);
+		if (!reservations) return;
+		if (runId !== undefined) {
+			if (reservations.get(ticketId) === runId) {
+				reservations.delete(ticketId);
+			}
+			return;
+		}
+		reservations.delete(ticketId);
+	}
+
+	#deferredReplenishOutcome(
+		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
+		reason: string,
+	): ReplenishmentOutcome {
+		const reconciliation = reconcileRunningTopics(roster, {
+			minFloor: this.minFloor,
+			targetCount: this.targetCount,
+		});
+		return {
+			reconciliation,
+			memoryAdmission: { admitted: true, usedPct: 0, freeMb: 0, totalMb: 0 },
+			dispatchedTickets: [],
+			dispatchedCount: 0,
+			blockedTopics: [],
+			status: this.#verificationBlocked() ? "verification_blocked" : "floor_satisfied",
+			reason,
+		};
+	}
+
+	#schedulePostLeaseReplenish(
+		frame: ActiveLeaseFrame,
+		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
+		options?: ReplenishmentCycleOptions,
+	): void {
+		this.#pendingPostLease = { roster, options };
+		if (this.#postLeaseScheduled) return;
+		this.#postLeaseScheduled = true;
+		const callbacks = frame.postLeaseCallbacks.get(this.ledgerPath);
+		const runFollowUp = () => {
+			this.#postLeaseScheduled = false;
+			const pending = this.#pendingPostLease;
+			this.#pendingPostLease = null;
+			if (!pending) return;
+			const previous = this.#pendingReplenishPromise ?? Promise.resolve();
+			const next = previous
+				.then(() => this.replenish(pending.roster, pending.options))
+				.then(
+					() => undefined,
+					err => {
+						logger.warn("TopicReplenishmentEngine: post-settlement replenishment failed", {
+							error: errorMessage(err),
+						});
+					},
+				)
+				.finally(() => {
+					if (this.#pendingReplenishPromise === next) {
+						this.#pendingReplenishPromise = null;
+					}
+				});
+			this.#pendingReplenishPromise = next;
+		};
+		if (callbacks) {
+			callbacks.push(runFollowUp);
+		} else {
+			queueMicrotask(runFollowUp);
+		}
+	}
+
+	/** Wait for any post-lease replenishment cycles scheduled after inline completion. */
+	async waitForPendingReplenishment(): Promise<void> {
+		while (this.#pendingReplenishPromise) {
+			await this.#pendingReplenishPromise;
+		}
 	}
 
 	#reconcileVerificationWorkers(currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[]): void {
@@ -1115,9 +1251,14 @@ export class TopicReplenishmentEngine {
 		ticketId: string,
 		reason: string,
 		runId: string,
-		previousState: string,
+		previousState?: string,
+		taskHandle?: string,
 	): Promise<{ rolled_back: boolean }> {
-		return await rollbackClaimedTicket(this.ledgerPath, ticketId, reason, { runId, previousState });
+		return await rollbackClaimedTicket(this.ledgerPath, ticketId, reason, {
+			runId,
+			previousState,
+			taskHandle,
+		});
 	}
 
 	async completeClaimedTicket(
@@ -1188,7 +1329,7 @@ export class TopicReplenishmentEngine {
 			return this.#verificationBlockedOutcome(reconciliation, memoryAdmission);
 		}
 
-		const reservations = replenishmentReservations.get(this.ledgerPath) ?? new Set<string>();
+		const reservations = replenishmentReservations.get(this.ledgerPath) ?? new Map<string, string>();
 		replenishmentReservations.set(this.ledgerPath, reservations);
 		const effectiveActiveCount = reconciliation.activeUsefulCount + reservations.size;
 		if (effectiveActiveCount >= this.targetCount || effectiveActiveCount >= this.maxCeiling) {
@@ -1267,20 +1408,30 @@ export class TopicReplenishmentEngine {
 			if (!claimResult.claimed || !claimResult.ticket) break;
 
 			const ticket = claimResult.ticket;
+			const claimKey = `${ticket.id}\0${ticket.runId}`;
 			dispatchedTickets.push(ticket);
 			covered.add(ticket.topic);
 			currentRunning++;
+			reservations.set(ticket.id, ticket.runId);
+			this.#claimedPreviousStates.set(claimKey, ticket.previousState);
+			this.#rolledBackRuns.delete(claimKey);
 
 			try {
 				await activeExecutor(ticket);
-				reservations.add(ticket.id);
 			} catch (err) {
-				const rollback = await this.rollbackClaimedTicket(
-					ticket.id,
-					String(err),
-					ticket.runId,
-					ticket.previousState,
-				);
+				if (reservations.get(ticket.id) === ticket.runId) {
+					reservations.delete(ticket.id);
+				}
+				this.#claimedPreviousStates.delete(claimKey);
+				const alreadyRolledBack = this.#rolledBackRuns.delete(claimKey);
+				const rollback = alreadyRolledBack
+					? { rolled_back: true }
+					: await this.rollbackClaimedTicket(
+							ticket.id,
+							String(err),
+							ticket.runId,
+							ticket.previousState,
+						);
 				return {
 					reconciliation,
 					memoryAdmission,
@@ -1316,10 +1467,12 @@ export class TopicReplenishmentEngine {
 	async onWorkerComplete(
 		event: SubagentCompleteEvent,
 		currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
-		options?: ReplenishmentCycleOptions,
+		options?: WorkerCompleteOptions,
 	): Promise<ReplenishmentOutcome> {
-		const reservations = replenishmentReservations.get(this.ledgerPath);
-		if (event.ticketId) reservations?.delete(event.ticketId);
+		this.#releaseReservation(event.ticketId, event.runId);
+		if (event.ticketId && event.runId) {
+			this.#claimedPreviousStates.delete(`${event.ticketId}\0${event.runId}`);
+		}
 		if (event.ticketId && fs.existsSync(this.ledgerPath)) {
 			try {
 				const completion = await completeClaimedTicket(this.ledgerPath, event.ticketId, {
@@ -1352,7 +1505,22 @@ export class TopicReplenishmentEngine {
 			return true;
 		});
 
-		return this.replenish(updatedRoster, options ?? this.#cycleOptions);
+		const cycleOptions = options ?? this.#cycleOptions;
+		if (options?.deferReplenish) {
+			return this.#deferredReplenishOutcome(
+				updatedRoster,
+				"Replenishment deferred until background job slot releases.",
+			);
+		}
+		const activeFrame = activeReplenishmentLeases.getStore();
+		if (activeFrame?.keys.has(this.ledgerPath)) {
+			this.#schedulePostLeaseReplenish(activeFrame, updatedRoster, cycleOptions);
+			return this.#deferredReplenishOutcome(
+				updatedRoster,
+				"Replenishment deferred until active replenishment lease releases.",
+			);
+		}
+		return this.replenish(updatedRoster, cycleOptions);
 	}
 
 	/**

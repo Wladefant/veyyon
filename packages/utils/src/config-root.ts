@@ -262,11 +262,3 @@ export function getSharedAuthDir(): string {
 export function getGlobalSubagentsDir(): string {
 	return path.join(getGlobalConfigRootDir(), SUBAGENTS_DIR_NAME);
 }
-
-/**
- * Cross-profile runtime directory at the base config root (`<configRoot>/run`),
- * holding host-wide coordination state such as `lane-admission.json`.
- */
-export function getGlobalRunDir(): string {
-	return path.join(getGlobalConfigRootDir(), RUN_DIR_NAME);
-}

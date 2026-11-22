@@ -34,6 +34,10 @@ inputs:
       description: Whether Swatinem/rust-cache should write a cache entry
       required: false
       default: "false"
+   linux_preprovisioned:
+      description: Use host build tools and job-local LLVM instead of installing Linux packages.
+      required: false
+      default: "false"
 
 runs:
    using: composite
@@ -74,6 +78,65 @@ runs:
              echo "bare_target=$bare_target"
            } >> "$GITHUB_OUTPUT"
            echo "Resolved cross_target='$cross_target' bare_target='$bare_target'"
+           if [[ "$cross_target" == *-msvc ]]; then
+             # cargo-xwin 0.23.1 includes the Visual Studio 18 manifest fix in xwin 0.10.0.
+             cargo_xwin_version=0.23.1
+             echo "cargo_xwin_version=$cargo_xwin_version" >> "$GITHUB_OUTPUT"
+             echo "XWIN_CACHE_DIR=$RUNNER_TEMP/cargo-xwin-$cargo_xwin_version" >> "$GITHUB_ENV"
+           fi
+
+      - name: Prepare unprivileged Linux build tools
+        if: runner.os == 'Linux' && inputs.linux_preprovisioned == 'true'
+        shell: bash
+        env:
+           CROSS_TARGET: ${{ steps.resolve.outputs.cross_target }}
+        run: |
+           require_tools() {
+             local missing=() tool
+             for tool in "$@"; do
+               command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+             done
+             if ((${#missing[@]})); then
+               echo "::error title=Missing Linux build tools::${missing[*]}"
+               return 1
+             fi
+           }
+
+           require_tools cc c++ make
+           if [[ "$CROSS_TARGET" != *-msvc ]]; then
+             exit 0
+           fi
+
+           llvm_tools=(clang clang-cl lld-link llvm-lib llvm-rc)
+           missing_llvm=false
+           for tool in "${llvm_tools[@]}"; do
+             command -v "$tool" >/dev/null 2>&1 || missing_llvm=true
+           done
+           if [[ "$missing_llvm" == false ]]; then
+             exit 0
+           fi
+           if [[ "$RUNNER_ARCH" != X64 ]]; then
+             require_tools "${llvm_tools[@]}"
+             exit 0
+           fi
+
+           require_tools curl sha256sum tar xz
+           llvm_version=22.1.8
+           llvm_sha256=df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384
+           # The runner clears its temporary directory after the job.
+           llvm_root=$(mktemp -d "$RUNNER_TEMP/llvm.XXXXXXXX")
+           archive="$llvm_root/llvm.tar.xz"
+           curl --fail --silent --show-error --location --retry 3 \
+             --connect-timeout 20 --max-time 900 --output "$archive" \
+             "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_version/LLVM-$llvm_version-Linux-X64.tar.xz"
+           printf '%s  %s\n' "$llvm_sha256" "$archive" | sha256sum --check --strict
+           tar -xJf "$archive" -C "$llvm_root" --strip-components=1
+           rm -- "$archive"
+           export PATH="$llvm_root/bin:$PATH"
+           require_tools "${llvm_tools[@]}"
+           clang --version
+           lld-link --version
+           printf '%s\n' "$llvm_root/bin" >> "$GITHUB_PATH"
 
       # --- Rust toolchain -----------------------------------------------------
       - name: Install Rust toolchain
@@ -85,7 +148,7 @@ runs:
            components: ""
            targets: ${{ steps.resolve.outputs.bare_target }}
       - name: Install Linux build prerequisites
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.linux_preprovisioned != 'true'
         shell: bash
         run: |
            sudo apt-get update
@@ -204,22 +267,31 @@ runs:
         with:
            tool: cargo-zigbuild
       - name: Install LLVM tooling (MSVC cross)
-        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc') && inputs.linux_preprovisioned != 'true'
         shell: bash
         run: |
            sudo apt-get update
            sudo apt-get install -y clang lld llvm
       - name: Install cargo-xwin (MSVC cross)
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         with:
-           tool: cargo-xwin
+           tool: cargo-xwin@${{ steps.resolve.outputs.cargo_xwin_version }}
+           fallback: none
+      - name: Verify user-space cargo-xwin
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc') && inputs.linux_preprovisioned == 'true'
+        shell: bash
+        run: |
+           if ! cargo xwin --version; then
+             echo "::error title=Missing user-space build tool::cargo-xwin"
+             exit 1
+           fi
       - name: Cache cargo-xwin Windows SDK
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-           path: ~/.cache/cargo-xwin
-           key: cargo-xwin-${{ runner.os }}-v1
+           path: ${{ env.XWIN_CACHE_DIR }}/xwin
+           key: cargo-xwin-${{ runner.os }}-${{ steps.resolve.outputs.cargo_xwin_version }}
       - name: Accept xwin license
         if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
         shell: bash

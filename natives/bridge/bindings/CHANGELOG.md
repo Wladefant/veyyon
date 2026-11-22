@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-20
+
+### Fixed
+
+- A stalled shell output callback no longer hides a completed command's exit status. Results mark incomplete capture and retain up to 64 KiB of diagnostics when no callback succeeded.
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed

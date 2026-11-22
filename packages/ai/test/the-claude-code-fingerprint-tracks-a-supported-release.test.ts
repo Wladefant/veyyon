@@ -41,6 +41,8 @@ const RECORDED_REJECTIONS = [
 	"Claude Code 2.1.165 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.",
 	// Sent 2.1.257, requesting claude-opus-5-5. Every OAuth request for that model came back 400.
 	"Claude Code 2.1.257 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.",
+	// Sent 2.1.280, requesting claude-fable-5-2.
+	"Claude Code 2.1.280 does not support this model; version 2.1.290 or newer is required.",
 ] as const;
 
 /** The minimum one rejection demands, or undefined when the message is not one of these rejections. */
@@ -91,7 +93,7 @@ describe("the Claude Code fingerprint tracks a supported release", () => {
 			},
 		};
 		const minimum = /version (\d+\.\d+\.\d+) or newer/.exec(response.error.message)?.[1];
-		expect(minimum).toBe(OBSERVED_API_MINIMUM);
+		expect(minimum).toBe("2.1.280");
 		expect(versionOrder("2.1.257", minimum!)).toBe(-1);
 		expect(versionOrder(CLAUDE_CODE_VERSION, minimum!)).toBeGreaterThanOrEqual(0);
 	});
@@ -117,7 +119,8 @@ describe("the Claude Code fingerprint tracks a supported release", () => {
 	 */
 	it("reads the demanded minimum, not the version that was sent, and nothing else", () => {
 		expect(demandedMinimum(RECORDED_REJECTIONS[1])).toBe("2.1.280");
-		expect(OBSERVED_API_MINIMUM).toBe("2.1.280");
+		expect(demandedMinimum(RECORDED_REJECTIONS[2])).toBe("2.1.290");
+		expect(OBSERVED_API_MINIMUM).toBe("2.1.290");
 		expect(demandedMinimum("400 invalid_request_error: something else entirely")).toBeUndefined();
 	});
 

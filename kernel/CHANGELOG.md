@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+### Added
+
+- Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
+
+## [1.12.1] - 2026-11-20
+
+### Fixed
+
+- Share one file lock across a synchronous burst of session journal appends without delaying their visibility ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Wait for the session's own queued journal append before rejecting an operator answer as stale ([#1211](https://github.com/Wladefant/veyyon/pull/1211)).
+- Allow native agent sessions to reserve their transcript until close, so a second process cannot open the same transcript for a concurrent turn.
+- Refuse to move session artifacts while a native child owns its transcript. Retry the move after the child closes.
+
 ## [1.10.11] - 2026-11-17
 
 ### Fixed

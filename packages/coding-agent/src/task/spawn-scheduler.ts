@@ -6,7 +6,7 @@
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
 import { emptyCost, emptyUsage } from "@veyyon/catalog/models";
-import { errorMessage, formatCount, pluralize } from "@veyyon/utils";
+import { errorMessage, formatCount, logger, pluralize } from "@veyyon/utils";
 import type { ToolSession } from "..";
 import type { AsyncJobManager } from "../async";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -26,6 +26,7 @@ export interface SpawnCall {
 	defaultAgent: string;
 	signal?: AbortSignal;
 	onUpdate?: AgentToolUpdateCallback<TaskToolDetails>;
+	grantRootSessionId?: string;
 }
 
 /** A spawn of the call with the agent it resolved to. */
@@ -108,6 +109,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (params.runId !== undefined) spawn.runId = params.runId;
 	if (params.ledgerPath !== undefined) spawn.ledgerPath = params.ledgerPath;
 	if (params.nativeDispatchBound !== undefined) spawn.nativeDispatchBound = params.nativeDispatchBound;
+	if (item.grants !== undefined) spawn.grants = item.grants;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
@@ -425,8 +427,8 @@ export class SpawnScheduler {
 	async runInline(call: SpawnCall, items: TaskItem[]): Promise<AgentToolResult<TaskToolDetails>> {
 		if (items.length === 1) {
 			const params = spawnParamsFor(call.params, items[0], call.defaultAgent);
-			const { toolCallId, signal, onUpdate } = call;
-			return this.#runAdmitted({ toolCallId, params, signal, onUpdate, index: 0, detached: false });
+			const { toolCallId, signal, onUpdate, grantRootSessionId } = call;
+			return this.#runAdmitted({ toolCallId, params, signal, onUpdate, grantRootSessionId, index: 0, detached: false });
 		}
 
 		const startTime = Date.now();
@@ -542,6 +544,7 @@ export class SpawnScheduler {
 			(spawn, _position, workerSignal) =>
 				this.#runAdmitted({
 					toolCallId: call.toolCallId,
+					grantRootSessionId: call.grantRootSessionId,
 					params: spawnParamsFor(call.params, spawn.item, call.defaultAgent),
 					signal: workerSignal,
 					onUpdate: onItemProgress
@@ -577,28 +580,58 @@ export class SpawnScheduler {
 		return scheduled;
 	}
 
+	async #notifyStartFailed(
+		params: TaskParams,
+		agentId: string,
+		agentName: string,
+		reason: string,
+		detached: boolean,
+	): Promise<void> {
+		try {
+			await this.#session.onSubagentStartFailed?.({
+				agentId,
+				agentName,
+				ticketId: params.ticketId,
+				runId: params.runId,
+				taskHandle: params.nativeDispatchBound ? `agent://${agentId}` : undefined,
+				reason,
+				detached,
+			});
+		} catch (hookError) {
+			logger.warn("Subagent start-failure hook failed", {
+				agentId,
+				error: errorMessage(hookError),
+			});
+		}
+	}
+
 	async #startJobs(call: SpawnCall, batch: BackgroundBatch, options: BackgroundOptions): Promise<JobStart> {
 		const started: StartedJob[] = [];
 		const failures: string[] = [];
 		for (const spawn of batch.jobs) {
+			const params = spawnParamsFor(call.params, spawn.item, call.defaultAgent);
 			try {
-				if (call.params.ticketId && !call.params.nativeDispatchBound) {
-					if (!call.params.runId?.trim() || !call.params.ledgerPath?.trim()) {
+				if (params.ticketId && !params.nativeDispatchBound) {
+					if (!params.runId?.trim() || !params.ledgerPath?.trim()) {
 						throw new Error("Native dispatch requires a run ID and ledger path");
 					}
 					await recordNativeDispatch(
-						call.params.runId,
+						params.runId,
 						`agent://${spawn.agentId}`,
-						call.params.ledgerPath,
-						call.params.ticketId,
+						params.ledgerPath,
+						params.ticketId,
 					);
-					call.params.nativeDispatchBound = true;
+					params.nativeDispatchBound = true;
 				}
-				const jobId = this.#registerJob(call, spawn, batch, options);
+				const jobId = this.#registerJob(call, spawn, batch, options, params);
 				if (started.length === 0) batch.primaryJobId = jobId;
 				started.push({ agentId: spawn.agentId, jobId });
 			} catch (error) {
-				failures.push(`${spawn.agentId}: ${errorMessage(error)}`);
+				const reason = errorMessage(error);
+				if (params.nativeDispatchBound && params.ticketId) {
+					await this.#notifyStartFailed(params, spawn.agentId, spawn.progress.agent, reason, true);
+				}
+				failures.push(`${spawn.agentId}: ${reason}`);
 				spawn.progress.status = "failed";
 				batch.settle(true);
 			}
@@ -634,23 +667,31 @@ export class SpawnScheduler {
 	 * Register the background job that runs one spawn to completion and delivers its yield text. A spawn
 	 * that fails or is aborted fails the job; the agent behind it stays reachable.
 	 */
-	#registerJob(call: SpawnCall, spawn: ScheduledSpawn, batch: BackgroundBatch, options: BackgroundOptions): string {
+	#registerJob(
+		call: SpawnCall,
+		spawn: ScheduledSpawn,
+		batch: BackgroundBatch,
+		options: BackgroundOptions,
+		params: TaskParams,
+	): string {
 		const { agentId, progress } = spawn;
-		const params = spawnParamsFor(call.params, spawn.item, call.defaultAgent);
 		return options.manager.register(
 			"task", // not-a-tool-name: async job kind
 			agentId,
 			async ({ signal, reportProgress, markRunning }) => {
 				const startedAt = Date.now();
-				await this.#admitJob(signal, progress, batch, params.priority);
-				const acquiredAt = Date.now();
-				let delivery: { text: string; failed: boolean };
+				let admitted = false;
+				let settled = false;
 				try {
+					await this.#admitJob(signal, progress, batch, params.priority);
+					admitted = true;
+					const acquiredAt = Date.now();
 					markRunning();
 					progress.status = "running";
 					await reportProgress(`Running background task ${agentId}...`);
 					const result = await runSpawn(this.#session, this.#parentApprovalBypassed, {
 						toolCallId: call.toolCallId,
+						grantRootSessionId: call.grantRootSessionId,
 						params,
 						signal,
 						preAllocatedId: agentId,
@@ -661,26 +702,42 @@ export class SpawnScheduler {
 					const single = result.details?.results[0];
 					const failed = settleJobProgress(progress, single, startedAt);
 					batch.settle(failed);
+					settled = true;
 					await reportProgress(
 						failed ? `Background task ${agentId} failed.` : `Background task ${agentId} complete.`,
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
-					delivery = {
+					const delivery = {
 						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, params.isolated === true && single !== undefined)}`,
 						failed,
 					};
+					if (delivery.failed) throw new Error(delivery.text);
+					return delivery.text;
 				} catch (error) {
-					progress.status = "failed";
-					progress.durationMs = Math.max(0, Date.now() - startedAt);
-					batch.settle(true);
-					await reportProgress(`Background task ${agentId} failed.`);
-					const hint = AgentRegistry.global().get(agentId) ? followUpHint(agentId, false, options.ircEnabled) : "";
-					throw new Error(`${errorMessage(error)}${hint}`);
+					if (!admitted) {
+						await this.#notifyStartFailed(
+							params,
+							agentId,
+							progress.agent,
+							errorMessage(error),
+							true,
+						);
+						throw error;
+					}
+					if (!settled) {
+						progress.status = "failed";
+						progress.durationMs = Math.max(0, Date.now() - startedAt);
+						batch.settle(true);
+						await reportProgress(`Background task ${agentId} failed.`);
+						const hint = AgentRegistry.global().get(agentId)
+							? followUpHint(agentId, false, options.ircEnabled)
+							: "";
+						throw new Error(`${errorMessage(error)}${hint}`);
+					}
+					throw error;
 				} finally {
-					this.#release();
+					if (admitted) this.#release();
 				}
-				if (delivery.failed) throw new Error(delivery.text);
-				return delivery.text;
 			},
 			{
 				id: agentId,
@@ -690,6 +747,14 @@ export class SpawnScheduler {
 				toolCallId: call.toolCallId,
 				onProgress: text => {
 					call.onUpdate?.({ content: [{ type: "text", text }], details: batch.details() });
+				},
+				onSettled: async () => {
+					await this.#session.onSubagentSettled?.({
+						agentId,
+						agentName: progress.agent,
+						ticketId: params.ticketId,
+						runId: params.runId,
+					});
 				},
 			},
 		);

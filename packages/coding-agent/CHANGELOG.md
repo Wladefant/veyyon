@@ -5,6 +5,31 @@
 ### Fixed
 
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
+## [1.12.3] - 2026-11-21
+
+### Added
+
+- Allow a root task dispatch to grant a child explicit GitHub merge or review dismissal access to named repositories. Wait for the grant receipt to reach disk before starting the child.
+
+### Fixed
+
+- Return unconfirmed IRC delivery promptly when a local send without `await` cannot get a receipt ([#1224](https://github.com/Wladefant/veyyon/issues/1224)).
+
+## [1.12.2] - 2026-11-21
+
+### Fixed
+
+- Share one relocation gate acquisition across overlapping native agent starts in the same session. Each transcript still has its own lease.
+
+## [1.12.1] - 2026-11-20
+
+### Fixed
+
+- Refresh the foreground conversation's Herdr resume command while Veyyon runs. This lets Veyyon replace a lost command before Herdr restarts.
+- Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Replace the shared lane ledger and its CLI with a 100-lane limit per Veyyon process, so native spawns, wakes, and exits do not wait for a ledger lock.
+- Reject concurrent opens of the same native transcript without blocking other transcripts.
+- Retry the current Codex model once after a replay-safe WebSocket close before switching models ([Refs #1203](https://github.com/Wladefant/veyyon/issues/1203)).
 
 ## [1.12.0] - 2026-11-18
 

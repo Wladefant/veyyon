@@ -81,6 +81,7 @@ describe("global EPIPE routing", () => {
 					import { ProcessTerminal, emergencyTerminalRestore } from ${JSON.stringify(terminalPath)};
 					const exit = process.exit.bind(process);
 					let persisted = false;
+					let awaitedCleanup = false;
 					let brokenWrites = 0;
 					const fake = new EventEmitter();
 					fake.broken = false;
@@ -95,14 +96,15 @@ describe("global EPIPE routing", () => {
 					process.stdout.write = fake.write;
 					Object.defineProperty(process.stdout, "isTTY", { value: true });
 					process.exit = code => {
-						process.stderr.write(JSON.stringify({ code, persisted, brokenWrites }));
-						exit(persisted && brokenWrites === 0 && code === 0 ? 0 : 91);
+						process.stderr.write(JSON.stringify({ code, persisted, brokenWrites, awaitedCleanup }));
+						exit(persisted && brokenWrites === 0 && code === 0 && awaitedCleanup ? 0 : 91);
 					};
-					register("session-persistence", async () => {
+					register("session-persistence", async (_reason, canWait) => {
 						const err = pipeError();
 						process.stdout.emit("error", err);
 						${secondEvent === "error" ? 'process.stdout.emit("error", pipeError());' : `process.emit(${JSON.stringify(secondEvent)}, err);`}
 						await setImmediate();
+						awaitedCleanup = canWait;
 						persisted = true;
 					});
 					const terminal = new ProcessTerminal();
@@ -117,7 +119,7 @@ describe("global EPIPE routing", () => {
 			);
 			expect(result.error).toBeUndefined();
 			expect(result.status).toBe(0);
-			expect(result.stderr).toContain('"persisted":true,"brokenWrites":0');
+			expect(result.stderr).toContain('"persisted":true,"brokenWrites":0,"awaitedCleanup":true');
 		});
 	}
 

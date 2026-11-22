@@ -7,7 +7,8 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
-import { directoryExists, errorMessage, getSessionsDir, isRecord, prompt, Snowflake } from "@veyyon/utils";
+import { isSubagentRepoGrants } from "@veyyon/kernel/session/session-launch-grants";
+import { directoryExists, errorMessage, getSessionsDir, isRecord, logger, prompt, Snowflake } from "@veyyon/utils";
 import { formatBytes, formatDuration } from "@veyyon/utils/format";
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ToolSession } from "..";
@@ -19,7 +20,7 @@ import { agentPrompts } from "../prompts/agent/rows";
 import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, mainAgentIdFor, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { AgentSpawnRecord } from "../tools";
 import { TOOL } from "../tools/core/builtin-names";
 import {
@@ -65,6 +66,8 @@ export interface SpawnRequest {
 	onUpdate?: AgentToolUpdateCallback<TaskToolDetails>;
 	/** An agent id the call claimed up front, so its immediate result could name the agent. */
 	preAllocatedId?: string;
+	/** Root identity captured at dispatch, not when the queue admits the child. */
+	grantRootSessionId?: string;
 	/** Position in the original call, so progress rows and merged results keep the call's order. */
 	index: number;
 	/** The spawn runs as a background job, so the parent's turn is not waiting on it. */
@@ -107,6 +110,15 @@ type SpawnModel = Pick<ExecutorOptions, "modelOverride" | "thinkingLevel">;
 
 /** Tools an agent declares that plan mode keeps beside its read-only base set. */
 const PLAN_MODE_AGENT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([TOOL.report_finding]);
+/** Exact-once lifecycle tracking across pre-record refusals, errors, and completions. */
+interface SpawnLifecycleState {
+	agentId: string;
+	agentName: string;
+	ticketId?: string;
+	runId?: string;
+	bound: boolean;
+	settled: boolean;
+}
 
 export function renderAgentUserPrompt(
 	assignment: string,
@@ -569,10 +581,13 @@ async function runPreparedSpawn(
 	spawn: PreparedSpawn,
 	projectAgentsDir: string | null,
 	startTime: number,
+	lifecycleState: SpawnLifecycleState,
 ): Promise<AgentToolResult<TaskToolDetails>> {
 	const { params, onUpdate } = request;
 	await fs.mkdir(spawn.artifacts.dir, { recursive: true });
 	const agentId = request.preAllocatedId || (await allocateAgentId(agentOutputManagerFor(session), params.name));
+	lifecycleState.agentId = agentId;
+	lifecycleState.agentName = spawn.agentName;
 	const assignment = (params.task ?? "").trim();
 	let latestProgress: AgentProgress = {
 		...pendingSpawnProgress(request.index, agentId, spawn.agentName, spawn.agent.source, assignment),
@@ -650,6 +665,25 @@ async function runPreparedSpawn(
 			emitProgress();
 		},
 	};
+	const { grants } = params;
+	if (grants !== undefined) {
+		const rootSessionId = request.grantRootSessionId;
+		const record = session.recordSubagentLaunchGrant!;
+		options.beforeChildStart = async (childSessionId, sessionFile) => {
+			if (session.getSessionId?.() !== rootSessionId || session.getSessionFile() !== spawn.sessionFile) {
+				throw new Error("Root session changed before recording launch grants");
+			}
+			await record({
+				type: "subagent_launch_grant",
+				version: 1,
+				rootSessionId: rootSessionId!,
+				agentId,
+				childSessionId,
+				sessionFile,
+				grants,
+			});
+		};
+	}
 
 	const { isolation } = spawn;
 	const workflow = successorWorkflow({
@@ -742,6 +776,7 @@ async function runPreparedSpawn(
 			throw new Error("Native dispatch requires a run ID and ledger path");
 		}
 		await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
+		lifecycleState.bound = true;
 	}
 	const lifecycle = {
 		agentId,
@@ -749,46 +784,41 @@ async function runPreparedSpawn(
 		ticketId: params.ticketId,
 		runId: params.runId,
 	};
-	let completionStarted = false;
-	try {
-		session.onSubagentStart?.(lifecycle);
-		let result: SingleResult;
-		let mergeSummary = "";
-		if (isolation) {
-			const taskStart = Date.now();
-			const run = await runIsolatedSubprocess({
-				baseOptions: options,
-				context: isolation.context,
-				preferredBackend: parseIsolationMode(isolation.mode),
-				agentId,
-				mergeMode: isolation.mergeMode,
-				artifactsDir: spawn.artifacts.dir,
-				buildCommitMessage,
-				buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
-			});
-			({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
-		} else {
-			result = await runSubprocess(options);
-		}
-
-		const record = recordSpawn(session, result, spawn.artifacts.dir, isolation, params);
-		completionStarted = true;
-		await session.onSubagentComplete?.(record);
-		if (!isolation) {
-			try {
-				await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
-			} catch (error) {
-				result = {
-					...result,
-					error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
-				};
-			}
-		}
-		return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
-	} catch (error) {
-		if (!completionStarted) session.onSubagentStartFailed?.(lifecycle);
-		throw error;
+	session.onSubagentStart?.(lifecycle);
+	let result: SingleResult;
+	let mergeSummary = "";
+	if (isolation) {
+		const taskStart = Date.now();
+		const run = await runIsolatedSubprocess({
+			baseOptions: options,
+			context: isolation.context,
+			preferredBackend: parseIsolationMode(isolation.mode),
+			agentId,
+			mergeMode: isolation.mergeMode,
+			artifactsDir: spawn.artifacts.dir,
+			buildCommitMessage,
+			buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
+		});
+		({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
+	} else {
+		result = await runSubprocess(options);
 	}
+
+	if (!isolation) {
+		try {
+			await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
+		} catch (error) {
+			const checkpointError = `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`;
+			result = {
+				...result,
+				error: result.error ? `${result.error}; ${checkpointError}` : checkpointError,
+			};
+		}
+	}
+	const record = recordSpawn(session, result, spawn.artifacts.dir, isolation, params);
+	lifecycleState.settled = true;
+	await session.onSubagentComplete?.(record, { detached: request.detached });
+	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 }
 
 /**
@@ -802,12 +832,90 @@ export async function runSpawn(
 	request: SpawnRequest,
 ): Promise<AgentToolResult<TaskToolDetails>> {
 	const startTime = Date.now();
-	const { agents, projectAgentsDir } = await discoverAgents(session.cwd);
-	const spawn = await prepareSpawn(session, agents, request.params, projectAgentsDir, startTime);
-	if ("content" in spawn) return spawn;
+	const lifecycleState: SpawnLifecycleState = {
+		agentId: request.preAllocatedId ?? request.params.name?.trim() ?? "",
+		agentName: request.params.agent?.trim() || "task",
+		ticketId: request.params.ticketId,
+		runId: request.params.runId,
+		bound: request.params.nativeDispatchBound === true,
+		settled: false,
+	};
+	const notifyStartFailed = async (reason: string): Promise<void> => {
+		if (lifecycleState.settled) return;
+		lifecycleState.settled = true;
+		try {
+			await session.onSubagentStartFailed?.({
+				agentId: lifecycleState.agentId,
+				agentName: lifecycleState.agentName,
+				ticketId: lifecycleState.ticketId,
+				runId: lifecycleState.runId,
+				taskHandle:
+					lifecycleState.bound && lifecycleState.agentId
+						? `agent://${lifecycleState.agentId}`
+						: undefined,
+				reason,
+				detached: request.detached,
+			});
+		} catch (hookError) {
+			logger.warn("Subagent start-failure hook failed", {
+				agentId: lifecycleState.agentId,
+				error: errorMessage(hookError),
+			});
+		}
+	};
+	let agents: AgentDefinition[];
+	let projectAgentsDir: string | null;
+	let spawn: PreparedSpawn | AgentToolResult<TaskToolDetails>;
 	try {
-		return await runPreparedSpawn(session, parentApprovalBypassed, request, spawn, projectAgentsDir, startTime);
+		({ agents, projectAgentsDir } = await discoverAgents(session.cwd));
+		if (request.params.grants !== undefined) {
+			if (!isSubagentRepoGrants(request.params.grants)) {
+				const reason = "Task grants must list distinct OWNER/REPO scopes for merge and dismissal.";
+				await notifyStartFailed(reason);
+				return spawnRefusal(reason, projectAgentsDir, 0);
+			}
+			const rootSessionId = request.grantRootSessionId;
+			if (
+				session.taskDepth !== 0 ||
+				!rootSessionId ||
+				session.getSessionId?.() !== rootSessionId ||
+				session.getAgentId?.() !== mainAgentIdFor(rootSessionId) ||
+				!session.getSessionFile() ||
+				!session.recordSubagentLaunchGrant
+			) {
+				const reason = "Task grants require a persisted root session.";
+				await notifyStartFailed(reason);
+				return spawnRefusal(reason, projectAgentsDir, 0);
+			}
+		}
+		spawn = await prepareSpawn(session, agents, request.params, projectAgentsDir, startTime);
+		if ("content" in spawn) {
+			const reason = spawn.content.find(part => part.type === "text")?.text ?? "Spawn refused";
+			await notifyStartFailed(reason);
+			return spawn;
+		}
 	} catch (err) {
+		await notifyStartFailed(errorMessage(err));
+		throw err;
+	}
+	try {
+		const payload = await runPreparedSpawn(
+			session,
+			parentApprovalBypassed,
+			request,
+			spawn,
+			projectAgentsDir,
+			startTime,
+			lifecycleState,
+		);
+		if (!lifecycleState.settled) {
+			const reason = payload.content.find(part => part.type === "text")?.text ?? "Spawn refused";
+			await notifyStartFailed(reason);
+		}
+		return payload;
+	} catch (err) {
+		const reason = errorMessage(err);
+		await notifyStartFailed(reason);
 		return spawnRefusal(`Task execution failed: ${err}`, projectAgentsDir, Date.now() - startTime);
 	}
 }

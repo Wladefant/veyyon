@@ -13,7 +13,7 @@ const CLAUDE_OAUTH_HEADERS = {
 	accept: "application/json, text/plain, */*",
 	"accept-encoding": "gzip, compress, deflate, br",
 	"anthropic-beta":
-		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
+		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
 	"content-type": "application/json",
 	"user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
 	connection: "keep-alive",

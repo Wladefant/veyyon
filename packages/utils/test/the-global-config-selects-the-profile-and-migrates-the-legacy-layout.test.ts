@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	getGlobalConfigRootDir,
-	getGlobalRunDir,
 	getGlobalSubagentsDir,
 	getSharedAuthDir,
 	SUBAGENTS_DIR_NAME,
@@ -364,21 +363,21 @@ describe("migrateLegacyDefaultProfileLayout", () => {
 		expect(fs.readFileSync(path.join(agents, "auditor.md"), "utf8")).toContain("name: auditor");
 	});
 
-	it("exempts the directory getGlobalRunDir resolves to", () => {
+	it("keeps host runtime files at the global root", () => {
 		const root = getGlobalConfigRootDir();
-		const runDir = getGlobalRunDir();
-		expect(path.dirname(runDir)).toBe(root);
+		const runDir = path.join(root, "run");
 		fs.mkdirSync(path.join(root, "agent"), { recursive: true });
 		fs.writeFileSync(path.join(root, "agent", "agent.db"), "db");
-		fs.mkdirSync(runDir, { recursive: true });
-		fs.writeFileSync(path.join(runDir, "lane-admission.json"), '{"version":1,"cap":40,"reservations":[]}');
+		const terminal = path.join(runDir, "terminals", "owner.json");
+		fs.mkdirSync(path.dirname(terminal), { recursive: true });
+		fs.writeFileSync(terminal, "host runtime state");
 
 		const result = migrateLegacyDefaultProfileLayout();
 
 		expect(result.migrated).toBe(true);
 		expect(result.movedEntries).not.toContain(path.basename(runDir));
 		expect(fs.existsSync(path.join(result.targetDir, path.basename(runDir)))).toBe(false);
-		expect(fs.existsSync(path.join(runDir, "lane-admission.json"))).toBe(true);
+		expect(fs.readFileSync(terminal, "utf8")).toBe("host runtime state");
 	});
 
 	it("leaves named profiles untouched under profiles/", () => {

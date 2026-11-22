@@ -4,6 +4,8 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import {
 	__internalsForTesting,
 	acquireFileLock,
@@ -58,6 +60,54 @@ afterAll(async () => {
 		await removeWithRetries(root).catch(() => {});
 	}
 });
+
+test("waits within the contention deadline for a live lock in another process", async () => {
+	const root = await mkRoot();
+	const target = path.join(root, "remote-owner.json");
+	const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "../src/file-lock.ts")).href;
+	const holder = Bun.spawn(
+		[
+			process.execPath,
+			"--eval",
+			`import { withFileLock } from ${JSON.stringify(moduleUrl)};
+			await withFileLock(${JSON.stringify(target)}, async () => {
+				process.stdout.write("held\\n");
+				await Bun.stdin.text();
+			});`,
+		],
+		{ stdin: "pipe", stdout: "pipe", stderr: "inherit" },
+	);
+	const ready = holder.stdout.getReader();
+	let contender: Promise<unknown> | undefined;
+	let holderInputClosed = false;
+	try {
+		const { value } = await ready.read();
+		expect(new TextDecoder().decode(value)).toBe("held\n");
+
+		const started = performance.now();
+		await expect(
+			withFileLock(target, async () => "unexpected acquisition", { retries: 1, contentionTimeoutMs: 100 }),
+		).rejects.toThrow("within 100 ms under filesystem contention");
+		expect(performance.now() - started).toBeGreaterThanOrEqual(90);
+		expect(performance.now() - started).toBeLessThan(3_000);
+		expect((await readLockInfo(getLockPath(target)))?.pid).toBe(holder.pid);
+
+		contender = withFileLock(target, async () => "acquired after release", {
+			retries: 1,
+			retryDelayMs: 10,
+			contentionTimeoutMs: 3_000,
+		}).catch(error => error);
+		await delay(100);
+		holder.stdin.end();
+		holderInputClosed = true;
+		expect(await contender).toBe("acquired after release");
+	} finally {
+		ready.releaseLock();
+		if (!holderInputClosed) holder.stdin.end();
+		await holder.exited;
+		await contender;
+	}
+}, 8_000);
 
 describe("file-lock token ownership (F1)", () => {
 	test("releaseLock with the wrong token leaves the lock intact", async () => {

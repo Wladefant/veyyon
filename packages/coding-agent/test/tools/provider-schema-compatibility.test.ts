@@ -1,4 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { convertTools } from "@veyyon/ai/providers/google-shared";
 import {
 	adaptSchemaForStrict,
 	normalizeSchemaForCCA,
@@ -9,10 +13,14 @@ import {
 	validateSchemaCompatibility,
 	validateStrictSchemaEnforcement,
 } from "@veyyon/ai/utils/schema";
+import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools, HIDDEN_TOOLS, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
 import { createVibeTools } from "@veyyon/coding-agent/tools/agent/vibe";
 import { isRecord } from "@veyyon/utils";
+import { SecretRequestTool } from "../../src/tools/agent/secret-request";
+import { GithubTool } from "../../src/tools/web/gh";
+import { visitEveryFirstPartyTool } from "../helpers/every-first-party-tool";
 
 interface ToolSchemaEntry {
 	name: string;
@@ -102,7 +110,68 @@ function formatCompatibilityIssues(
 	return `${toolName} (${provider}):\n${details}`;
 }
 
+function findUnsupportedGeminiArrayKeywords(value: unknown, at: string, failures: string[]): void {
+	if (Array.isArray(value)) {
+		for (const [index, item] of value.entries()) {
+			findUnsupportedGeminiArrayKeywords(item, `${at}/${index}`, failures);
+		}
+		return;
+	}
+	if (!isRecord(value)) return;
+	for (const key of ["uniqueItems", "contains", "minContains", "maxContains"]) {
+		if (Object.hasOwn(value, key)) failures.push(`${at}/${key}`);
+	}
+	for (const key of ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]) {
+		const map = value[key];
+		if (!isRecord(map)) continue;
+		for (const [name, schema] of Object.entries(map)) {
+			findUnsupportedGeminiArrayKeywords(schema, `${at}/${key}/${name}`, failures);
+		}
+	}
+	for (const key of ["items", "prefixItems", "anyOf", "oneOf", "allOf", "not", "if", "then", "else"]) {
+		findUnsupportedGeminiArrayKeywords(value[key], `${at}/${key}`, failures);
+	}
+}
+
 describe("builtin tool schemas provider compatibility", () => {
+	it("keeps unsupported array keywords out of every first-party Gemini declaration", async () => {
+		const model = buildModel({
+			id: "gemini-4-hydrogen",
+			name: "Gemini 4 Hydrogen",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://example.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+		const failures: string[] = [];
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gemini-tool-schema-"));
+		try {
+			const check = (tool: Tool) => {
+				const declaration = convertTools([tool], model)?.[0]?.functionDeclarations[0];
+				if (!isRecord(declaration?.parametersJsonSchema)) {
+					failures.push(`${tool.name}: missing parametersJsonSchema`);
+					return;
+				}
+				findUnsupportedGeminiArrayKeywords(declaration.parametersJsonSchema, tool.name, failures);
+			};
+			const unbuilt = await visitEveryFirstPartyTool(dir, check);
+			// These factories require local capabilities the test runner may not have.
+			// Their real constructors provide the same schemas without invoking the tools.
+			for (const name of unbuilt) {
+				if (name === "github") check(new GithubTool(createTestSession()));
+				else if (name === "secret_request") check(new SecretRequestTool(createTestSession()));
+				else failures.push(`${name}: factory returned no tool`);
+			}
+			expect(failures).toEqual([]);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps task and todo strict-compatible for OpenAI-style providers", async () => {
 		const toolSchemas = await collectToolSchemas();
 		for (const toolName of ["task", "todo"]) {

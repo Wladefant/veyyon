@@ -17,6 +17,7 @@
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { isSubagentRepoGrants } from "@veyyon/kernel/session/session-launch-grants";
 import { $env, prompt } from "@veyyon/utils";
 import type { ToolSession } from "..";
 import { toolsPrompts } from "../prompts/tools/rows";
@@ -275,6 +276,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	if (params.successorOf !== undefined) item.successorOf = params.successorOf;
 	if (params.priority !== undefined) item.priority = params.priority;
 	if (params.ownershipLease !== undefined) item.ownershipLease = params.ownershipLease;
+	if (params.grants !== undefined) item.grants = params.grants;
 	return [item];
 }
 
@@ -381,6 +383,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const lines: string[] = [];
 		appendCallApprovalLines(lines, params);
 		appendBatchApprovalLines(lines, Array.isArray(params.tasks) ? params.tasks : []);
+		for (const [index, item] of resolveSpawnItems(params).entries()) {
+			if (item.grants === undefined) continue;
+			if (!isSubagentRepoGrants(item.grants)) {
+				lines.push(`Task ${index + 1}: invalid repository grants`);
+				continue;
+			}
+			lines.push(`Task ${index + 1} merge grants: ${item.grants.mergeRepos.join(", ") || "none"}`);
+			lines.push(`Task ${index + 1} review dismissal grants: ${item.grants.dismissRepos.join(", ") || "none"}`);
+		}
 		return lines;
 	};
 	readonly label = "Task";
@@ -479,6 +490,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const params = rawParams as TaskParams;
+		const grantRootSessionId = this.session.getSessionId?.() ?? undefined;
 		const batchEnabled = this.#isBatchEnabled();
 		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
 		if (validationError) {
@@ -530,7 +542,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			this.session.maxNestedSpawnDepth,
 		);
 		const advisory = this.#spawnAdvisory(spawns, catalog, asyncItems, ircEnabled);
-		const call: SpawnCall = { toolCallId, params, defaultAgent: catalog.defaultAgent ?? "", signal, onUpdate };
+		const call: SpawnCall = { toolCallId, params, defaultAgent: catalog.defaultAgent ?? "", signal, onUpdate, grantRootSessionId };
 		if (!manager || asyncItems.length === 0) {
 			// Synchronous execution was explicitly selected, or every item's
 			// agent type declares `blocking: true`. The spawn semaphore still

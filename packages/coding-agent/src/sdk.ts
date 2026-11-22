@@ -519,6 +519,9 @@ class SessionStartup {
 			options.replenishmentExecutor ??
 			(taskTool
 				? async (ticket: ClaimedTicket) => {
+						if (this.#session?.isDisposed) {
+							throw new Error(`Session disposed before dispatching ${ticket.id}`);
+						}
 						const toolCallId = `replenish-${ticket.id}-${Date.now().toString(36)}`;
 						const result = await taskTool.execute(
 							toolCallId,
@@ -532,14 +535,22 @@ class SessionStartup {
 							undefined,
 							this.#toolContextStore.getContext(),
 						);
-						const spawned =
-							(result.details?.progress?.length ?? 0) > 0 || (result.details?.results?.length ?? 0) > 0;
-						if (result.isError || !spawned) {
+						const resultsCount = result.details?.results?.length ?? 0;
+						const hasAsync = result.details?.async !== undefined;
+						if (result.isError && resultsCount === 0) {
 							const message = result.content
 								.filter(part => part.type === "text")
 								.map(part => part.text)
 								.join("\n");
 							throw new Error(message || `Native replenishment did not spawn a worker for ${ticket.id}`);
+						}
+						if (
+							!result.isError &&
+							!hasAsync &&
+							resultsCount === 0 &&
+							(result.details?.progress?.length ?? 0) === 0
+						) {
+							throw new Error(`Native replenishment did not spawn a worker for ${ticket.id}`);
 						}
 						return result;
 					}
@@ -550,6 +561,9 @@ class SessionStartup {
 			new TopicReplenishmentEngine({
 				executor: productionExecutor,
 			});
+		if (options.replenishmentEngine && !engine.executor && productionExecutor) {
+			engine.setNativeExecutor(productionExecutor);
+		}
 		this.#replenishmentEngine = engine;
 
 		const activeRoster = this.#agentRegistry.list().map(ref => ({
@@ -875,6 +889,7 @@ class SessionStartup {
 					],
 				}
 			: options;
+		const pendingDetachedReplenish = new Set<string>();
 		this.#tools = await createSessionToolSession({
 			options: toolSessionOptions,
 			sessionManager,
@@ -908,10 +923,16 @@ class SessionStartup {
 				onSubagentStart: record => {
 					this.#replenishmentEngine?.onWorkerStart(record);
 				},
-				onSubagentStartFailed: record => {
+				onSubagentStartFailed: async record => {
 					const engine = this.#replenishmentEngine;
 					if (!engine) return;
-					engine.onWorkerStartFailed(record);
+					await engine.onWorkerStartFailed(record);
+					if (record.ticketId) return;
+					if (record.detached) {
+						pendingDetachedReplenish.add(record.agentId);
+						return;
+					}
+					if (this.#session?.isDisposed) return;
 					const activeRoster = this.#agentRegistry.list().map(ref => ({
 						id: ref.id,
 						status: ref.status,
@@ -925,7 +946,7 @@ class SessionStartup {
 						});
 					});
 				},
-				onSubagentComplete: async record => {
+				onSubagentComplete: async (record, options) => {
 					const engine = this.#replenishmentEngine;
 					if (!engine) return;
 					const activeRoster = this.#agentRegistry.list().map(ref => ({
@@ -949,7 +970,31 @@ class SessionStartup {
 							structuredResult: record.structuredResult,
 						},
 						activeRoster,
+						options?.detached ? { deferReplenish: true } : undefined,
 					);
+					if (options?.detached) {
+						pendingDetachedReplenish.add(record.agentId);
+					}
+				},
+				onSubagentSettled: async record => {
+					if (!pendingDetachedReplenish.delete(record.agentId)) return;
+					const engine = this.#replenishmentEngine;
+					if (!engine || this.#session?.isDisposed) return;
+					const activeRoster = this.#agentRegistry
+						.list()
+						.filter(ref => ref.id !== record.agentId)
+						.map(ref => ({
+							id: ref.id,
+							status: ref.status,
+							role: ref.kind,
+							agentName: ref.displayName,
+							task: ref.activity,
+						}));
+					await engine.replenish(activeRoster).catch(err => {
+						logger.warn("TopicReplenishmentEngine: post-settlement replenishment failed", {
+							error: errorMessage(err),
+						});
+					});
 				},
 			},
 		});

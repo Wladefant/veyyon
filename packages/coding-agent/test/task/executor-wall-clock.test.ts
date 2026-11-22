@@ -476,19 +476,24 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		// the timer has already aborted). Without the fix, `hasYield=true` would
 		// make finalizeSubprocessOutput zero the exit code and `wasAborted`
 		// would resolve to false — silently masking the runtime-limit breach.
+		vi.useFakeTimers();
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 30 });
-		const handle = createMockSessionHandle(() => {}, {
+		const { promise: promptStarted, resolve: markPromptStarted } = Promise.withResolvers<void>();
+		const handle = createMockSessionHandle(() => markPromptStarted(), {
 			hangUntilAbort: true,
 			// Emitted from inside `abort`, which is the only way to land in the teardown window.
 			onAbort: ({ emit }) => emit(yieldSuccessEvent({ lateButLanded: true }, "tool-late-yield")),
 		});
 		mockCreateAgentSession(handle.session);
 
-		const result = await runSubprocess({
+		const run = runSubprocess({
 			...baseOptions,
 			id: "agent-late-yield",
 			settings,
 		});
+		await promptStarted;
+		await advanceTimersAndFlush(30);
+		const result = await run;
 
 		expect(handle.abortCalls()).toBeGreaterThanOrEqual(1);
 		expect(result.aborted).toBe(true);

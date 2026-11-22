@@ -23,6 +23,7 @@ import * as schemaModule from "@veyyon/ai/utils/schema";
 import { type SchemaCompatibilityProvider, validateSchemaCompatibility } from "@veyyon/ai/utils/schema/compatibility";
 import {
 	COMBINATOR_KEYS,
+	GEMINI_UNSUPPORTED_ARRAY_FIELDS,
 	LIFTABLE_TO_DESCRIPTION_FIELDS,
 	NON_STRUCTURAL_SCHEMA_KEYS,
 	SCHEMA_MAP_KEYWORDS,
@@ -50,6 +51,7 @@ const KEYWORD_NAMES = [
 		...COMBINATOR_KEYS,
 		...SCHEMA_MAP_KEYWORDS,
 		...Object.keys(UNSUPPORTED_SCHEMA_FIELDS),
+		...Object.keys(GEMINI_UNSUPPORTED_ARRAY_FIELDS),
 		...Object.keys(NON_STRUCTURAL_SCHEMA_KEYS),
 		...Object.keys(LIFTABLE_TO_DESCRIPTION_FIELDS),
 	]),

@@ -594,16 +594,29 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         if not claim or not args.run_id or claim["run_id"] != args.run_id:
             print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native run"}))
             return 0
+        if args.task_handle and claim["task_handle"] != args.task_handle:
+            print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native task handle"}))
+            return 0
 
         now_iso = get_iso_now()
         from_state = req.get("state") or "implementation"
         previous_state = args.previous_state
-        to_state = (
-            previous_state
-            if isinstance(previous_state, str)
-            and previous_state.lower() in {"pending", "implementation", "qa", "review"}
-            else "pending"
-        )
+        valid_states = {"pending", "implementation", "qa", "review"}
+        if not isinstance(previous_state, str) or previous_state.lower() not in valid_states:
+            inferred = None
+            for entry in reversed(req.get("history") or []):
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("actor") == "TopicReplenishmentEngine"
+                    and entry.get("reason") == "Claimed for native replenishment"
+                    and isinstance(entry.get("from_state"), str)
+                    and entry["from_state"].lower() in valid_states
+                ):
+                    inferred = entry["from_state"]
+                    break
+            to_state = inferred or "pending"
+        else:
+            to_state = previous_state
         req["state"] = to_state
         req["native_claim"] = retryable_native_claim()
         req["blocker"] = None
@@ -909,7 +922,8 @@ def main():
     p_rollback.add_argument("--ledger", required=True, help="Path to ledger.json")
     p_rollback.add_argument("--ticket-id", required=True, help="Ticket ID")
     p_rollback.add_argument("--run-id", required=True, help="Native run ID that still owns the claim")
-    p_rollback.add_argument("--previous-state", required=True, help="Ticket state to restore after a rejected dispatch")
+    p_rollback.add_argument("--previous-state", default="auto", help="Ticket state to restore after a rejected dispatch")
+    p_rollback.add_argument("--task-handle", default="", help="Native task handle that still owns the claim")
     p_rollback.add_argument("--reason", default="", help="Reason for rolling back the claim")
     p_rollback.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 

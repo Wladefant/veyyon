@@ -192,7 +192,9 @@ pub struct ShellRunResult {
 	pub timed_out:         bool,
 	/// Whether output capture stopped before EOF.
 	pub output_incomplete: bool,
-	/// Retained raw output prefix, present only for incomplete buffered capture.
+	/// Set when captured_output is a callback-drain fallback, not a core capture.
+	pub capture_is_drain_prefix: Option<bool>,
+	/// Retained raw output prefix, present only for incomplete capture.
 	pub captured_output:   Option<String>,
 	/// When the minimizer rewrote the captured output, this carries the
 	/// original buffer + telemetry so the session layer can persist it as
@@ -210,6 +212,7 @@ impl From<CoreShellRunResult> for ShellRunResult {
 			cancelled:         value.cancelled,
 			timed_out:         value.timed_out,
 			output_incomplete: value.output_incomplete,
+			capture_is_drain_prefix: None,
 			captured_output:   value.captured_output,
 			minimized:         value.minimized.map(Into::into),
 			working_dir:       value.working_dir,
@@ -396,9 +399,13 @@ const BRIDGE_QUEUE_CHUNKS: usize = 64;
 // lossless.
 const FORWARD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
+// The fallback is diagnostic evidence, not a second unbounded transcript.
+const DRAIN_CAPTURE_BYTES: usize = 64 * 1024;
+
 struct ChunkDrain {
 	handle:      napi::tokio::task::JoinHandle<bool>,
 	progress_rx: napi::tokio::sync::watch::Receiver<u64>,
+	prefix:      Arc<parking_lot::Mutex<String>>,
 }
 
 fn bridge_chunks(
@@ -409,9 +416,11 @@ fn bridge_chunks(
 	};
 	let (tx, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
 	let (progress_tx, progress_rx) = napi::tokio::sync::watch::channel(0u64);
+	let prefix = Arc::new(parking_lot::Mutex::new(String::new()));
 	let handle = napi::tokio::spawn(pump_chunks_with_progress(
 		rx,
 		Some(progress_tx),
+		Some(Arc::clone(&prefix)),
 		async move |payload: String| {
 			// `call_async` resolves only after the JS callback ran, so at most
 			// one batch sits in the napi queue at a time and the JS event loop's
@@ -420,7 +429,27 @@ fn bridge_chunks(
 			on_chunk.call_async(Ok(payload)).await.is_ok()
 		},
 	));
-	(Some(tx), Some(ChunkDrain { handle, progress_rx }))
+	(Some(tx), Some(ChunkDrain { handle, progress_rx, prefix }))
+}
+
+fn retain_incomplete_drain(
+	result: &mut Result<ShellRunResult>,
+	accepted_output: bool,
+	prefix: &parking_lot::Mutex<String>,
+) {
+	if let Ok(res) = result {
+		res.output_incomplete = true;
+		// The TS sink treats captured_output as authoritative replacement. Once
+		// callbacks have succeeded, keep its streamed tail rather than replace it
+		// with an older prefix. An existing core capture remains authoritative.
+		if res.captured_output.is_none() && !accepted_output {
+			let captured = std::mem::take(&mut *prefix.lock());
+			if !captured.is_empty() {
+				res.captured_output = Some(captured);
+				res.capture_is_drain_prefix = Some(true);
+			}
+		}
+	}
 }
 
 async fn await_chunk_drain(
@@ -428,7 +457,7 @@ async fn await_chunk_drain(
 	cancel_token: &CoreCancelToken,
 	mut result: Result<ShellRunResult>,
 ) -> Result<ShellRunResult> {
-	let Some(ChunkDrain { mut handle, mut progress_rx }) = drain else {
+	let Some(ChunkDrain { mut handle, mut progress_rx, prefix }) = drain else {
 		return result;
 	};
 	let allow_cancel_abort = !matches!(&result, Ok(res) if res.cancelled || res.timed_out);
@@ -441,40 +470,22 @@ async fn await_chunk_drain(
 		tokio::select! {
 			biased;
 			completed = &mut handle => {
-				if !matches!(completed, Ok(true))
-					&& let Ok(res) = &mut result
-				{
-					res.output_incomplete = true;
+				if !matches!(completed, Ok(true)) {
+					retain_incomplete_drain(&mut result, *progress_rx.borrow() != 0, &prefix);
 				}
 				return result;
 			}
-			reason = cancel_token.wait(), if allow_cancel_abort => {
+			_ = cancel_token.wait(), if allow_cancel_abort => {
 				handle.abort();
 				let _ = handle.await;
-				return match result {
-					Ok(mut res) if res.cancelled || res.timed_out => {
-						res.output_incomplete = true;
-						Ok(res)
-					}
-					Ok(_) => Err(Error::from_reason(format!(
-						"Shell output callback drain aborted ({reason:?})"
-					))),
-					Err(err) => Err(err),
-				};
+				retain_incomplete_drain(&mut result, *progress_rx.borrow() != 0, &prefix);
+				return result;
 			}
 			() = &mut deadline_sleep => {
 				handle.abort();
 				let _ = handle.await;
-				return match result {
-					Ok(mut res) if res.cancelled || res.timed_out => {
-						res.output_incomplete = true;
-						Ok(res)
-					}
-					Ok(_) => Err(Error::from_reason(
-						"Shell output callback drain exceeded deadline after command completion"
-					)),
-					Err(err) => Err(err),
-				};
+				retain_incomplete_drain(&mut result, *progress_rx.borrow() != 0, &prefix);
+				return result;
 			}
 			changed = progress_rx.changed(), if progress_open => {
 				if changed.is_ok() {
@@ -488,16 +499,8 @@ async fn await_chunk_drain(
 			() = &mut idle_sleep => {
 				handle.abort();
 				let _ = handle.await;
-				return match result {
-					Ok(mut res) if res.cancelled || res.timed_out => {
-						res.output_incomplete = true;
-						Ok(res)
-					}
-					Ok(_) => Err(Error::from_reason(
-						"Shell output callback drain stalled after command completion"
-					)),
-					Err(err) => Err(err),
-				};
+				retain_incomplete_drain(&mut result, *progress_rx.borrow() != 0, &prefix);
+				return result;
 			}
 		}
 	}
@@ -510,12 +513,13 @@ async fn await_chunk_drain(
 /// parked/future senders fail fast and the pipe readers keep draining the
 /// child instead of wedging it.
 async fn pump_chunks(rx: flume::Receiver<String>, forward: impl AsyncFnMut(String) -> bool) -> bool {
-	pump_chunks_with_progress(rx, None, forward).await
+	pump_chunks_with_progress(rx, None, None, forward).await
 }
 
 async fn pump_chunks_with_progress(
 	rx: flume::Receiver<String>,
 	progress_tx: Option<napi::tokio::sync::watch::Sender<u64>>,
+	prefix: Option<Arc<parking_lot::Mutex<String>>>,
 	mut forward: impl AsyncFnMut(String) -> bool,
 ) -> bool {
 	// Hard cap on one coalesced batch so the JS main thread never sees a
@@ -527,6 +531,7 @@ async fn pump_chunks_with_progress(
 	const INITIAL_BATCH_CAP: usize = 8 * 1024;
 	let mut batch = String::with_capacity(INITIAL_BATCH_CAP);
 	let mut seq = 0u64;
+	let mut prefix_closed = false;
 	while let Ok(first) = rx.recv_async().await {
 		batch.push_str(&first);
 		// Greedily drain everything already queued. Child processes that
@@ -539,6 +544,15 @@ async fn pump_chunks_with_progress(
 				Ok(more) => batch.push_str(&more),
 				Err(_) => break,
 			}
+		}
+		if !prefix_closed && let Some(prefix) = &prefix {
+			let mut captured = prefix.lock();
+			let mut end = (DRAIN_CAPTURE_BYTES - captured.len()).min(batch.len());
+			while !batch.is_char_boundary(end) {
+				end -= 1;
+			}
+			captured.push_str(&batch[..end]);
+			prefix_closed = end < batch.len() || captured.len() == DRAIN_CAPTURE_BYTES;
 		}
 		let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
 		// Disconnect a wedged JS consumer so readers and child writers can continue.
@@ -569,8 +583,8 @@ mod tests {
 	};
 
 	use super::{
-		BRIDGE_QUEUE_CHUNKS, ChunkDrain, CoreShell, Shell, ShellRunResult, await_chunk_drain,
-		pump_chunks, pump_chunks_with_progress,
+		BRIDGE_QUEUE_CHUNKS, DRAIN_CAPTURE_BYTES, ChunkDrain, CoreShell, Shell, ShellRunResult,
+		await_chunk_drain, pump_chunks, pump_chunks_with_progress,
 	};
 
 	fn spawn_test_drain<F, Fut>(rx: flume::Receiver<String>, mut forward: F) -> ChunkDrain
@@ -579,12 +593,45 @@ mod tests {
 		Fut: Future<Output = bool> + Send,
 	{
 		let (progress_tx, progress_rx) = tokio::sync::watch::channel(0u64);
+		let prefix = Arc::new(parking_lot::Mutex::new(String::new()));
 		let handle = tokio::spawn(pump_chunks_with_progress(
 			rx,
 			Some(progress_tx),
+			Some(Arc::clone(&prefix)),
 			async move |payload: String| forward(payload).await,
 		));
-		ChunkDrain { handle, progress_rx }
+		ChunkDrain { handle, progress_rx, prefix }
+	}
+
+	#[tokio::test]
+	async fn diagnostic_prefix_is_utf8_bounded_without_skipping_into_later_chunks() {
+		let (tx, rx) = flume::bounded::<String>(2);
+		let expected = "a".repeat(DRAIN_CAPTURE_BYTES - 1);
+		tx.send(format!("{expected}💥")).expect("first chunk");
+		tx.send("later".to_string()).expect("second chunk");
+		drop(tx);
+		let prefix = Arc::new(parking_lot::Mutex::new(String::new()));
+		assert!(
+			pump_chunks_with_progress(rx, None, Some(Arc::clone(&prefix)), async |_| true).await,
+		);
+		assert_eq!(prefix.lock().as_str(), expected);
+	}
+
+	#[tokio::test]
+	async fn callback_failure_preserves_the_original_core_error() {
+		let (tx, rx) = flume::bounded::<String>(1);
+		tx.send("diagnostic".to_string()).expect("chunk");
+		drop(tx);
+		let drain = spawn_test_drain(rx, |_| async { false });
+		let Err(error) = await_chunk_drain(
+			Some(drain),
+			&CancelToken::default(),
+			Err(napi::Error::from_reason("original core failure")),
+		)
+		.await else {
+			panic!("transport failure must not replace the core error");
+		};
+		assert_eq!(error.reason, "original core failure");
 	}
 
 	fn drain_result(cancelled: bool, timed_out: bool) -> napi::Result<ShellRunResult> {
@@ -594,10 +641,54 @@ mod tests {
 			cancelled,
 			timed_out,
 			output_incomplete: false,
+			capture_is_drain_prefix: None,
 			captured_output: None,
 			minimized: None,
 			working_dir: None,
 		})
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn completed_stderr_failure_survives_stalled_callback() {
+		let shell = CoreShell::new(None);
+		let cancel = CancelToken::default();
+		let (tx, rx) = flume::bounded::<String>(4);
+		let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+		let started_tx = Arc::new(parking_lot::Mutex::new(Some(started_tx)));
+		let drain = spawn_test_drain(rx, move |_payload: String| {
+			if let Some(tx) = started_tx.lock().take() {
+				let _ = tx.send(());
+			}
+			async { std::future::pending::<bool>().await }
+		});
+		let core_result = shell
+			.run(
+				CoreShellRunOptions {
+					command: "printf 'DRAIN_DIAGNOSTIC\\n' >&2; exit 5".to_string(),
+					cwd: None,
+					env: None,
+					timeout_ms: None,
+					cpu_budget_id: None,
+				},
+				Some(tx),
+				cancel.clone(),
+			)
+			.await
+			.expect("the finite core command must finish");
+		assert_eq!(core_result.exit_code, Some(5));
+		time::timeout(Duration::from_secs(5), started_rx)
+			.await
+			.expect("stderr must enter the production pump")
+			.expect("the callback must start");
+		let result = await_chunk_drain(Some(drain), &cancel, Ok(core_result.into()))
+			.await
+			.expect("a stalled callback must not replace the completed command outcome");
+		assert_eq!(result.exit_code, Some(5));
+		assert!(result.output_incomplete, "callback delivery did not finish");
+		assert_eq!(result.captured_output.as_deref(), Some("DRAIN_DIAGNOSTIC\n"));
+		assert_eq!(result.capture_is_drain_prefix, Some(true));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
@@ -955,7 +1046,7 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
-	async fn drain_stalled_forward_after_success_returns_transport_error_on_deadline() {
+	async fn drain_stalled_forward_after_success_retains_outcome_on_deadline() {
 		let (tx, rx) = flume::bounded::<String>(4);
 		let callback_resource = std::sync::Arc::new(());
 		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
@@ -973,6 +1064,7 @@ mod tests {
 			cancelled:         false,
 			timed_out:         false,
 			output_incomplete: false,
+			capture_is_drain_prefix: None,
 			captured_output:   None,
 			minimized:         None,
 			working_dir:       None,
@@ -982,11 +1074,13 @@ mod tests {
 			await_chunk_drain(Some(drain), &cancel, ok_result),
 		)
 		.await
-		.expect("deadline must bound stalled drain after core completes");
-		assert!(
-			settled.is_err(),
-			"stalled drain after normal core completion must surface an explicit error, not truncate silently",
-		);
+		.expect("deadline must bound stalled drain after core completes")
+		.expect("callback failure must preserve the completed command");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(settled.output_incomplete);
+		assert_eq!(settled.captured_output.as_deref(), Some("chunk\n"));
+		assert!(!settled.cancelled);
+		assert!(!settled.timed_out);
 		assert!(
 			callback_weak.upgrade().is_none(),
 			"stalled pump task and callback resources must be released",
@@ -1017,6 +1111,7 @@ mod tests {
 			cancelled:         false,
 			timed_out:         false,
 			output_incomplete: false,
+			capture_is_drain_prefix: None,
 			captured_output:   None,
 			minimized:         None,
 			working_dir:       None,
@@ -1144,11 +1239,12 @@ mod tests {
 		let settled = time::timeout(Duration::from_secs(5), drain_task)
 			.await
 			.expect("Shell.abort() must settle stalled drain even after core completion")
-			.expect("drain task should not panic");
-		assert!(
-			settled.is_err(),
-			"aborting stalled post-completion drain must return an explicit error, not truncate silently",
-		);
+			.expect("drain task should not panic")
+			.expect("late abort must preserve the completed command");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(settled.output_incomplete);
+		assert!(!settled.cancelled);
+		assert!(!settled.timed_out);
 		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run");
 		assert!(
 			callback_weak.upgrade().is_none(),
@@ -1157,7 +1253,7 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
-	async fn drain_stalled_forward_after_success_with_default_none_options_returns_error() {
+	async fn drain_stalled_forward_after_success_with_default_none_options_retains_result() {
 		let shell = Shell::new(None);
 		let mut core_cancel = CancelToken::default();
 		let run_guard = shell.active_runs.register(&mut core_cancel);
@@ -1188,12 +1284,11 @@ mod tests {
 		let settled = time::timeout(Duration::from_secs(15), run_task)
 			.await
 			.expect("default None options must bound stalled drain after core completion")
-			.expect("run task should not panic");
-		assert!(
-			settled.is_err(),
-			"stalled drain after normal core completion with default options must surface an explicit error",
-		);
-		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run on error");
+			.expect("run task should not panic")
+			.expect("default options must retain the completed command");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(settled.output_incomplete);
+		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run");
 		assert!(
 			callback_weak.upgrade().is_none(),
 			"stalled pump task and callback resources must be released",
@@ -1230,6 +1325,7 @@ mod tests {
 			cancelled:         false,
 			timed_out:         false,
 			output_incomplete: false,
+			capture_is_drain_prefix: None,
 			captured_output:   None,
 			minimized:         None,
 			working_dir:       None,
@@ -1347,16 +1443,11 @@ mod tests {
 		drop(retained_tx);
 
 		let settled = settled_result
-			.expect("continuous post-completion child output must hit absolute drain deadline within 4s");
-		let Err(err) = settled else {
-			panic!(
-				"continuous post-completion output exceeding absolute deadline must surface an explicit transport error"
-			);
-		};
-		assert_eq!(
-			err.reason,
-			"Shell output callback drain exceeded deadline after command completion",
-		);
+			.expect("continuous post-completion child output must hit absolute drain deadline within 4s")
+			.expect("the completed command outcome must survive the deadline");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(settled.output_incomplete);
+		assert!(settled.captured_output.is_none(), "do not replace accepted streamed output with an old prefix");
 		assert!(
 			delivered.load(Ordering::SeqCst) >= 3,
 			"expected several chunks to be delivered before hitting absolute deadline",

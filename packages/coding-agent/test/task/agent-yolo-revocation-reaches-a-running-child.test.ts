@@ -72,6 +72,8 @@ function realSession(config: { bypassAllApprovals?: boolean; parentApprovalBypas
 	return session;
 }
 
+let nextChild = 0;
+
 /**
  * Spawn through the real executor and build the child the way `createAgentSession`
  * does, from the options the executor actually emitted.
@@ -93,7 +95,7 @@ async function spawnChildOf(parent: AgentSession, ownBypass = parent.isApprovalB
 		agent: agentDefinition,
 		task: "do work",
 		index: 0,
-		id: "agent-yolo-revocation",
+		id: `agent-yolo-revocation-${nextChild++}`,
 		settings: Settings.isolated(),
 		modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 		enableLsp: false,
