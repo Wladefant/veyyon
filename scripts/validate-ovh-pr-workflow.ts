@@ -454,7 +454,8 @@ function validate(workflow: Workflow): void {
 			const command = step.run
 				.replaceAll("${{ matrix.index }}", "0")
 				.replaceAll("${{ matrix.count }}", "1")
-				.replaceAll("${{ matrix.files }}", "3");
+				.replaceAll("${{ matrix.files }}", "3")
+				.replaceAll("${{ matrix.projected_ms }}", "4500");
 			const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", command], {
 				cwd: sandbox,
 				env: {
@@ -465,10 +466,15 @@ function validate(workflow: Workflow): void {
 					RECEIPT: receipt,
 					FLEET_ADAPTER: "false",
 					GITHUB_STEP_SUMMARY: "",
+					GITHUB_RUN_ID: "12345",
+					GITHUB_RUN_ATTEMPT: "1",
 				},
 				encoding: "utf8",
 				timeout: 10_000,
 			});
+			if (!run.stdout?.includes("OVH_FILE_TOTAL")) {
+				throw new Error(`Missing shard totals (exit ${run.status}): ${run.stderr || run.stdout}`);
+			}
 			equal(run.status, 1);
 			equal(run.stdout?.includes("Per-file timeout (120s): hang.test.ts"), true);
 			equal(
