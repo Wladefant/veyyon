@@ -61,7 +61,10 @@ class NativeClaimOwner(unittest.TestCase):
     def test_claim_dispatch_rollback_preserve_owner_and_allow_retry(self):
         run = self.claim()
         req = self.assert_accountable()
-        self.assertEqual(req["native_claim"], {"version": 1, "state": "active", "worker_id": "dispatcher", "run_id": run, "task_handle": None})
+        self.assertEqual(req["native_claim"], {
+            "version": 1, "state": "active", "worker_id": "dispatcher", "run_id": run, "task_handle": None,
+            "fence": {"state": "implementation", "stage": "qa", "epoch": 0, "head": None},
+        })
         self.dispatch(run)
         self.assertEqual(self.assert_accountable()["native_claim"]["task_handle"], "agent://worker")
         unbound = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run, "--previous-state", "pending")
@@ -121,7 +124,8 @@ class NativeClaimOwner(unittest.TestCase):
         variants = [None, {}, {**active, "version": 2}, {**active, "state": "unknown"},
                     {**RETRYABLE, "run_id": run}, {**active, "worker_id": "foreign"},
                     {**active, "worker_id": ""}, {**active, "run_id": ""}, {**active, "task_handle": ""}]
-        variants += [{k: v for k, v in active.items() if k != omitted} for omitted in active]
+        variants += [{k: v for k, v in active.items() if k != omitted} for omitted in active if omitted != "fence"]
+        variants.extend([{**active, "fence": {}}, {**active, "claim_id": "orphaned-generation"}])
         for claim in variants:
             with self.subTest(claim=claim):
                 req = copy.deepcopy(base)

@@ -896,9 +896,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
         result_schema = None
         prepared_prompt = ""
         from_state = "pending"
-        stage = "build"
         repo_root = os.getcwd()
-        head_sha = None
         last_candidate_error = None
 
         for _, cand_id, cand_topic, cand_req in candidates:
@@ -1010,9 +1008,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
             result_schema = cand_result_schema
             prepared_prompt = cand_prompt
             from_state = cand_from_state
-            stage = cand_stage
             repo_root = cand_repo_root
-            head_sha = cand_head_sha
             break
 
         if chosen_req is None or chosen_id is None or chosen_topic is None or run_id is None:
