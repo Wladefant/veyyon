@@ -6,6 +6,7 @@
 // (which manager it reads, how it asks the runtime queue) is not exercised here, and a dequeue between the runtime
 // taking an answer and journaling it is the one window a retry can inject twice.
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { logger, TempDir } from "@veyyon/utils";
@@ -19,10 +20,10 @@ afterEach(() => {
 const envelope = (question: string, event: string, body = "the secret answer text") =>
 	`[operator-answer question=${question} event=${event}] ${body}`;
 
-function newSession(): { manager: SessionManager; dir: TempDir } {
+function newSession(storage?: FileSessionStorage): { manager: SessionManager; dir: TempDir } {
 	const dir = TempDir.createSync("@operator-answer-");
 	dirs.push(dir);
-	return { manager: SessionManager.create(dir.path(), dir.path()), dir };
+	return { manager: SessionManager.create(dir.path(), dir.path(), storage), dir };
 }
 
 /** Injection as the live session does it: the answer becomes a user message in the journal. */
@@ -37,7 +38,11 @@ function injectingInto(manager: SessionManager, injected: string[]) {
 test("only the operator envelope is an answer; ordinary input is left to the normal path", async () => {
 	const { manager } = newSession();
 	const injected: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => manager, injectingInto(manager, injected), () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => manager,
+		injectingInto(manager, injected),
+		() => false,
+	);
 	expect(operatorAnswerQuestionId("hello")).toBeUndefined();
 	expect(await inbox.accept("hello", "auto")).toBeUndefined();
 	expect(injected).toEqual([]);
@@ -46,7 +51,11 @@ test("only the operator envelope is an answer; ordinary input is left to the nor
 test("the first deliver injects the answer once; a replay and a repeated update event inject nothing and log no answer text", async () => {
 	const { manager } = newSession();
 	const injected: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => manager, injectingInto(manager, injected), () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => manager,
+		injectingInto(manager, injected),
+		() => false,
+	);
 	const info = spyOn(logger, "info").mockImplementation(() => {});
 	try {
 		expect(await inbox.accept(envelope("q-1", "evt-1"), "auto")).toBe("queued");
@@ -64,7 +73,11 @@ test("the first deliver injects the answer once; a replay and a repeated update 
 test("a distinct question is still injected after another was consumed", async () => {
 	const { manager } = newSession();
 	const injected: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => manager, injectingInto(manager, injected), () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => manager,
+		injectingInto(manager, injected),
+		() => false,
+	);
 	await inbox.accept(envelope("q-1", "evt-1"), "auto");
 	expect(await inbox.accept(envelope("q-2", "evt-2"), "auto")).toBe("queued");
 	expect(injected).toHaveLength(2);
@@ -73,7 +86,11 @@ test("a distinct question is still injected after another was consumed", async (
 test("after a restart a consumed question injects nothing, even replayed with a new event id", async () => {
 	const { manager, dir } = newSession();
 	const injected: string[] = [];
-	const before = new OperatorAnswerInbox(() => manager, injectingInto(manager, injected), () => false);
+	const before = new OperatorAnswerInbox(
+		() => manager,
+		injectingInto(manager, injected),
+		() => false,
+	);
 	await before.accept(envelope("q-1", "evt-1"), "auto");
 	await manager.flush();
 	const file = manager.getSessionFile();
@@ -81,7 +98,11 @@ test("after a restart a consumed question injects nothing, even replayed with a 
 
 	const reopened = await SessionManager.open(file as string, dir.path());
 	const afterRestart: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => reopened, injectingInto(reopened, afterRestart), () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => reopened,
+		injectingInto(reopened, afterRestart),
+		() => false,
+	);
 	await inbox.recover();
 	expect(await inbox.accept(envelope("q-1", "evt-9"), "auto")).toBe("duplicate");
 	expect(afterRestart).toEqual([]);
@@ -103,7 +124,11 @@ test("a crash after the answer was journaled but before it was injected re-injec
 
 	const reopened = await SessionManager.open(file as string, dir.path());
 	const injected: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => reopened, injectingInto(reopened, injected), () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => reopened,
+		injectingInto(reopened, injected),
+		() => false,
+	);
 	await inbox.recover();
 	await inbox.recover();
 	expect(injected).toEqual([envelope("q-1", "evt-1")]);
@@ -127,11 +152,15 @@ test("an answer is journaled in the session that receives it, after a session sw
 	const second = newSession();
 	const current = { manager: first.manager };
 	const injected: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => current.manager, async text => {
-		injected.push(text);
-		current.manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
-		return "queued";
-	}, () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => current.manager,
+		async text => {
+			injected.push(text);
+			current.manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+			return "queued";
+		},
+		() => false,
+	);
 	await inbox.accept(envelope("q-1", "evt-1"), "auto");
 
 	current.manager = second.manager;
@@ -146,7 +175,11 @@ test("an answer is journaled in the session that receives it, after a session sw
 	const file = second.manager.getSessionFile();
 	const reopened = await SessionManager.open(file as string, second.dir.path());
 	const afterRestart: string[] = [];
-	const restarted = new OperatorAnswerInbox(() => reopened, injectingInto(reopened, afterRestart), () => false);
+	const restarted = new OperatorAnswerInbox(
+		() => reopened,
+		injectingInto(reopened, afterRestart),
+		() => false,
+	);
 	expect(await restarted.accept(envelope("q-2", "evt-3"), "auto")).toBe("duplicate");
 	expect(afterRestart).toEqual([]);
 });
@@ -194,7 +227,11 @@ test("a record the build cannot read neither stops startup nor blocks the next a
 		mode: "sideways",
 	});
 	const injected: string[] = [];
-	const inbox = new OperatorAnswerInbox(() => manager, injectingInto(manager, injected), () => false);
+	const inbox = new OperatorAnswerInbox(
+		() => manager,
+		injectingInto(manager, injected),
+		() => false,
+	);
 	await inbox.recover();
 	expect(injected).toEqual([]);
 	expect(await inbox.accept(envelope("q-1", "evt-1"), "auto")).toBe("queued");
@@ -203,20 +240,32 @@ test("a record the build cannot read neither stops startup nor blocks the next a
 
 test("a recovery that cannot inject leaves the answer pending for the sender's retry instead of failing startup", async () => {
 	const { manager, dir } = newSession();
-	const failing = new OperatorAnswerInbox(() => manager, async () => {
-		throw new Error("not ready");
-	}, () => false);
+	const failing = new OperatorAnswerInbox(
+		() => manager,
+		async () => {
+			throw new Error("not ready");
+		},
+		() => false,
+	);
 	await expect(failing.accept(envelope("q-1", "evt-1"), "auto")).rejects.toThrow("not ready");
 	await manager.flush();
 
 	const reopened = await SessionManager.open(manager.getSessionFile() as string, dir.path());
-	const stillFailing = new OperatorAnswerInbox(() => reopened, async () => {
-		throw new Error("not ready");
-	}, () => false);
+	const stillFailing = new OperatorAnswerInbox(
+		() => reopened,
+		async () => {
+			throw new Error("not ready");
+		},
+		() => false,
+	);
 	await expect(stillFailing.recover()).resolves.toBeUndefined();
 
 	const injected: string[] = [];
-	const ready = new OperatorAnswerInbox(() => reopened, injectingInto(reopened, injected), () => false);
+	const ready = new OperatorAnswerInbox(
+		() => reopened,
+		injectingInto(reopened, injected),
+		() => false,
+	);
 	expect(await ready.accept(envelope("q-1", "evt-1"), "auto")).toBe("queued");
 	expect(injected).toEqual([envelope("q-1", "evt-1")]);
 });
@@ -261,7 +310,6 @@ test("repeated recovery and reconnect never requeue a pending answer already hel
 	expect(await consumed.accept(envelope("q-reconnect", "evt-replay"), "followUp")).toBe("duplicate");
 	expect(queue).toEqual([]);
 });
-
 
 test("an unavailable runtime queue during recovery does not block startup or consume the pending answer", async () => {
 	const { manager, dir } = newSession();
@@ -350,7 +398,6 @@ test("a pending answer whose queue state is unknown stays retryable without a fa
 	expect(queue).toEqual([answer]);
 });
 
-
 test("concurrent inbox instances serialize the same pending decision", async () => {
 	const { manager } = newSession();
 	const queue: string[] = [];
@@ -365,7 +412,9 @@ test("concurrent inbox instances serialize the same pending decision", async () 
 	]);
 	expect(results.sort()).toEqual(["duplicate", "queued"]);
 	expect(queue).toEqual([original]);
-	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+	expect(
+		manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer"),
+	).toHaveLength(1);
 });
 
 test("a failed first concurrent injection permits exactly one later pending-answer retry", async () => {
@@ -374,7 +423,9 @@ test("a failed first concurrent injection permits exactly one later pending-answ
 	const original = envelope("q-concurrent-retry", "evt-first");
 	const failing = new OperatorAnswerInbox(
 		() => manager,
-		async () => { throw new Error("first injection failed"); },
+		async () => {
+			throw new Error("first injection failed");
+		},
 		waiting(queue),
 	);
 	const succeeding = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
@@ -385,7 +436,9 @@ test("a failed first concurrent injection permits exactly one later pending-answ
 	expect(failure.status).toBe("rejected");
 	expect(retry).toEqual({ status: "fulfilled", value: "queued" });
 	expect(queue).toEqual([original]);
-	expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+	expect(
+		manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer"),
+	).toHaveLength(1);
 });
 
 test("concurrent reconnect managers share one pending answer and preserve it after a cleared queue", async () => {
@@ -413,7 +466,9 @@ test("concurrent reconnect managers share one pending answer and preserve it aft
 	expect(queue).toEqual([original]);
 
 	const persisted = await SessionManager.open(file as string, dir.path());
-	const pending = persisted.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer");
+	const pending = persisted
+		.getEntries()
+		.filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer");
 	expect(pending).toHaveLength(1);
 	expect(JSON.stringify(pending[0])).toContain("evt-original");
 
@@ -425,7 +480,127 @@ test("concurrent reconnect managers share one pending answer and preserve it aft
 	expect(queue).toEqual([original]);
 	await retryManager.flush();
 	const afterRetry = await SessionManager.open(file as string, dir.path());
-	expect(afterRetry.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+	expect(
+		afterRetry
+			.getEntries()
+			.filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer"),
+	).toHaveLength(1);
+});
+
+test.each(["new", "consumed"])("an answer rechecks owned appends queued during its first drain (%s)", async state => {
+	const { manager } = newSession();
+	await manager.ensureOnDisk();
+	const journal = manager.getSessionFile()!;
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const holder = new FileSessionStorage().withJournalLock(journal, async () => {
+		entered.resolve();
+		await release.promise;
+	});
+	const secondEntered = Promise.withResolvers<void>();
+	const secondRelease = Promise.withResolvers<void>();
+	let secondHolder: Promise<void> | undefined;
+	const queue: string[] = [];
+	const answer = envelope("q-contended", "evt-original");
+	const inbox = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	try {
+		await Promise.race([entered.promise, holder]);
+		manager.appendMessage({ role: "user", content: "local input", timestamp: Date.now() });
+		const accepted = inbox.accept(answer, "auto").catch((error: unknown) => error);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(queue).toEqual([]);
+		secondHolder = new FileSessionStorage().withJournalLock(journal, async () => {
+			secondEntered.resolve();
+			await secondRelease.promise;
+		});
+		manager.appendMessage({
+			role: "user",
+			content: state === "consumed" ? answer : "input during drain",
+			timestamp: Date.now(),
+		});
+		release.resolve();
+		await Promise.race([secondEntered.promise, secondHolder]);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(queue).toEqual([]);
+		secondRelease.resolve();
+		expect(await accepted).toBe(state === "consumed" ? "duplicate" : "queued");
+		expect(queue).toEqual(state === "consumed" ? [] : [answer]);
+		expect(await inbox.accept(envelope("q-contended", "evt-retry"), "auto")).toBe("duplicate");
+	} finally {
+		release.resolve();
+		secondRelease.resolve();
+		await holder;
+		await secondHolder;
+		await manager.close();
+	}
+});
+
+test("an operator answer refuses within its deadline when a rewrite traps the writer drain", async () => {
+	const storage = new FileSessionStorage();
+	const opened = spyOn(storage, "openWriter");
+	const { manager } = newSession(storage);
+	await manager.ensureOnDisk();
+	const journal = manager.getSessionFile()!;
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const holder = storage.withJournalLock(journal, async () => {
+		entered.resolve();
+		await release.promise;
+	});
+	const closing = Promise.withResolvers<void>();
+	const abortClose = Promise.withResolvers<void>();
+	let rewrite: Promise<unknown> | undefined;
+	let writerClosed: Promise<void> | undefined;
+	const watchdog = new AbortController();
+	const queue: string[] = [];
+	try {
+		await Promise.race([entered.promise, holder]);
+		manager.appendMessage({ role: "user", content: "append A", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "append B", timestamp: Date.now() });
+		const writer = opened.mock.results.findLast(result => result.type === "return")!.value;
+		const close = writer.close.bind(writer);
+		spyOn(writer, "close").mockImplementation(async () => {
+			writerClosed = close();
+			closing.resolve();
+			await Promise.race([
+				writerClosed,
+				abortClose.promise.then(() => {
+					throw new Error("release the test's blocked rewrite");
+				}),
+			]);
+		});
+		const inbox = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+		const accepted = inbox.accept(envelope("q-rewrite", "evt-original"), "auto").catch((error: unknown) => error);
+		await nextTurn();
+		// A is ahead of the rewrite. B joins the lock only after A completes.
+		// The rewrite takes the lock and closes the writer, whose close waits for B.
+		rewrite = manager.rewriteEntries().catch((error: unknown) => error);
+		await nextTurn();
+		release.resolve();
+		expect(await Promise.race([closing.promise.then(() => true), rewrite.then(() => false)])).toBe(true);
+		// This test checks a real deadline while the filesystem lock is held.
+		// The watchdog lets the negative control release the deliberate lock cycle.
+		const result = await Promise.race([accepted, delay(2_500, "answer did not settle", { signal: watchdog.signal })]);
+		expect(result).toBeInstanceOf(Error);
+		expect(String(result)).toContain("Operator-answer journal is stale: timed out draining owned appends");
+		expect(queue).toEqual([]);
+		abortClose.resolve();
+		await rewrite;
+		await writerClosed;
+		await manager.rewriteEntries();
+		const retry = envelope("q-rewrite", "evt-retry");
+		expect(await inbox.accept(retry, "auto")).toBe("queued");
+		expect(queue).toEqual([retry]);
+	} finally {
+		watchdog.abort();
+		release.resolve();
+		abortClose.resolve();
+		await holder;
+		await rewrite;
+		await writerClosed;
+		opened.mockRestore();
+		await manager.close();
+	}
 });
 
 test("retained reconnect manager never writes retry text over an answer already persisted by another manager", async () => {
@@ -449,13 +624,17 @@ test("retained reconnect manager never writes retry text over an answer already 
 	expect(queue).toEqual([]);
 
 	const durable = await SessionManager.open(file, dir.path());
-	expect(durable.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+	expect(
+		durable.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer"),
+	).toHaveLength(1);
 	const resumed = new OperatorAnswerInbox(() => durable, queueingInto(queue), waiting(queue));
 	expect(await resumed.accept(retry, "followUp")).toBe("queued");
 	expect(queue).toEqual([original]);
 	await durable.flush();
 	const final = await SessionManager.open(file, dir.path());
-	expect(final.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+	expect(
+		final.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer"),
+	).toHaveLength(1);
 });
 
 test("retained reconnect manager cannot inject a consumed answer missing from its old snapshot", async () => {
@@ -475,7 +654,9 @@ test("retained reconnect manager cannot inject a consumed answer missing from it
 	await firstManager.flush();
 	queue.length = 0;
 
-	await expect(retained.accept(envelope("q-retained-consumed", "evt-retry"), "auto")).rejects.toThrow("journal is stale");
+	await expect(retained.accept(envelope("q-retained-consumed", "evt-retry"), "auto")).rejects.toThrow(
+		"journal is stale",
+	);
 	expect(queue).toEqual([]);
 	const reopened = await SessionManager.open(file, dir.path());
 	const after = new OperatorAnswerInbox(() => reopened, queueingInto(queue), waiting(queue));
@@ -495,12 +676,12 @@ class FailOnceReadStorage extends FileSessionStorage {
 		return undefined;
 	}
 
-	override async readText(filePath: string): Promise<string> {
+	override async readTextStrict(filePath: string): Promise<string> {
 		if (this.failNextRead) {
 			this.failNextRead = false;
 			throw new Error("synthetic durable-read fault");
 		}
-		return super.readText(filePath);
+		return super.readTextStrict(filePath);
 	}
 }
 
@@ -532,7 +713,11 @@ test("a failed durable read cannot acknowledge a retained manager's changed retr
 	expect(queue).toEqual([original]);
 	await authoritative.flush();
 	const persisted = await SessionManager.open(file, dir.path());
-	expect(persisted.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
+	expect(
+		persisted
+			.getEntries()
+			.filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer"),
+	).toHaveLength(1);
 });
 
 test("a failed journal read blocks recovery after the pending answer was consumed elsewhere", async () => {
@@ -575,9 +760,13 @@ test("a failed first dispatch cannot let a stale manager replace durable pending
 	const retainedManager = await SessionManager.open(file, dir.path());
 	const original = envelope("q-failed-dispatch", "evt-original");
 	const retry = envelope("q-failed-dispatch", "evt-retry", "different answer");
-	const first = new OperatorAnswerInbox(() => firstManager, async () => {
-		throw new Error("synthetic dispatch fault");
-	}, () => false);
+	const first = new OperatorAnswerInbox(
+		() => firstManager,
+		async () => {
+			throw new Error("synthetic dispatch fault");
+		},
+		() => false,
+	);
 	const queue: string[] = [];
 	const retained = new OperatorAnswerInbox(() => retainedManager, queueingInto(queue), waiting(queue));
 	await expect(first.accept(original, "followUp")).rejects.toThrow("synthetic dispatch fault");

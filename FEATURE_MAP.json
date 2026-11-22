@@ -4,6 +4,58 @@
   "repository": "Wladefant/veyyon",
   "description": "Feature map for Veyyon coding-agent capabilities.",
   "features": {
+    "irc-send-receipts": {
+      "name": "IRC send receipts",
+      "description": "Report confirmed or unconfirmed peer delivery without waiting indefinitely for revival or journal persistence.",
+      "entry_files": ["packages/coding-agent/src/tools/agent/irc.ts"],
+      "tests": ["packages/coding-agent/test/tools/an-irc-send-has-a-bounded-delivery.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1224",
+      "risk": "high",
+      "components": ["coding-agent", "IRC"],
+      "docs": ["docs/tools/irc.md"]
+    },
+    "large-session-compaction-publish": {
+      "name": "Large session compaction publication",
+      "description": "Persist compaction rewrites without a writer/lock wait cycle or whole-file rereads at rename.",
+      "entry_files": [
+        "kernel/src/session/session-loader.ts",
+        "kernel/src/session/session-manager.ts",
+        "kernel/src/session/session-storage.ts",
+        "packages/coding-agent/src/session/runtime/compaction-runtime.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/session/a-rewrite-drains-its-writer-before-locking.test.ts",
+        "packages/coding-agent/test/session/a-staged-journal-rewrite-reads-only-new-bytes.test.ts",
+        "packages/coding-agent/test/tailrev-compaction-elision-persist.test.ts",
+        "packages/coding-agent/test/steer-preview-drains-after-compaction.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1225",
+      "risk": "high",
+      "components": ["kernel", "session", "compaction"],
+      "docs": ["docs/internal/session.md"]
+    },
+    "subagent-launch-grants": {
+      "name": "Subagent launch grants",
+      "description": "Bind explicit root dispatch grants to a fresh child session before startup.",
+      "entry_files": [
+        "kernel/src/session/session-launch-grants.ts",
+        "kernel/src/session/session-loader.ts",
+        "kernel/src/session/session-manager.ts",
+        "packages/coding-agent/src/session/tool-session.ts",
+        "packages/coding-agent/src/task/executor.ts",
+        "packages/coding-agent/src/task/index.ts",
+        "packages/coding-agent/src/task/native-transcript.ts",
+        "packages/coding-agent/src/task/spawn-run.ts",
+        "packages/coding-agent/src/task/spawn-scheduler.ts",
+        "packages/coding-agent/src/task/types.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/task/task-launch-grant.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/2922",
+      "risk": "high",
+      "components": ["coding-agent", "kernel"]
+    },
     "sage-approved-context": {
       "name": "Sage approved context",
       "description": "Portable Sage context records with explicit approval, validation, and provider authorization.",
@@ -39,6 +91,38 @@
       "docs": [
         "docs/tools/launch.md"
       ]
+    },
+    "herdr-session-restore": {
+      "name": "Herdr session restore",
+      "description": "Report and refresh the foreground Veyyon conversation for restore after a Herdr server restart.",
+      "entry_files": [
+        "packages/coding-agent/src/modes/terminal/herdr-reporter.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/src/modes/terminal/herdr-restores-the-foreground-conversation.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/super-board/issues/375",
+      "risk": "medium",
+      "components": ["coding-agent", "Herdr"]
+    },
+    "native-lane-capacity": {
+      "name": "Native lane capacity",
+      "description": "Count active native agent lanes per Veyyon process without shared runtime files.",
+      "entry_files": [
+        "packages/coding-agent/src/task/native-lane-capacity.ts",
+        "packages/coding-agent/src/task/native-transcript.ts",
+        "packages/coding-agent/src/task/executor.ts",
+        "packages/coding-agent/src/session/agent-session.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/task/native-lane-lifecycle.test.ts",
+        "packages/coding-agent/test/task/native-transcript-ownership.test.ts",
+        "packages/coding-agent/test/a-parent-irc-resume-publishes-a-separate-native-completion.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1183",
+      "risk": "high",
+      "components": ["coding-agent", "task"],
+      "docs": ["docs/handbook/src/features/agents.md"]
     }
   }
 }

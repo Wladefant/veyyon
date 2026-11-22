@@ -22,6 +22,7 @@ import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import {
 	applyXaiResponsesThinkingPolicy,
+	FABLE_MYTHOS_5_2_SPEC,
 	resolveWaferServerlessThinkingFormat,
 } from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
@@ -370,20 +371,33 @@ function applyAnthropicCatalogPolicy(model: ModelSpec<Api>, parsedModel: Anthrop
 		model.maxTokens = 128000;
 	}
 
-	// Claude Fable/Mythos 5: Anthropic's /v1/models omits token limits and
-	// pricing, and models.dev lags new releases. Pin authoritative values from
-	// the model card (1M context / 128k output) and pricing docs ($10 in / $50
-	// out per MTok).
+	// Claude Fable/Mythos 5+: Anthropic's /v1/models omits token limits,
+	// pricing, reasoning, and vision, and models.dev lags new releases. Pin
+	// authoritative values from the model card (1M context / 128k output) and
+	// pricing docs ($10/$50 for 5/5.1; $8/$40 with $0.20 cacheRead / $10
+	// cacheWrite for 5.2, derived from the curated 5.2 seed).
 	if (model.provider === "anthropic" && isFableOrMythos(parsedModel.kind)) {
-		model.contextWindow = 1_000_000;
-		model.maxTokens = 128_000;
-		model.cost = {
-			...normalizeModelCost(model.cost),
-			input: 10,
-			output: 50,
-			cacheRead: 1,
-			cacheWrite: 12.5,
-		};
+		if (semverEqual(parsedModel.version, "5.2")) {
+			model.reasoning = FABLE_MYTHOS_5_2_SPEC.reasoning;
+			model.reasoningOptions = FABLE_MYTHOS_5_2_SPEC.reasoningOptions;
+			model.input = FABLE_MYTHOS_5_2_SPEC.input;
+			model.contextWindow = FABLE_MYTHOS_5_2_SPEC.contextWindow;
+			model.maxTokens = FABLE_MYTHOS_5_2_SPEC.maxTokens;
+			model.cost = {
+				...normalizeModelCost(model.cost),
+				...FABLE_MYTHOS_5_2_SPEC.cost,
+			};
+		} else {
+			model.contextWindow = 1_000_000;
+			model.maxTokens = 128_000;
+			model.cost = {
+				...normalizeModelCost(model.cost),
+				input: 10,
+				output: 50,
+				cacheRead: 1,
+				cacheWrite: 12.5,
+			};
+		}
 	}
 }
 

@@ -121,6 +121,39 @@ describe("postmortem expected cleanup errors", () => {
 		expect(result.stderr).toContain("[Unhandled Rejection] Error: unexpected cleanup rejection");
 	});
 
+	it("drains callbacks registered during waitable cleanup before it completes", async () => {
+		const result = await runPostmortemProbe(`
+			import { setImmediate } from "node:timers/promises";
+			import { postmortem } from "${postmortemModuleUrl}";
+			const lateEntered = Promise.withResolvers();
+			const release = Promise.withResolvers();
+			postmortem.register("first", async () => {
+				await Promise.resolve();
+				postmortem.register("late", async (reason, canWait) => {
+					console.log("late", reason, canWait);
+					lateEntered.resolve();
+					await release.promise;
+					postmortem.register("nested", async (_reason, wait) => {
+						await Promise.resolve();
+						console.log("nested", wait);
+					});
+				});
+			});
+			const drained = postmortem.cleanup().then(() => console.log("drained"));
+			await lateEntered.promise;
+			await setImmediate();
+			release.resolve();
+			await drained;
+		`);
+		expect(result.exitCode).toBe(0);
+		expect(
+			result.stdout
+				.trim()
+				.split("\n")
+				.map(line => line.trim()),
+		).toEqual(["late manual true", "nested true", "drained"]);
+	});
+
 	it("releases manual cleanup at the deadline even when a callback never settles", async () => {
 		const result = await runPostmortemProbe(`
 			import { vi } from "bun:test";

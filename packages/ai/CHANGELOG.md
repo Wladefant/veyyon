@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-11-21
+
+### Fixed
+
+- Align Anthropic OAuth with Claude Code 2.1.321 and remove the retired mid-conversation system beta from requests.
+
+## [1.12.1] - 2026-11-20
+
+### Fixed
+
+- Strip unsupported array validation keywords from Gemini tool declarations while retaining local argument validation ([#1190](https://github.com/Wladefant/veyyon/issues/1190)).
+
 ## [1.10.11] - 2026-11-17
 
 ### Fixed

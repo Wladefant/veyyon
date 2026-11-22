@@ -39,6 +39,7 @@ Session aliases resolve against live owner-only terminal records, not offline qu
 - `content` is one text block:
   - `list`: `No other agents.` or `<n> peer(s):` bullets: `id [displayName · kind · status]` plus unread count, parent, and last-activity age; a footer notes that parked agents are revived automatically when messaged.
   - `send`: per-recipient delivery receipts (`injected` / `woken` / `revived` / `failed — <error>`); with `await: true`, the reply body or a clean no-reply timeout note.
+    A local send without `await` names any unconfirmed recipients after three seconds. Their delivery may still finish. Do not resend it.
   - `wait`: the consumed message as `[<msgId>] <from>: <body>` (with a reply-to tag), or `No message within <duration>.`
   - `inbox`: `Inbox empty.` or `<n> message(s):` bullets.
 - `details: IrcDetails`: `{ op, from?, to?, receipts?, waited?, inbox?, peers? }`. `waited` is `null` when a wait timed out; `receipts` carry `{ to, outcome, error? }`.
@@ -75,7 +76,7 @@ Session aliases resolve against live owner-only terminal records, not offline qu
 - User-visible prompts / interactive UI
   - IRC events render as transcript cards in the TUI. The agent dashboard shows per-agent unread counts on the Live roster, and its Comms view streams every message as it is sent.
 - Background work / cancellation
-  - `send` itself never blocks on reply generation; only `wait` (and `await: true`) blocks, bounded by the resolved timeout and the caller's `AbortSignal`.
+  - A local send without `await` limits its receipt wait to three seconds. Cancelling that wait does not cancel delivery. `wait` and `await: true` can wait for a reply.
 - Network
   - No IRC server connection. Woken recipients make their own model-provider calls as part of their turn.
 - Filesystem
