@@ -1,11 +1,13 @@
-import * as fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { reportFault } from "@veyyon/utils/fault-sink";
+import { acquireFileLockSync, withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 import { hasFsCode, isEnoent } from "@veyyon/utils/fs-error";
 import { type PathState, pathStateSync } from "@veyyon/utils/fs-optional";
-import { withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { peekFileEnds } from "@veyyon/utils/peek-file";
@@ -14,12 +16,55 @@ import { Snowflake } from "@veyyon/utils/snowflake";
 import { toError } from "@veyyon/utils/type-guards";
 import { SESSION_TITLE_SLOT_ENTRY_TYPE } from "./session-entries";
 import { overlayTitleSlotContent, type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
+import { windowsWriteThroughRenameSync } from "./windows-write-through-rename";
 
 const utf8Decoder = new TextDecoder("utf-8");
 
 const journalLockStorage = new AsyncLocalStorage<Set<string>>();
 const inProcessJournalQueues = new Map<string, Promise<void>>();
 const syncJournalLockDepths = new Map<string, number>();
+interface JournalAppendBatch {
+	canonical: string;
+	end(): void;
+}
+
+// Do not carry one implicit lock into acquisition of another path. Different
+// processes can append to two journals in opposite orders.
+let appendBatch: JournalAppendBatch | undefined;
+
+/** Keep immediate append visibility without publishing a lock owner for every entry in a burst. */
+function appendInJournalBatch(canonical: string, write: () => void): void {
+	const held = journalLockStorage.getStore();
+	if (held?.has(canonical) || syncJournalLockDepths.has(canonical)) {
+		write();
+		return;
+	}
+	if (held?.size || syncJournalLockDepths.size) {
+		withJournalLockSync(canonical, write);
+		return;
+	}
+	if (appendBatch?.canonical !== canonical) {
+		appendBatch?.end();
+		const release = acquireFileLockSync(canonical);
+		const batch: JournalAppendBatch = {
+			canonical,
+			end() {
+				if (appendBatch !== batch) return;
+				appendBatch = undefined;
+				release();
+			},
+		};
+		appendBatch = batch;
+		queueMicrotask(batch.end);
+	}
+	const batch = appendBatch;
+	try {
+		write();
+	} catch (error) {
+		batch.end();
+		throw error;
+	}
+}
 
 /** @internal Test-only handle for verifying async journal queue cleanup. */
 export const __journalLockInternalsForTesting = {
@@ -43,6 +88,7 @@ export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>)
 	const nextHeld = new Set(held);
 	nextHeld.add(canonical);
 	try {
+		appendBatch?.end();
 		await fsp.mkdir(path.dirname(canonical), { recursive: true });
 		return await withFileLock(canonical, async () => {
 			return await journalLockStorage.run(nextHeld, fn);
@@ -75,6 +121,7 @@ export function withJournalLockSync<T>(filePath: string, fn: () => T): T {
 	if (inProcessJournalQueues.has(canonical)) {
 		throw new Error(`Journal lock for ${canonical} is held asynchronously in this process`);
 	}
+	appendBatch?.end();
 	const currentDepth = syncJournalLockDepths.get(canonical) ?? 0;
 	if (currentDepth > 0) {
 		syncJournalLockDepths.set(canonical, currentDepth + 1);
@@ -159,6 +206,12 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
 	return `${stats.dev}:${stats.ino}`;
 }
 
+/** The prefix of one journal object seen by the refresh that precedes publication. */
+export interface JournalSnapshot {
+	readonly identity: string;
+	readonly size: number;
+}
+
 /**
  * Optional guard applied by {@link SessionStorage.writeTextAtomic}. The
  * backend MUST call `commitGuard()` synchronously immediately before it makes
@@ -170,6 +223,8 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
 export interface WriteTextAtomicOptions {
 	/** The EPERM move-aside path, when a backend has renamed the original there. */
 	commitGuard?: (sourcePath?: string) => boolean;
+	/** Replay growth beyond this snapshot. `null` means the refresh saw no journal. */
+	sourceSnapshot?: JournalSnapshot | null;
 }
 
 /**
@@ -262,8 +317,8 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 /**
  * Write a staged file's data to disk on the thread pool, before the rename that publishes it. ext4
  * writes back a file renamed over another inside `rename(2)` (`auto_da_alloc`), so a sync rename of
- * an unflushed 420MB session held the event loop for 38-92ms; flushed first, it took 0.1ms. The
- * flush also makes the replacement survive a power cut.
+ * an unflushed 420MB session held the event loop for 38-92ms; flushed first, it took 0.1ms.
+ * This flush covers the staged file contents, not the rename.
  */
 async function flushStaged(handle: fs.promises.FileHandle): Promise<void> {
 	await handle.datasync();
@@ -661,7 +716,12 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			// would mix our new session with the peer's on the same inode.
 			// Prior appends (including an owned title-slot prefix) are allowed
 			// to complete our own session header on a subsequent call.
-			if (this.#emptyAtOpen && !this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
+			if (
+				this.#emptyAtOpen &&
+				!this.#sessionIdAtOpen &&
+				!this.#hasAppendedToPinnedJournal &&
+				fs.fstatSync(this.#fd).size > 0
+			) {
 				throw new Error("Session writer journal gained content before first append");
 			}
 			// A peer can truncate and overwrite an existing regular journal in place.
@@ -704,8 +764,11 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		);
 		try {
 			const next = fs.lstatSync(this.#path);
-			if (!next.isFile() || next.isSymbolicLink() ||
-				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))) {
+			if (
+				!next.isFile() ||
+				next.isSymbolicLink() ||
+				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))
+			) {
 				throw new Error("Session writer target changed during reopen");
 			}
 			// A different regular session file is not an authorized continuation.
@@ -752,11 +815,20 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			}
 		};
 		const canonical = path.resolve(this.#path);
-		if ((inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) || this.#pendingAppendCount > 0) {
+		if (
+			(inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) ||
+			this.#pendingAppendCount > 0
+		) {
 			this.#pendingAppendCount++;
 			const next = this.#pendingAppends.then(
-				() => withJournalLock(this.#path, async () => { writeLocked(); }),
-				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+				() =>
+					withJournalLock(this.#path, async () => {
+						writeLocked();
+					}),
+				() =>
+					withJournalLock(this.#path, async () => {
+						writeLocked();
+					}),
 			);
 			this.#pendingAppends = next.catch(() => {});
 			try {
@@ -766,7 +838,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			}
 			return;
 		}
-		withJournalLockSync(this.#path, writeLocked);
+		appendInJournalBatch(canonical, writeLocked);
 	}
 
 	override async flush(): Promise<void> {
@@ -783,8 +855,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
 			const assertCurrentTarget = (): void => {
 				const entry = fs.lstatSync(this.#path);
-				if (!entry.isFile() || entry.isSymbolicLink() ||
-					fileObjectIdentity(entry) !== pinnedIdentity) {
+				if (!entry.isFile() || entry.isSymbolicLink() || fileObjectIdentity(entry) !== pinnedIdentity) {
 					throw new Error("Session writer target changed before durable sync");
 				}
 			};
@@ -823,6 +894,24 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	}
 }
 
+// Only a writer that ignores the journal lock can append after staging starts.
+// Limit that exceptional synchronous work. If it exceeds the limit, keep the original.
+const MAX_LATE_JOURNAL_BYTES = 1 << 20;
+const strictReplayDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+interface StagedPublishScope {
+	readonly tempPath: string;
+	readonly targetPath: string;
+	readonly identity: string | undefined;
+	/**
+	 * Byte offset in the original inode already accounted for by staging or a
+	 * previous replay pass, preventing double-replay across EPERM retries.
+	 */
+	nextOffset: number;
+	/** Set after EPERM move-aside moves the original inode to a backup path. */
+	backupPath?: string;
+}
+
 export class FileSessionStorage implements SessionStorage {
 	/**
 	 * Paths already reported as unreachable, so a per-turn probe does not log per turn.
@@ -831,6 +920,7 @@ export class FileSessionStorage implements SessionStorage {
 	 * different reasons, and collapsing them would report the first and hide the second.
 	 */
 	readonly #reportedUnreachable = new Set<string>();
+	#activePublishScope: StagedPublishScope | undefined;
 
 	ensureDirSync(dir: string): void {
 		if (!fs.existsSync(dir)) {
@@ -902,18 +992,25 @@ export class FileSessionStorage implements SessionStorage {
 				return allowed;
 			};
 			try {
+				const publishScope = this.#captureStagedPublishScope(fpath, tempPath);
 				writeChunksSync(tempPath, body);
 				if (!commitGuard()) throw new Error("Original journal changed before synchronous publication");
-				try {
-					this.renameSync(tempPath, fpath);
-				} catch (renameError) {
-					if (!hasFsCode(renameError, "EPERM")) throw renameError;
-					// Never truncate the previous journal when replacement is refused.
-					// The existing staged-file fallback preserves or restores its backup.
-					this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError,
-						options?.commitGuard ? commitGuard : undefined);
-					if (guardRejected) throw new Error("Original journal changed before synchronous publication");
-				}
+				this.#withStagedPublishScope(publishScope, () => {
+					try {
+						this.renameSync(tempPath, fpath);
+					} catch (renameError) {
+						if (!hasFsCode(renameError, "EPERM")) throw renameError;
+						// Never truncate the previous journal when replacement is refused.
+						// The existing staged-file fallback preserves or restores its backup.
+						this.#replaceSessionFileAfterEpermSync(
+							tempPath,
+							fpath,
+							renameError,
+							options?.commitGuard ? commitGuard : undefined,
+						);
+						if (guardRejected) throw new Error("Original journal changed before synchronous publication");
+					}
+				});
 			} catch (err) {
 				try {
 					if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
@@ -1071,13 +1168,15 @@ export class FileSessionStorage implements SessionStorage {
 			const dir = path.resolve(fpath, "..");
 			const tempPath = stagingPath(fpath);
 			await fs.promises.mkdir(dir, { recursive: true });
+			let publishScope: StagedPublishScope | undefined;
 			try {
+				publishScope = this.#captureStagedPublishScope(fpath, tempPath, options?.sourceSnapshot);
 				await writeChunks(tempPath, body);
 			} catch (err) {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
-			this.#publishStaged(tempPath, fpath, options);
+			this.#publishStaged(tempPath, fpath, options, publishScope);
 		});
 	}
 	/**
@@ -1100,7 +1199,9 @@ export class FileSessionStorage implements SessionStorage {
 			}
 			const tempPath = stagingPath(fpath);
 			const headLength = Buffer.byteLength(head, "utf-8");
+			let publishScope: StagedPublishScope | undefined;
 			try {
+				publishScope = this.#captureStagedPublishScope(fpath, tempPath, options?.sourceSnapshot);
 				const inPlace = headLength === headBytes;
 				if (inPlace) await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
 				const handle = await fs.promises.open(tempPath, inPlace ? "r+" : "w");
@@ -1125,12 +1226,51 @@ export class FileSessionStorage implements SessionStorage {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
-			this.#publishStaged(tempPath, fpath, options);
+			this.#publishStaged(tempPath, fpath, options, publishScope);
 		});
 	}
 
+	snapshotJournal(file: string): JournalSnapshot | null {
+		const stats = fs.lstatSync(file, { throwIfNoEntry: false });
+		if (!stats) return null;
+		if (!stats.isFile()) throw new Error(`Session journal is not a regular file: ${file}`);
+		return { identity: fileObjectIdentity(stats), size: stats.size };
+	}
+
+	/** Without a prior refresh, use the journal boundary just before staging. */
+	#captureStagedPublishScope(
+		targetPath: string,
+		tempPath: string,
+		sourceSnapshot: JournalSnapshot | null | undefined,
+	): StagedPublishScope | undefined {
+		if (!targetPath.endsWith(".jsonl")) return undefined;
+		const snapshot = sourceSnapshot === undefined ? this.snapshotJournal(targetPath) : sourceSnapshot;
+		return {
+			tempPath,
+			targetPath,
+			identity: snapshot?.identity,
+			nextOffset: snapshot?.size ?? 0,
+		};
+	}
+
+	#withStagedPublishScope<T>(scope: StagedPublishScope | undefined, fn: () => T): T {
+		if (scope === undefined && this.#activePublishScope === undefined) return fn();
+		const previous = this.#activePublishScope;
+		this.#activePublishScope = scope;
+		try {
+			return fn();
+		} finally {
+			this.#activePublishScope = previous;
+		}
+	}
+
 	/** Make a fully written temp file the file at `fpath`, or discard it. */
-	#publishStaged(tempPath: string, fpath: string, options?: WriteTextAtomicOptions): void {
+	#publishStaged(
+		tempPath: string,
+		fpath: string,
+		options?: WriteTextAtomicOptions,
+		publishScope?: StagedPublishScope,
+	): void {
 		// Guard-check + rename MUST NOT be separated by an await. A concurrent
 		// synchronous rewrite (flushSync -> #rewriteSynchronously) can otherwise
 		// publish a fresh body between the check and the rename, and this stale
@@ -1139,20 +1279,35 @@ export class FileSessionStorage implements SessionStorage {
 			discardTemp(tempPath, fpath);
 			return;
 		}
-		try {
-			this.renameSync(tempPath, fpath);
-			return;
-		} catch (err) {
-			if (!hasFsCode(err, "EPERM")) {
-				discardTemp(tempPath, fpath);
-				throw toError(err);
-			}
+		const published = this.#withStagedPublishScope(publishScope, () => {
 			try {
-				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
-			} catch (fallbackErr) {
-				discardTemp(tempPath, fpath);
-				throw fallbackErr;
+				this.renameSync(tempPath, fpath);
+				return true;
+			} catch (err) {
+				if (!hasFsCode(err, "EPERM")) {
+					discardTemp(tempPath, fpath);
+					throw toError(err);
+				}
+				try {
+					return this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
+				} catch (fallbackErr) {
+					discardTemp(tempPath, fpath);
+					throw fallbackErr;
+				}
 			}
+		});
+		if (!published) return;
+		// The replacement is already visible. A sync failure must not enter the rename fallback.
+		if (os.platform() === "win32") {
+			// Sync the published file too: renameSync can replay appends after the staged flush.
+			const fd = fs.openSync(fpath, "r+");
+			try {
+				fs.fsyncSync(fd);
+			} finally {
+				fs.closeSync(fd);
+			}
+		} else {
+			fsyncDirEntrySync(path.dirname(fpath), { required: true });
 		}
 	}
 
@@ -1163,68 +1318,83 @@ export class FileSessionStorage implements SessionStorage {
 	 */
 	renameSync(source: string, target: string): void {
 		withJournalLockSync(target, () => {
-			this.#replayTailAppends(source, target);
-			fs.renameSync(source, target);
+			const scope = this.#activePublishScope;
+			if (scope?.tempPath === source && scope.targetPath === target) {
+				this.#prepareStagedJournalPublish(scope);
+			}
+			if (os.platform() === "win32") windowsWriteThroughRenameSync(source, target);
+			else fs.renameSync(source, target);
 		});
 	}
 
-	#replayTailAppends(source: string, target: string): void {
-		if (
-			source === target ||
-			!target.endsWith(".jsonl") ||
-			!path.basename(source).includes(".tmp") ||
-			!fs.existsSync(source) ||
-			!fs.existsSync(target)
-		) {
-			return;
+	/** The common case checks only a stat. Never reread the staged body or the old journal. */
+	#prepareStagedJournalPublish(scope: StagedPublishScope): void {
+		if (scope.backupPath && fs.lstatSync(scope.targetPath, { throwIfNoEntry: false })) {
+			throw new Error(`Session journal reappeared during EPERM replacement; original retained at ${scope.backupPath}`);
 		}
+		const original = scope.backupPath ?? scope.targetPath;
+		const stats = fs.lstatSync(original, { throwIfNoEntry: false });
+		if (!stats && !scope.identity) return;
+		if (!stats?.isFile() || fileObjectIdentity(stats) !== scope.identity || stats.size < scope.nextOffset) {
+			throw new Error(`Session journal was replaced or truncated during publication: ${original}`);
+		}
+		if (stats.size === scope.nextOffset) return;
+		this.#replayAppendedTailBytes(scope, original);
+	}
+
+	#replayAppendedTailBytes(scope: StagedPublishScope, original: string): void {
+		const start = Math.max(0, scope.nextOffset - 1);
+		const fd = fs.openSync(
+			original,
+			fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0),
+		);
 		try {
-			const targetContent = fs.readFileSync(target, "utf-8");
-			const sourceContent = fs.readFileSync(source, "utf-8");
-			if (!targetContent.trim() || !sourceContent.trim()) return;
-
-			const targetLines = targetContent.split("\n").filter(line => line.length > 0);
-			const sourceLines = sourceContent.split("\n").filter(line => line.length > 0);
-			if (targetLines.length === 0 || sourceLines.length === 0) return;
-
-			let lastCommonTargetIndex = -1;
-			for (let i = sourceLines.length - 1; i >= 0; i--) {
-				const targetIndex = targetLines.lastIndexOf(sourceLines[i]!);
-				if (targetIndex >= 0) {
-					lastCommonTargetIndex = targetIndex;
-					break;
-				}
+			const stats = fs.fstatSync(fd);
+			const length = stats.size - start;
+			if (!stats.isFile() || fileObjectIdentity(stats) !== scope.identity || stats.size < scope.nextOffset) {
+				throw new Error(`Session journal changed during appended-byte replay: ${original}`);
 			}
-
-			if (lastCommonTargetIndex < 0 || lastCommonTargetIndex >= targetLines.length - 1) {
-				return;
+			if (stats.size === scope.nextOffset) return;
+			if (length > MAX_LATE_JOURNAL_BYTES) {
+				throw new Error(`Too many bytes appended during session journal publication: ${original}`);
 			}
-
-			const sourceLineSet = new Set(sourceLines);
-			const linesToReplay: string[] = [];
-			for (let j = lastCommonTargetIndex + 1; j < targetLines.length; j++) {
-				const line = targetLines[j]!;
-				if (sourceLineSet.has(line)) continue;
+			const tail = Buffer.allocUnsafe(length);
+			for (let offset = 0; offset < length; ) {
+				const bytes = fs.readSync(fd, tail, offset, length - offset, start + offset);
+				if (bytes === 0) throw new Error(`Short read during session journal publication: ${original}`);
+				offset += bytes;
+			}
+			if ((scope.nextOffset > 0 && tail[0] !== 10) || tail[length - 1] !== 10) {
+				throw new Error(`Incomplete session journal record during publication: ${original}`);
+			}
+			const lines = [];
+			for (let from = scope.nextOffset - start; from < length; ) {
+				const to = tail.indexOf(10, from);
 				try {
-					const parsed = JSON.parse(line) as { type?: string; state?: string; reason?: string };
-					if (parsed.type === "session_lifecycle" && parsed.reason === "session_switched") {
-						continue;
+					const line = strictReplayDecoder.decode(tail.subarray(from, to));
+					const record = JSON.parse(line) as { type?: unknown; reason?: unknown } | null;
+					if (
+						record &&
+						typeof record === "object" &&
+						!Array.isArray(record) &&
+						!(record.type === "session_lifecycle" && record.reason === "session_switched")
+					) {
+						lines.push(line);
 					}
 				} catch {
-					continue;
+					// Malformed rows are not journal records.
 				}
-				linesToReplay.push(line);
+				from = to + 1;
 			}
-
-			if (linesToReplay.length > 0) {
-				fs.appendFileSync(source, `${linesToReplay.join("\n")}\n`);
+			if (lines.length > 0) fs.appendFileSync(scope.tempPath, `${lines.join("\n")}\n`);
+			const after = fs.lstatSync(original);
+			if (fileObjectIdentity(after) !== scope.identity || after.size !== stats.size) {
+				throw new Error(`Session journal changed during appended-byte replay: ${original}`);
 			}
-		} catch (error) {
-			logger.warn("Failed to replay trailing journal appends during rename", {
-				source,
-				target,
-				error: toError(error).message,
-			});
+			// A Windows move-aside can retry publication. Do not replay these rows twice.
+			scope.nextOffset = stats.size;
+		} finally {
+			fs.closeSync(fd);
 		}
 	}
 
@@ -1241,7 +1411,9 @@ export class FileSessionStorage implements SessionStorage {
 		targetPath: string,
 		renameError: unknown,
 		commitGuard?: (sourcePath?: string) => boolean,
-	): void {
+	): boolean {
+		// If replacement consumed the staged name before reporting failure, leave the target alone.
+		if (this.existsStateSync(tempPath) !== "present") throw toError(renameError);
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, sessionBackupName(path.basename(targetPath), Snowflake.next()));
 		try {
@@ -1250,13 +1422,15 @@ export class FileSessionStorage implements SessionStorage {
 			if (isEnoent(moveAsideError)) {
 				if (commitGuard && !commitGuard()) {
 					discardTemp(tempPath, targetPath);
-					return;
+					return false;
 				}
 				this.renameSync(tempPath, targetPath);
-				return;
+				return true;
 			}
 			throw toError(renameError);
 		}
+		const scope = this.#activePublishScope;
+		if (scope?.tempPath === tempPath && scope.targetPath === targetPath) scope.backupPath = backupPath;
 		// Another writer may publish a new journal at targetPath after we move
 		// its old inode aside. Even an unchanged backup cannot authorize replacing
 		// that new journal: retain both files and report the conflict for recovery.
@@ -1287,7 +1461,7 @@ export class FileSessionStorage implements SessionStorage {
 				});
 			}
 			discardTemp(tempPath, targetPath);
-			return;
+			return false;
 		}
 		try {
 			this.renameSync(tempPath, targetPath);
@@ -1324,6 +1498,7 @@ export class FileSessionStorage implements SessionStorage {
 				});
 			}
 		}
+		return true;
 	}
 
 	async rename(sourcePath: string, nextPath: string): Promise<void> {

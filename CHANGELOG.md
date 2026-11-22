@@ -4,6 +4,67 @@
 
 ## [Unreleased]
 
+### Added
+
+- Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
+
+### Fixed
+
+- Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+
+## [1.12.3] - 2026-11-21
+
+### Added
+
+- Allow a root task dispatch to grant a child explicit GitHub merge or review dismissal access to named repositories. Wait for the grant receipt to reach disk before starting the child.
+
+### Fixed
+
+- Return unconfirmed IRC delivery promptly when a local send without `await` cannot get a receipt ([#1224](https://github.com/Wladefant/veyyon/issues/1224)).
+
+## [1.12.2] - 2026-11-21
+
+### Added
+
+- Add Claude Fable 5.2 and Claude Mythos 5.2 to the first-party Anthropic catalog, with 1M context, 128k output, image input, and adaptive thinking.
+
+### Fixed
+
+- Share one relocation gate acquisition across overlapping native agent starts in the same session. Each transcript still has its own lease.
+- Align Anthropic OAuth with Claude Code 2.1.321 and remove the retired mid-conversation system beta from requests.
+
+## [1.12.1] - 2026-11-20
+
+### Added
+
+- Expose a synchronous advisory lock handle for session journal append batches ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+
+### Removed
+
+- Remove the lane ledger path helper and keep the host `run` directory exempt from profile migration.
+
+### Fixed
+
+- Refresh the foreground conversation's Herdr resume command while Veyyon runs. This lets Veyyon replace a lost command before Herdr restarts.
+- Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Replace the shared lane ledger and its CLI with a 100-lane limit per Veyyon process, so native spawns, wakes, and exits do not wait for a ledger lock.
+- Reject concurrent opens of the same native transcript without blocking other transcripts.
+- Retry the current Codex model once after a replay-safe WebSocket close before switching models ([Refs #1203](https://github.com/Wladefant/veyyon/issues/1203)).
+- Strip unsupported array validation keywords from Gemini tool declarations while retaining local argument validation ([#1190](https://github.com/Wladefant/veyyon/issues/1190)).
+- Share one file lock across a synchronous burst of session journal appends without delaying their visibility ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Wait for the session's own queued journal append before rejecting an operator answer as stale ([#1211](https://github.com/Wladefant/veyyon/pull/1211)).
+- Allow native agent sessions to reserve their transcript until close, so a second process cannot open the same transcript for a concurrent turn.
+- Refuse to move session artifacts while a native child owns its transcript. Retry the move after the child closes.
+- A stalled shell output callback no longer hides a completed command's exit status. Results mark incomplete capture and retain up to 64 KiB of diagnostics when no callback succeeded.
+- Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Queue same-process Windows file-lock contenders, retry sharing errors at release, and recover failed releases from the owning process.
+- Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
+- File-lock release warnings now keep the underlying Windows access error when cleanup stays blocked.
+- Report the owner, age, and phase when an asynchronous file-lock queue stalls ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Skip speculative owner writes while a lock is held, and let async callers opt into a bounded contention wait ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Retry transient Windows access errors when restoring a live file lock from its transition directory ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Retire newly acquired file locks when validation after publication fails so later callers can acquire the lock ([#1213](https://github.com/Wladefant/veyyon/pull/1213)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

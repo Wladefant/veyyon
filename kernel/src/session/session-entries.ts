@@ -135,6 +135,27 @@ export interface AgentSpawnEntry extends SessionEntryBase, AgentSpawnRecord {
 	type: "subagent_spawn";
 }
 
+/** Record type of the root-bound subagent launch receipt. Not a session entry: it has no id, parentId or timestamp. */
+export const SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE = "subagent_launch_grant";
+
+/**
+ * Durable receipt, written to the root session's own journal before a child agent is launched, that the
+ * root authorized that child for the listed repository grants. It is root-bound: `rootSessionId` must name
+ * the journal it sits in, and it is never copied into a fork, branch or new session.
+ */
+export interface SubagentLaunchGrant {
+	type: typeof SUBAGENT_LAUNCH_GRANT_ENTRY_TYPE;
+	version: 1;
+	rootSessionId: string;
+	agentId: string;
+	childSessionId: string;
+	sessionFile: string;
+	grants: {
+		mergeRepos: string[];
+		dismissRepos: string[];
+	};
+}
+
 /**
  * Effective-settings snapshot: the complete resolved config that governed the run.
  *

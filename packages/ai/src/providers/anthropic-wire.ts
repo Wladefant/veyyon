@@ -101,9 +101,8 @@ export type ContentBlockParam =
 /**
  * A single conversation turn.
  *
- * `system` is the Opus 4.8+ mid-conversation system role
- * (`mid-conversation-system-2026-04-07` beta); the public API otherwise only
- * accepts `user` / `assistant`.
+ * Supported models accept mid-conversation `system` messages without a beta header.
+ * Other models accept only `user` and `assistant`.
  */
 export type MessageParam = {
 	role: "user" | "assistant" | "system";

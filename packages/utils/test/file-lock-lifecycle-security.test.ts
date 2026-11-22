@@ -12,6 +12,7 @@ import {
 	type ProcessIdentityDependencies,
 } from "../src/process-liveness";
 import { removeWithRetries } from "../src/temp";
+import { restorePlatform, setPlatform } from "./helpers/platform-override";
 
 const {
 	getLockPath,
@@ -76,6 +77,7 @@ describe("atomic file-lock lifecycle claims", () => {
 		const target = await mkTarget("publication.json");
 		const lockPath = getLockPath(target);
 		const candidateA = await prepareCandidate(lockPath);
+		if (candidateA === null) throw new Error("private candidate was not prepared");
 
 		// A has a complete private candidate but has not published it. An old
 		// ownerless artifact is recovered and B becomes the pathname owner.
@@ -251,6 +253,63 @@ describe("atomic file-lock lifecycle claims", () => {
 		expect(contenderEntered).toBe(true);
 	});
 
+	test.each(["async", "sync"])("a failed %s publication check does not strand a live-owner lock", async mode => {
+		const target = await mkTarget(`failed-publication-${mode}.json`);
+		const lockPath = getLockPath(target);
+		const rename = fs.rename;
+		const renameSync = fsSync.renameSync;
+		const lstat = fs.lstat;
+		const lstatSync = fsSync.lstatSync;
+		let denyCheck = false;
+		const check = (entry: fsSync.PathLike) => {
+			if (!denyCheck || entry !== path.join(lockPath, "info")) return;
+			denyCheck = false;
+			throw Object.assign(new Error("owner record is busy after publication"), { code: "EBUSY" });
+		};
+		vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+			await rename(from, to);
+			if (to === lockPath) denyCheck = true;
+		});
+		vi.spyOn(fsSync, "renameSync").mockImplementation((from, to) => {
+			renameSync(from, to);
+			if (to === lockPath) denyCheck = true;
+		});
+		// Each wrapper forwards the options unchanged, preserving the original overloads.
+		const checkLstat = async (entry: fsSync.PathLike, options?: Parameters<typeof lstat>[1]) => {
+			check(entry);
+			return lstat(entry, options);
+		};
+		const checkLstatSync = (entry: fsSync.PathLike, options?: Parameters<typeof lstatSync>[1]) => {
+			check(entry);
+			return lstatSync(entry, options);
+		};
+		vi.spyOn(fs, "lstat").mockImplementation(checkLstat as typeof lstat);
+		vi.spyOn(fsSync, "lstatSync").mockImplementation(checkLstatSync as typeof lstatSync);
+
+		let entries = 0;
+		const callback = () => {
+			entries += 1;
+			return "entered";
+		};
+		try {
+			if (mode === "async") {
+				await expect(withFileLock(target, async () => callback())).rejects.toMatchObject({ code: "EBUSY" });
+			} else {
+				expect(() => withFileLockSync(target, callback)).toThrow("owner record is busy");
+			}
+			expect(entries).toBe(0);
+		} finally {
+			vi.restoreAllMocks();
+		}
+		if (mode === "async") {
+			expect(await tryWithFileLock(target, async () => callback())).toEqual({ acquired: true, value: "entered" });
+		} else {
+			expect(withFileLockSync(target, callback, { retries: 1 })).toBe("entered");
+		}
+		expect(entries).toBe(1);
+		await expect(fs.lstat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
 	/** Crash recovery must finish a stale transition without mistaking an active transition for dead. */
 	test("a crashed stale transition is recovered after its bounded operation grace", async () => {
 		const target = await mkTarget("crashed-transition.json");
@@ -269,6 +328,56 @@ describe("atomic file-lock lifecycle claims", () => {
 			}),
 		).toEqual({ acquired: true, value: "recovered" });
 	});
+
+	// Recover the live owner after a transient sharing violation on the restore rename.
+	// Inject the Windows errno at the syscall boundary; this does not test NTFS itself.
+	test.each(["EPERM", "EACCES", "EBUSY"])(
+		"restore after Windows %s preserves the async and sync owner",
+		async code => {
+			const rename = fs.rename;
+			const renameSync = fsSync.renameSync;
+			for (const mode of ["async", "sync"] as const) {
+				const target = await mkTarget(`restore-${mode}.json`);
+				const lockPath = getLockPath(target);
+				const transitionPath = getTransitionPath(lockPath);
+				const owner = ownerInfo({ processIdentity: null });
+				await writeOwnerDirectory(transitionPath, owner);
+				const stat = await fs.lstat(transitionPath);
+				vi.spyOn(Date, "now").mockReturnValue(Math.ceil(stat.ctimeMs) + 1_001);
+				let firstRestore = true;
+				const denyFirstRestore = (from: fsSync.PathLike, to: fsSync.PathLike) => {
+					if (firstRestore && from === transitionPath && to === lockPath) {
+						firstRestore = false;
+						throw Object.assign(new Error("sharing violation"), { code });
+					}
+				};
+				vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+					denyFirstRestore(from, to);
+					await rename(from, to);
+				});
+				vi.spyOn(fsSync, "renameSync").mockImplementation((from, to) => {
+					denyFirstRestore(from, to);
+					renameSync(from, to);
+				});
+				setPlatform("win32");
+				try {
+					if (mode === "async") {
+						expect(await tryWithFileLock(target, async () => "wrong owner")).toEqual({ acquired: false });
+					} else {
+						expect(() => withFileLockSync(target, () => "wrong owner", { retries: 1 })).toThrow(
+							"after 1 attempts",
+						);
+					}
+				} finally {
+					vi.restoreAllMocks();
+					restorePlatform();
+				}
+				expect((await readLockInfo(lockPath))?.token).toBe(owner.token);
+				expect((await fs.lstat(lockPath)).ino).toBe(stat.ino);
+				await expect(fs.lstat(transitionPath)).rejects.toMatchObject({ code: "ENOENT" });
+			}
+		},
+	);
 });
 
 describe("bounded and fail-closed owner metadata", () => {

@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-20
+
+### Added
+
+- Expose a synchronous advisory lock handle for session journal append batches ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+
+### Fixed
+
+- Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Queue same-process Windows file-lock contenders, retry sharing errors at release, and recover failed releases from the owning process.
+- Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
+- File-lock release warnings now keep the underlying Windows access error when cleanup stays blocked.
+- Report the owner, age, and phase when an asynchronous file-lock queue stalls ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Skip speculative owner writes while a lock is held, and let async callers opt into a bounded contention wait ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Retry transient Windows access errors when restoring a live file lock from its transition directory ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Retire newly acquired file locks when validation after publication fails so later callers can acquire the lock ([#1213](https://github.com/Wladefant/veyyon/pull/1213)).
+
+### Removed
+
+- Remove the lane ledger path helper and keep the host `run` directory exempt from profile migration.
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed

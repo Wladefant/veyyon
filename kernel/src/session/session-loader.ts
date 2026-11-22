@@ -32,6 +32,7 @@ import {
 	type SessionTitleSlotEntry,
 } from "./session-entries";
 import { checkSessionEntryShape } from "./session-entry-shape";
+import { isSubagentLaunchGrantRecord } from "./session-launch-grants";
 import { LoadCooling, type LoadedColdHistory, type SkimmedProjection } from "./session-load-cooling";
 import { migrateToCurrentVersion } from "./session-migrations";
 import { isImageBlock, isImageDataPayload } from "./session-persistence";
@@ -213,6 +214,8 @@ function emitStitchedRecordNotice(options: SessionLoadOptions, stitched: number)
  */
 class SessionRecordLoop {
 	readonly entries: FileEntry[] = [];
+	/** Raw text of each receipt line, in file order. Receipts are never entries. */
+	readonly receiptLines: string[] = [];
 	readonly #issues: SessionRecordIssue[] = [];
 	readonly #streaming: boolean;
 	readonly #logSource: string | undefined;
@@ -226,6 +229,7 @@ class SessionRecordLoop {
 	readonly #offsets: number[] = [];
 	/** The title slot a streamed load found on the file's first line. */
 	titleSlot: SessionTitleUpdate | undefined;
+	#hasNonHeadReceipt = false;
 	/** 0-based byte offset just past the last record's newline. */
 	#end = 0;
 	#stitched = 0;
@@ -274,6 +278,10 @@ class SessionRecordLoop {
 			this.skip(byteLength);
 			return;
 		}
+		if (isSubagentLaunchGrantRecord(value)) {
+			this.#keepReceipt(text, byteLength);
+			return;
+		}
 		this.#take(value, byteLength);
 	}
 
@@ -289,7 +297,7 @@ class SessionRecordLoop {
 		if (this.entries.length > 0) {
 			// `JSON.parse` takes only a string; `Bun.JSONL` is the one parser of UTF-8 bytes.
 			const parsed = Bun.JSONL.parseChunk(bytes, start, end);
-			if (parsed.done && parsed.values.length === 1) {
+			if (parsed.done && parsed.values.length === 1 && !isSubagentLaunchGrantRecord(parsed.values[0])) {
 				this.#take(parsed.values[0], end - start);
 				return;
 			}
@@ -321,8 +329,10 @@ class SessionRecordLoop {
 	 * Keep `value`, the whole value of the next line after the header, `byteLength` bytes, as
 	 * {@link pushBytes} keeps a line it parsed.
 	 */
-	takeRecord(value: unknown, byteLength: number): void {
+	takeRecord(value: unknown, byteLength: number): boolean {
+		if (isSubagentLaunchGrantRecord(value)) return false;
 		this.#take(value, byteLength);
+		return true;
 	}
 
 	/**
@@ -332,6 +342,7 @@ class SessionRecordLoop {
 	 */
 	takeProjected(projection: SkimmedProjection): boolean {
 		const record = projection[1];
+		if (isSubagentLaunchGrantRecord(record)) return false;
 		if (!checkSessionEntryShape(record).ok) return false;
 		this.#keep(record, projection[0], projection);
 		return true;
@@ -350,6 +361,14 @@ class SessionRecordLoop {
 			offset: this.#byteOffset,
 			problem: shape.problem,
 		});
+		this.skip(byteLength);
+	}
+
+	/** Keep a receipt line's exact text for the manager to validate and publish. */
+	#keepReceipt(text: string, byteLength: number): void {
+		if (this.entries.length !== 1) this.#hasNonHeadReceipt = true;
+		this.receiptLines.push(text);
+		this.#end = this.#byteOffset + byteLength;
 		this.skip(byteLength);
 	}
 
@@ -387,7 +406,7 @@ class SessionRecordLoop {
 	 */
 	layout(): SessionRecordLayout | undefined {
 		if (this.#titleSlotBytes !== SESSION_TITLE_SLOT_BYTES || this.entries.length === 0) return undefined;
-		if (this.#issues.length > 0 || this.#stitched > 0) return undefined;
+		if (this.#issues.length > 0 || this.#stitched > 0 || this.#hasNonHeadReceipt) return undefined;
 		return { entryOffsets: this.#offsets, end: this.#end };
 	}
 }
@@ -397,6 +416,8 @@ export interface ParsedSessionContent {
 	entries: FileEntry[];
 	titleSlot: SessionTitleUpdate | undefined;
 	layout: SessionRecordLayout | undefined;
+	/** Raw text of each receipt line in the file, in file order. */
+	receiptLines: string[];
 	/** What a load asked to {@link SessionLoadOptions.coolCompactedHistory} moved to disk. */
 	cold?: LoadedColdHistory;
 }
@@ -407,7 +428,7 @@ export function parseSessionContent(content: string, context: SessionLoadOptions
 	const loop = new SessionRecordLoop({ streaming: false, logSource: context.source, notices: context });
 	if (slotLineBytes !== undefined) loop.skipTitleSlot(slotLineBytes);
 	for (const rawLine of body.split("\n")) loop.push(rawLine, Buffer.byteLength(rawLine, "utf-8"));
-	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot, layout: loop.layout() };
+	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot, layout: loop.layout(), receiptLines: loop.receiptLines };
 }
 
 /**
@@ -434,18 +455,24 @@ function decodeLine(bytes: Buffer, start: number, end: number): string {
  * the call. A line is the bytes before a line feed, or the bytes after the last one when the file
  * does not end with one; an empty line is a line. A line longer than the stream frame bound fails
  * with `StreamFrameLimitError`, as every line reader does.
+ * When `endOffset` is set, it is the exclusive end of the snapshot. EOF before it is an error.
  *
  * Each read is split synchronously: an async iterator over lines cost one promise per line, and
  * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
  */
-async function forEachFileLine(
+export async function forEachFileLine(
 	handle: fs.promises.FileHandle,
 	from: number,
 	onLine: (bytes: Buffer, start: number, end: number) => void,
 	signal?: AbortSignal,
+	endOffset?: number,
 ): Promise<void> {
+	if (endOffset === from) {
+		signal?.throwIfAborted();
+		return;
+	}
 	const limit = streamFrameCeiling();
-	let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
+	let buffer = Buffer.allocUnsafe(Math.min(STREAM_READ_BYTES, (endOffset ?? Infinity) - from));
 	let position = from;
 	// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
 	let carried = 0;
@@ -456,7 +483,11 @@ async function forEachFileLine(
 			buffer.copy(grown, 0, 0, carried);
 			buffer = grown;
 		}
-		const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, position);
+		const length = Math.min(buffer.length - carried, (endOffset ?? Infinity) - position);
+		const { bytesRead } = await handle.read(buffer, carried, length, position);
+		if (bytesRead === 0 && endOffset !== undefined) {
+			throw new Error("Short read during session journal refresh");
+		}
 		position += bytesRead;
 		const filled = buffer.subarray(0, carried + bytesRead);
 		let start = 0;
@@ -467,7 +498,7 @@ async function forEachFileLine(
 		}
 		carried = filled.length - start;
 		if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
-		if (bytesRead === 0) {
+		if (bytesRead === 0 || position === endOffset) {
 			signal?.throwIfAborted();
 			if (carried > 0) onLine(filled, start, filled.length);
 			return;
@@ -606,8 +637,7 @@ async function loadSkimmed(
 				let kept = false;
 				if (Array.isArray(value) && loop.entries.length > 0) {
 					if (value.length === 2) {
-						loop.takeRecord(value[1], length);
-						kept = true;
+						kept = loop.takeRecord(value[1], length);
 					} else if (loop.takeProjected(value as unknown as SkimmedProjection)) {
 						projected.push(loop.entries.length - 1, offset, length);
 						kept = true;
@@ -700,7 +730,7 @@ export async function loadEntriesFromFileStream(
 	try {
 		handle = await fs.promises.open(filePath, "r");
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined };
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined, receiptLines: [] };
 		throw err;
 	}
 	let cooling: LoadCooling | undefined;
@@ -721,7 +751,7 @@ export async function loadEntriesFromFileStream(
 		const cold = cooling?.finish();
 		cooling = undefined;
 		options.signal?.throwIfAborted();
-		return { entries, titleSlot: loop.titleSlot, layout: loop.layout(), cold };
+		return { entries, titleSlot: loop.titleSlot, layout: loop.layout(), cold, receiptLines: loop.receiptLines };
 	} finally {
 		cooling?.finish();
 		await handle.close();
@@ -765,6 +795,8 @@ export interface SessionFileLayout {
 
 export interface LoadedSessionFile {
 	entries: FileEntry[];
+	/** Raw text of each receipt line the file holds, in file order. */
+	receiptLines: string[];
 	layout: SessionFileLayout | undefined;
 	/** What a load asked to {@link SessionLoadOptions.coolCompactedHistory} moved to disk. */
 	cold?: LoadedColdHistory;
@@ -806,13 +838,13 @@ export async function loadSessionFile(
 						{ ...options, source: options.source ?? filePath },
 					);
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], layout: undefined, endsMidLine: false };
+		if (isEnoent(err)) return { entries: [], layout: undefined, endsMidLine: false, receiptLines: [] };
 		throw err;
 	}
 	options.signal?.throwIfAborted();
 	const { entries } = loaded;
 
-	if (before.size === 0) return { entries: [], layout: undefined, endsMidLine: false };
+	if (before.size === 0) return { entries: [], layout: undefined, endsMidLine: false, receiptLines: [] };
 	if (entries.length === 0) {
 		throw new CorruptSessionFileError(filePath, "the non-empty file has no readable session header");
 	}
@@ -826,7 +858,7 @@ export async function loadSessionFile(
 	// without one can end inside a line.
 	const endsMidLine = layout === undefined && (await endsInsideALine(storage, filePath));
 	options.signal?.throwIfAborted();
-	return { entries, layout, cold: loaded.cold, endsMidLine };
+	return { entries, layout, cold: loaded.cold, endsMidLine, receiptLines: loaded.receiptLines };
 }
 
 /** Whether the last byte of the file at `filePath` is there and is not a line feed. */

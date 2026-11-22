@@ -155,7 +155,7 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
-import { acquireSubagentHostLane, type NativeHostLaneLease } from "../task/lane-admission";
+import { reserveNativeLane } from "../task/native-lane-capacity";
 import type { YieldItem } from "../task/types";
 import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -530,14 +530,6 @@ async function sendModeContext(
 			attribution: message.attribution,
 		},
 		options ? { deliverAs: options.deliverAs } : undefined,
-	);
-}
-
-function withIrcWakeReleaseFailure(wakeError: unknown, releaseError: unknown): unknown {
-	if (wakeError === undefined) return releaseError;
-	return new AggregateError(
-		[wakeError, releaseError],
-		`${errorMessage(releaseError)}\nIRC wake also failed: ${errorMessage(wakeError)}`,
 	);
 }
 
@@ -1167,40 +1159,32 @@ export class AgentSession {
 				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
 				: Promise.resolve();
 		const needsPrompt = !terminal && !recoveredTurnEnded;
-		const canPublishFailure = Boolean(selfId && typeof parentId === "string" && typeof phaseId === "string");
-		let wakeLease: NativeHostLaneLease | null = null;
 		let wakeAdmitted = false;
 		const wakeSignal = this.#wakeAbortController.signal;
 		let failure: unknown;
-		let releaseFailed = false;
 		const settled = ready
 			.catch(error => {
 				failure = error;
 			})
 			.then(async () => {
-				if (failure === undefined && !needsPrompt) {
-					wakeAdmitted = true;
-				} else if (failure === undefined && this.#config.agentKind === "sub") {
-					try {
-						const agentId = this.#config.agentId ?? this.sessionId;
-						wakeLease = await acquireSubagentHostLane({
-							agentId,
-							owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
-							signal: wakeSignal,
-						});
-					} catch (error) {
-						failure = error;
-					}
-				}
-				if (needsPrompt && failure === undefined && this.#config.agentKind === "sub") {
-					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
-				}
+				if (!needsPrompt && failure === undefined) wakeAdmitted = true;
 				if (needsPrompt && failure === undefined) {
-					wakeAdmitted = true;
+					const subagent = this.#config.agentKind === "sub";
+					if (subagent && (this.#isDisposed || wakeSignal.aborted)) return;
+					let releaseLane: (() => void) | undefined;
 					try {
+						if (subagent) {
+							releaseLane = reserveNativeLane(
+								this.#config.agentId ?? this.sessionId,
+								path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
+							);
+						}
+						wakeAdmitted = true;
 						await (inputs.length > 0 ? this.agent.prompt(inputs) : this.agent.continue());
 					} catch (error) {
 						failure = error;
+					} finally {
+						releaseLane?.();
 					}
 				}
 				if (parkedFollowUps.length > 0) {
@@ -1214,15 +1198,6 @@ export class AgentSession {
 						failure ??= error;
 					}
 				}
-				if (wakeLease) {
-					try {
-						await wakeLease.release();
-					} catch (error) {
-						releaseFailed = true;
-						failure = withIrcWakeReleaseFailure(failure, error);
-					}
-				}
-				if (releaseFailed && !canPublishFailure) throw failure;
 				await publish(failure);
 				if (wakeAdmitted && typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
@@ -1231,7 +1206,6 @@ export class AgentSession {
 				published = wakeAdmitted;
 			})
 			.catch(error => {
-				if (releaseFailed) throw error === failure ? error : withIrcWakeReleaseFailure(error, failure);
 				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
 					error: errorMessage(error),
 				});
@@ -1247,7 +1221,6 @@ export class AgentSession {
 						);
 						parkedFollowUpsRestored = true;
 					}
-					if (wakeLease && !wakeAdmitted) await wakeLease.release();
 					// Claim the next retained phase before dropping this turn's idle accounting.
 					if (published) {
 						await this.replayIrcContinuations(true).catch(error =>
@@ -3137,7 +3110,7 @@ export class AgentSession {
 		this.#clearLifecycleMarkers();
 		this.#cancelExitCleanup?.();
 		this.#cancelExitCleanup = undefined;
-		this.#exitRecord.close(options.reason ?? "dispose");
+		const exitRecordFlushed = this.#exitRecord.close(options.reason ?? "dispose");
 		try {
 			if (this.#config.extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#config.extensionRunner.emit({ type: "session_shutdown" });
@@ -3180,6 +3153,7 @@ export class AgentSession {
 		let persistenceFailed = false;
 		let persistenceError: unknown;
 		try {
+			await exitRecordFlushed;
 			await this.sessionManager.close();
 		} catch (error) {
 			persistenceFailed = true;
