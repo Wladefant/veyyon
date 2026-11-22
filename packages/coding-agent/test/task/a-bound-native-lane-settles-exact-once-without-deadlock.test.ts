@@ -37,7 +37,6 @@ import {
 	TopicReplenishmentEngine,
 } from "@veyyon/coding-agent/task/topic-replenishment";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
-import type { AgentSpawnRecord } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import * as atomicWriter from "@veyyon/utils/atomic-write";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -173,6 +172,7 @@ describe("native replenishment lifecycle contracts", () => {
 			maxRamPct: 100,
 		});
 
+		const recovery = vi.spyOn(engine, "onSessionRecovery");
 		const created = await createAgentSession({
 			cwd: workCwd,
 			agentDir,
@@ -209,8 +209,10 @@ describe("native replenishment lifecycle contracts", () => {
 			await fs.rm(root, { recursive: true, force: true });
 		});
 
-		// Let initial onSessionRecovery settle against the empty ledger before seeding test tickets.
-		await engine.replenish([]);
+		// Recovery takes a separate ledger lock before entering replenishment.
+		expect(recovery).toHaveBeenCalledTimes(1);
+		await recovery.mock.results[0]!.value;
+		recovery.mockRestore();
 		if (options?.initialRequests) {
 			await writeLedger(options.initialRequests);
 		}
@@ -361,10 +363,10 @@ describe("native replenishment lifecycle contracts", () => {
 		const boundTaskHandle = boundClaim.task_handle!;
 
 		// Cancel the bound job while it is still queued behind BlockerJob's semaphore permit.
+		const queuedJob = manager.getJob(boundJobId);
+		expect(queuedJob?.queued).toBe(true);
 		expect(manager.cancel(boundJobId)).toBe(true);
-		blockerGate.resolve();
-
-		await manager.waitForAll();
+		await queuedJob!.promise;
 		expect(nativeCalls).toBe(0);
 
 		const afterCancel = await harness.readLedger();
@@ -405,6 +407,7 @@ describe("native replenishment lifecycle contracts", () => {
 		const activeReclaim = await harness.readLedger();
 		expect(activeReclaim.requests["ticket-queued-cancel"].native_claim?.run_id).toBe(newRunId);
 
+		blockerGate.resolve();
 		secondGate.resolve();
 		await manager.waitForAll();
 	}, 15_000);
@@ -526,12 +529,10 @@ describe("native replenishment lifecycle contracts", () => {
 			task_handle: null,
 		});
 
-		// Release the slot and confirm reservation was not leaked.
+		// Settling the holder opens the slot and may trigger replenishment itself.
 		gate.resolve();
 		await manager.waitForAll();
-
-		const recovered = await harness.engine.replenish([]);
-		expect(recovered.status).toBe("replenished");
+		await harness.engine.replenish([]);
 		await manager.waitForAll();
 		const finalLedger = await harness.readLedger();
 		expect(finalLedger.requests["ticket-capacity-reject"].state).toBe("awaiting authorization");
@@ -634,6 +635,7 @@ describe("native replenishment lifecycle contracts", () => {
 		});
 
 		await harness.engine.replenish([]);
+		await harness.engine.waitForPendingReplenishment();
 		expect(checkpointExistedAtCompletion).toBe(true);
 		expect((await harness.readLedger()).requests["ticket-cp-ok"].state).toBe("awaiting authorization");
 		completeSpy.mockRestore();
@@ -671,11 +673,10 @@ describe("native replenishment lifecycle contracts", () => {
 		expect(ticketAfterFail.blocker).toContain("checkpoint disk failure");
 		expect(ticketAfterFail.native_claim?.state).toBe("retryable");
 
-		const spawnEntries = harness.sessionManager
+		const cpFailRecord = harness.sessionManager
 			.getEntries()
-			.filter(entry => entry.type === "agentSpawn")
-			.map(entry => (entry as unknown as { data: AgentSpawnRecord }).data);
-		const cpFailRecord = spawnEntries.find(r => r.ticketId === "ticket-cp-fail");
+			.filter(entry => entry.type === "subagent_spawn")
+			.find(entry => entry.ticketId === "ticket-cp-fail");
 		expect(cpFailRecord).toBeDefined();
 		expect(cpFailRecord?.status).toBe("failed");
 		expect(cpFailRecord?.error).toContain("successor-checkpoint-write-failed");
