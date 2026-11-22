@@ -25,6 +25,7 @@ import { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import * as ledger from "@veyyon/coding-agent/task/topic-replenishment";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { TempDir } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
@@ -222,6 +223,27 @@ describe("task spawn routing", () => {
 	});
 
 	it("reports the resolved spawn identity before execution and again at completion", async () => {
+		using scratch = TempDir.createSync("task-spawn-native-identity-");
+		const ledgerPath = scratch.join("ledger.json");
+		await Bun.write(
+			ledgerPath,
+			JSON.stringify({
+				version: 2,
+				requests: {
+					"ticket-verifier": {
+						state: "review",
+						native_claim: {
+							version: 1,
+							state: "active",
+							worker_id: "VerifierSpawn",
+							run_id: "run-verifier",
+							task_handle: "agent://VerifierSpawn",
+							fence: { state: "review", stage: "review", epoch: 0, head: null },
+						},
+					},
+				},
+			}),
+		);
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent, reviewerAgent],
 			projectAgentsDir: null,
@@ -238,7 +260,7 @@ describe("task spawn routing", () => {
 		});
 		const tool = await TaskTool.create(
 			makeToolSession({
-				cwd: "/tmp",
+				cwd: scratch.path(),
 				settings: Settings.isolated({
 					"async.enabled": false,
 					"agent.agents": { reviewer: { enabled: true } },
@@ -254,14 +276,23 @@ describe("task spawn routing", () => {
 			}),
 		);
 
+		const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
+		process.env.VEYYON_WORKFLOWS_DIR = scratch.join("no-worker-backend");
 		const result = await tool.execute("tc-verifier-spawn", {
 			agent: "reviewer",
 			name: "VerifierSpawn",
 			task: "Review this.",
 			ticketId: "ticket-verifier",
 			runId: "run-verifier",
+			ledgerPath,
 			nativeDispatchBound: true,
-		} as TaskParams);
+		} as TaskParams).finally(() => {
+			if (previousWorkflowsDir === undefined) {
+				delete process.env.VEYYON_WORKFLOWS_DIR;
+			} else {
+				process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
+			}
+		});
 
 		expect(result.details?.results[0]?.agent).toBe("reviewer");
 		expect(runSpy).toHaveBeenCalledTimes(1);
