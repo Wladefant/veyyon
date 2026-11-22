@@ -456,7 +456,10 @@ describe("staged journal rewrite reads only new bytes", () => {
 				[grants[0]!, grants[1]!, grants[0]!, grants[2]!].map(grant => root.appendSubagentLaunchGrant(grant)),
 			);
 			expect(results.map(result => result.status)).toEqual(["fulfilled", "fulfilled", "rejected", "fulfilled"]);
-			const rows = (await fsp.readFile(journal, "utf8")).trimEnd().split("\n").map(line => JSON.parse(line));
+			const rows = (await fsp.readFile(journal, "utf8"))
+				.trimEnd()
+				.split("\n")
+				.map(line => JSON.parse(line));
 			expect(rows.filter(row => row.type === "subagent_launch_grant")).toEqual(grants);
 			expect(rows.some(row => row.message?.content === "retained history")).toBe(true);
 			expect(publish.mock.calls.filter(([, target]) => target === journal)).toHaveLength(1);
@@ -482,7 +485,9 @@ describe("staged journal rewrite reads only new bytes", () => {
 				sessionFile: path.join(artifactDir, `${agentId}.jsonl`),
 				grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
 			}));
-			const failure = spyOn(storage, "renameSync").mockImplementation(() => { throw new Error("injected journal failure"); });
+			const failure = spyOn(storage, "renameSync").mockImplementation(() => {
+				throw new Error("injected journal failure");
+			});
 			const failed = await Promise.allSettled(grants.map(grant => root.appendSubagentLaunchGrant(grant)));
 			expect(failed.map(result => result.status)).toEqual(["rejected", "rejected"]);
 			expect(root.getSubagentLaunchGrants()).toEqual([]);
@@ -515,14 +520,20 @@ describe("staged journal rewrite reads only new bytes", () => {
 						rootSessionId: peer.getSessionId(),
 						agentId: "PeerGrant",
 						childSessionId: "11111111-2222-4333-8444-555555555555",
-						sessionFile: path.join(await fsp.realpath(path.dirname(journal)), path.basename(journal, ".jsonl"), "child.jsonl"),
+						sessionFile: path.join(
+							await fsp.realpath(path.dirname(journal)),
+							path.basename(journal, ".jsonl"),
+							"child.jsonl",
+						),
 						grants: { mergeRepos: ["Example/project"], dismissRepos: [] },
 					};
 					let raw = JSON.stringify(grant);
 					if (!late) {
 						// A second manager acknowledges the receipt before the stale manager scans.
 						await peer.appendSubagentLaunchGrant(grant);
-						raw = (await fsp.readFile(journal, "utf8")).split("\n").find(line => line.includes('"subagent_launch_grant"'))!;
+						raw = (await fsp.readFile(journal, "utf8"))
+							.split("\n")
+							.find(line => line.includes('"subagent_launch_grant"'))!;
 					}
 					if (late) {
 						const realRename = storage.renameSync.bind(storage);
@@ -563,8 +574,10 @@ describe("staged journal rewrite reads only new bytes", () => {
 				await manager.flush();
 				const journal = manager.getSessionFile()!;
 				const raw = JSON.stringify({
-					type: "subagent_launch_grant", version: malformed ? 2 : 1,
-					rootSessionId: manager.getSessionId(), agentId: "PeerGrant",
+					type: "subagent_launch_grant",
+					version: malformed ? 2 : 1,
+					rootSessionId: manager.getSessionId(),
+					agentId: "PeerGrant",
 					childSessionId: "11111111-2222-4333-8444-555555555555",
 					sessionFile: path.join(dir, "child.jsonl"),
 					grants: { mergeRepos: ["Example/project"], dismissRepos: [] },

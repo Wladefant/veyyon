@@ -71,18 +71,18 @@ import {
 } from "./session-entries";
 import { SessionEntryIndex } from "./session-entry-index";
 import {
+	hasDuplicateJsonMemberNames,
+	parseSubagentLaunchGrantLine,
+	serializeSubagentLaunchGrant,
+	validateSubagentLaunchGrant,
+} from "./session-launch-grants";
+import {
 	findMostRecentSession,
 	foreignSessionFileProfile,
 	listAllSessions,
 	listSessions,
 	type SessionInfo,
 } from "./session-listing";
-import {
-	hasDuplicateJsonMemberNames,
-	parseSubagentLaunchGrantLine,
-	serializeSubagentLaunchGrant,
-	validateSubagentLaunchGrant,
-} from "./session-launch-grants";
 import {
 	forEachFileLine,
 	type LoadedSessionFile,
@@ -103,8 +103,8 @@ import {
 } from "./session-paths";
 import { prepareEntryForPersistence } from "./session-persistence";
 import {
-	fileObjectIdentity,
 	FileSessionStorage,
+	fileObjectIdentity,
 	type JournalSnapshot,
 	MemorySessionStorage,
 	type PinnedSessionReader,
@@ -1190,7 +1190,12 @@ export class SessionManager {
 				(bytes, start, end) => {
 					if (firstLine) {
 						firstLine = false;
-						if (end - start >= 3 && bytes[start] === 0xef && bytes[start + 1] === 0xbb && bytes[start + 2] === 0xbf) {
+						if (
+							end - start >= 3 &&
+							bytes[start] === 0xef &&
+							bytes[start + 1] === 0xbb &&
+							bytes[start + 2] === 0xbf
+						) {
 							start += 3;
 						}
 					}
