@@ -420,7 +420,15 @@ export class SpawnScheduler {
 		if (items.length === 1) {
 			const params = spawnParamsFor(call.params, items[0], call.defaultAgent);
 			const { toolCallId, signal, onUpdate, grantRootSessionId } = call;
-			return this.#runAdmitted({ toolCallId, params, signal, onUpdate, grantRootSessionId, index: 0, detached: false });
+			return this.#runAdmitted({
+				toolCallId,
+				params,
+				signal,
+				onUpdate,
+				grantRootSessionId,
+				index: 0,
+				detached: false,
+			});
 		}
 
 		const startTime = Date.now();

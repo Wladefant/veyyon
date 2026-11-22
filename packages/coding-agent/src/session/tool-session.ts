@@ -17,7 +17,7 @@ import { defaultEvalSessionId } from "../eval/session-id";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
 import type { ProducerSecretOwner } from "../secrets/producer-owner";
 import { createProtectedCredentialReadPolicy, type ProtectedCredentialResource } from "../secrets/protected-resources";
-import { VAULT_SCOPES, resolveVaultLocations, vaultPathFor } from "../secrets/vault";
+import { resolveVaultLocations, VAULT_SCOPES, vaultPathFor } from "../secrets/vault";
 import { vaultKeyPath } from "../secrets/vault-crypto";
 import { BUILTIN_TOOLS, TOOL_SESSION_LOCAL_STATE_KEYS, type Tool, type ToolSession } from "../tools";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
@@ -140,7 +140,9 @@ export async function buildAdvisorTools(advisorToolSession: ToolSession): Promis
 		builds.push(BUILTIN_TOOLS[name as keyof typeof BUILTIN_TOOLS](advisorToolSession));
 	}
 	const built = await Promise.all(builds);
-	return built.filter((tool): tool is Tool => tool != null).map(tool => wrapToolWithMetaNotice(tool, advisorToolSession));
+	return built
+		.filter((tool): tool is Tool => tool != null)
+		.map(tool => wrapToolWithMetaNotice(tool, advisorToolSession));
 }
 
 export async function createSessionToolSession(inputs: SessionToolSessionInputs): Promise<SessionToolSession> {
@@ -333,7 +335,9 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 		},
 		getArtifactManager: () => sessionManager.getArtifactManager(),
 		recordAgentSpawn: record => sessionManager.appendAgentSpawn(record),
-		recordSubagentLaunchGrant: inputs.isSpawned ? undefined : record => sessionManager.appendSubagentLaunchGrant(record),
+		recordSubagentLaunchGrant: inputs.isSpawned
+			? undefined
+			: record => sessionManager.appendSubagentLaunchGrant(record),
 		getTelemetry: () => inputs.agent()?.telemetry,
 	};
 

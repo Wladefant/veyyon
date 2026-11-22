@@ -539,7 +539,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			this.session.maxNestedSpawnDepth,
 		);
 		const advisory = this.#spawnAdvisory(spawns, catalog, asyncItems, ircEnabled);
-		const call: SpawnCall = { toolCallId, params, defaultAgent: catalog.defaultAgent ?? "", signal, onUpdate, grantRootSessionId };
+		const call: SpawnCall = {
+			toolCallId,
+			params,
+			defaultAgent: catalog.defaultAgent ?? "",
+			signal,
+			onUpdate,
+			grantRootSessionId,
+		};
 		if (!manager || asyncItems.length === 0) {
 			// Synchronous execution was explicitly selected, or every item's
 			// agent type declares `blocking: true`. The spawn semaphore still
