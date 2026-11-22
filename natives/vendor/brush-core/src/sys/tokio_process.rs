@@ -3,6 +3,12 @@
 pub(crate) type ProcessId = i32;
 pub(crate) use tokio::process::Child;
 
+/// Console isolation flags used for Windows external commands.
+#[cfg(windows)]
+pub const WINDOWS_CHILD_CREATION_FLAGS: u32 =
+	windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
+		| windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
 /// Spawns a child process, offloading the synchronous OS process-creation
 /// call onto Tokio's blocking pool on Windows so scheduler workers are never
 /// stalled inside `CreateProcessW`.
@@ -78,10 +84,7 @@ where
 	//   here rather than per-command (`creation_flags` replaces rather than
 	//   ORs; the `sys::windows::commands` ext traits intentionally leave
 	//   creation flags alone).
-	{
-		use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
-		command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
-	}
+	command.creation_flags(WINDOWS_CHILD_CREATION_FLAGS);
 	let mut guard = AbortOnDrop(Some(tokio::task::spawn_blocking(move || op(command))));
 	let handle = guard
 		.0

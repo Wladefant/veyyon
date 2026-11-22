@@ -62,7 +62,7 @@ Persistent shell (`Shell.run`) uses this state machine:
 - **Running**: first `run()` lazily creates a session, stores an abort token, executes command.
 - **Completed + keepalive**: if execution control flow is normal, abort state is cleared and session is reused.
 - **Completed + teardown**: if control flow is loop/script/shell-exit related, session is dropped.
-- **Cancelled/Timed out**: Tokio cancellation token is triggered, the processes this run actually spawned (tracked in its per-run spawn registry) receive termination waves, a 2-second graceful wait is allowed, the task may be aborted, and the persistent session is dropped if the lock can be acquired.
+- **Cancelled/Timed out**: The shell cancels its Tokio token and stops the process tree owned by the run. It gives the command task up to 2 seconds before it requests abort. It drops the persistent session if it can acquire the session lock.
 - **Error**: session is dropped.
 
 One-shot shell (`executeShell`) always creates and drops a fresh session per call.
@@ -82,6 +82,7 @@ One-shot shell (`executeShell`) always creates and drops a fresh session per cal
 
 - `CancelToken` is constructed from `timeoutMs` and optional `AbortSignal`, then converted into the shared `veyyon_shell::cancel::CancelToken`.
 - On cancellation/timeout, shell cancellation token is triggered, descendant cleanup runs, then the task gets a 2-second graceful window before forced abort.
+- On Windows, the shell starts owned external commands suspended. It adds each child to a job for that run using the child's pinned process handle, then resumes it. The job tracks descendants even if an intermediate process exits. The shell does not terminate the job on normal completion or add explicitly detached commands to it. When Windows refuses job attachment, the shell uses the existing pinned-process walk for that child. A persistent shell keeps a finished run's job while the job still has live members. A later timeout or cancel in that shell stops those jobs. Other shells and explicitly detached commands are not touched.
 - Structured result flags are used:
   - timeout -> `exitCode` omitted, `timedOut: true`.
   - abort signal / `Shell.abort()` -> `exitCode` omitted, `cancelled: true`.

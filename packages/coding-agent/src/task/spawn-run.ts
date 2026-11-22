@@ -20,7 +20,7 @@ import { agentPrompts } from "../prompts/agent/rows";
 import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry, mainAgentIdFor, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID, mainAgentIdFor } from "../registry/agent-registry";
 import { TOOL } from "../tools/core/builtin-names";
 import {
 	agentModelSourceLabel,
@@ -785,7 +785,11 @@ export async function runSpawn(
 	const { agents, projectAgentsDir } = await discoverAgents(session.cwd);
 	if (request.params.grants !== undefined) {
 		if (!isSubagentRepoGrants(request.params.grants)) {
-			return spawnRefusal("Task grants must list distinct OWNER/REPO scopes for merge and dismissal.", projectAgentsDir, 0);
+			return spawnRefusal(
+				"Task grants must list distinct OWNER/REPO scopes for merge and dismissal.",
+				projectAgentsDir,
+				0,
+			);
 		}
 		const rootSessionId = request.grantRootSessionId;
 		if (

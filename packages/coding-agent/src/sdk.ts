@@ -67,11 +67,15 @@ import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memor
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { AgentRegistry } from "./registry/agent-registry";
 import { resolveHarnessProfileForModel, resolvePromptSectionOrderForModel } from "./registry/model-profile";
+import { prepareSecretIntakeHost } from "./secrets/intake-host";
+import {
+	installSessionSecretIntakeAlias,
+	installSessionSecretIntakeFactory,
+	registerSessionSecretIntakeActor,
+} from "./secrets/intake-session";
 import { attachSecretsNoticeSink } from "./secrets/notices";
 import { currentProducerSecretOwner } from "./secrets/producer-owner";
 import { SessionSecretRuntime } from "./secrets/session-runtime";
-import { prepareSecretIntakeHost } from "./secrets/intake-host";
-import { installSessionSecretIntakeAlias, installSessionSecretIntakeFactory, registerSessionSecretIntakeActor } from "./secrets/intake-session";
 import { AgentSession } from "./session/agent-session";
 import { discoverAuthStorage } from "./session/auth-broker-config";
 import { type SessionCpuExecHooks, sessionCpuExecHooks } from "./session/cpu-limit";
@@ -611,7 +615,6 @@ class SessionStartup {
 		}
 	}
 
-
 	#detachNoticeSinks(): void {
 		for (const detach of this.#noticeSinks.splice(0)) detach();
 	}
@@ -851,18 +854,20 @@ class SessionStartup {
 			return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 		};
 		const isCurrent = (): boolean =>
-			sessionManager.getSessionId() === ownerSessionId && normalizeCwd(sessionManager.getCwd()) === normalizeCwd(nativeCwd);
-		const prepared = !this.#isSpawned && this.#identity.kind === "main"
-			? await prepareSecretIntakeHost({
-					agentDir: this.#agentDir,
-					cwd: nativeCwd,
-					ownerSessionId,
-					runtime: this.#secretRuntime,
-					configuration: options.secretIntake,
-					getCwd: () => sessionManager.getCwd(),
-					getOwnerSessionId: () => sessionManager.getSessionId(),
-				})
-			: undefined;
+			sessionManager.getSessionId() === ownerSessionId &&
+			normalizeCwd(sessionManager.getCwd()) === normalizeCwd(nativeCwd);
+		const prepared =
+			!this.#isSpawned && this.#identity.kind === "main"
+				? await prepareSecretIntakeHost({
+						agentDir: this.#agentDir,
+						cwd: nativeCwd,
+						ownerSessionId,
+						runtime: this.#secretRuntime,
+						configuration: options.secretIntake,
+						getCwd: () => sessionManager.getCwd(),
+						getOwnerSessionId: () => sessionManager.getSessionId(),
+					})
+				: undefined;
 		if (prepared) {
 			this.#secretIntakeCleanup.push(prepared.close);
 		}
@@ -882,7 +887,8 @@ class SessionStartup {
 			agent: () => this.#agent,
 			startupModel: () => this.#modelSelection.model,
 			hasExplicitModel: this.#modelSelection.hasExplicitModel,
-			obfuscateProviderText: text => currentProducerSecretOwner()?.redact(text) ?? this.#secretRuntime.obfuscateText(text),
+			obfuscateProviderText: text =>
+				currentProducerSecretOwner()?.redact(text) ?? this.#secretRuntime.obfuscateText(text),
 			captureProducerSecretOwner: () => {
 				const lease = this.#secretRuntime.lease;
 				return {
@@ -961,16 +967,25 @@ class SessionStartup {
 					if (!["saved", "declined", "cancelled", "failed"].includes(request.status) || !isCurrent()) return;
 					const session = this.#session;
 					if (!session) return;
-					const metadata = { requestId: request.requestId, status: request.status, ...(secretRef ? { secretRef } : {}) };
-					void session.promptCustomMessage({
-						customType: "secret-intake-status",
-						content: JSON.stringify(metadata),
-						display: false,
-						details: metadata,
-						attribution: "agent",
-					}, { streamingBehavior: "followUp" }).catch(() => {
-						logger.warn("Secret intake status notification failed");
-					});
+					const metadata = {
+						requestId: request.requestId,
+						status: request.status,
+						...(secretRef ? { secretRef } : {}),
+					};
+					void session
+						.promptCustomMessage(
+							{
+								customType: "secret-intake-status",
+								content: JSON.stringify(metadata),
+								display: false,
+								details: metadata,
+								attribution: "agent",
+							},
+							{ streamingBehavior: "followUp" },
+						)
+						.catch(() => {
+							logger.warn("Secret intake status notification failed");
+						});
 				});
 				this.#secretIntakeCleanup.push(unsubscribe);
 				return binding;
@@ -1181,7 +1196,8 @@ class SessionStartup {
 				abortDetached(session, "sdk.agentControl.abort", USER_INTERRUPT_LABEL);
 			},
 			settings: this.#settings,
-			obfuscateProviderText: text => currentProducerSecretOwner()?.redact(text) ?? this.#secretRuntime.obfuscateText(text),
+			obfuscateProviderText: text =>
+				currentProducerSecretOwner()?.redact(text) ?? this.#secretRuntime.obfuscateText(text),
 			localProtocolOptions: this.#localProtocolOptions,
 			autoApprove: this.#options.autoApprove ?? false,
 			bypassAllApprovals: session.isApprovalBypassed(),
@@ -1198,8 +1214,9 @@ class SessionStartup {
 		const extensionRunner = this.#extensionRunner;
 		const toolSession = this.#tools.toolSession;
 		this.#registeredTools = extensionRunner.getAllRegisteredTools();
-		this.#sdkTools = registerSdkCustomTools(this.#options.customTools, text =>
-			currentProducerSecretOwner()?.redact(text) ?? this.#secretRuntime.obfuscateText(text),
+		this.#sdkTools = registerSdkCustomTools(
+			this.#options.customTools,
+			text => currentProducerSecretOwner()?.redact(text) ?? this.#secretRuntime.obfuscateText(text),
 		);
 		const extensionTools: Tool[] = wrapRegisteredTools(
 			this.#registeredTools.concat(this.#sdkTools),
