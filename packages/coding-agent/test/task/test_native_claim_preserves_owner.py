@@ -64,7 +64,10 @@ class NativeClaimOwner(unittest.TestCase):
         self.assertEqual(req["native_claim"], {"version": 1, "state": "active", "worker_id": "dispatcher", "run_id": run, "task_handle": None})
         self.dispatch(run)
         self.assertEqual(self.assert_accountable()["native_claim"]["task_handle"], "agent://worker")
-        result = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run, "--previous-state", "pending")
+        unbound = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run, "--previous-state", "pending")
+        self.assertFalse(unbound["rolled_back"])
+        result = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run,
+                                 "--task-handle", "agent://worker", "--previous-state", "pending")
         self.assertTrue(result["rolled_back"])
         self.assertEqual(self.assert_accountable()["native_claim"], RETRYABLE)
         self.assertNotEqual(self.claim(), run)
@@ -151,7 +154,8 @@ class NativeClaimOwner(unittest.TestCase):
 
     def test_retryable_claim_refuses_a_delayed_old_completion_after_a_new_run(self):
         old_run = self.active()
-        self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", old_run, "--previous-state", "pending")
+        self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", old_run,
+                        "--task-handle", "agent://worker", "--previous-state", "pending")
         new_run = self.active()
         self.assertNotEqual(new_run, old_run)
         before = self.ledger.read_bytes()

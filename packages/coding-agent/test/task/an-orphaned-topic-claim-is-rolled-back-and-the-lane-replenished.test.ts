@@ -1094,6 +1094,7 @@ async function runTests(): Promise<void> {
 		await rollbackClaimedTicket(ledgerPath, "reclaimed-ticket", "old dispatch failed", {
 			runId: oldClaim.ticket.runId,
 			previousState: oldClaim.ticket.previousState,
+			taskHandle: "agent://old-worker",
 		});
 		const newClaim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "new-dispatch" });
 		assert.ok(newClaim.ticket?.runId);
