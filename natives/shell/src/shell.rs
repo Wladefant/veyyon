@@ -45,6 +45,11 @@ struct ShellSessionCore {
 	/// outlive the cancel of a later run.
 	#[cfg(windows)]
 	occupied_runs: Vec<Arc<process::SpawnRegistry>>,
+	#[cfg(all(test, windows))]
+	drain_pauses: std::collections::VecDeque<(
+		tokio::sync::oneshot::Sender<()>,
+		tokio::sync::oneshot::Receiver<()>,
+	)>,
 }
 
 impl ShellSessionCore {
@@ -954,6 +959,8 @@ async fn create_session_for_run(
 		shell,
 		#[cfg(windows)]
 		occupied_runs: Vec::new(),
+		#[cfg(all(test, windows))]
+		drain_pauses: Default::default(),
 	})
 }
 
@@ -1445,6 +1452,12 @@ async fn run_shell_command_once(
 	const POST_EXIT_MAX: Duration = Duration::from_secs(2);
 	const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 	const READER_ABORT_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
+
+	#[cfg(all(test, windows))]
+	if let Some((entered, resume)) = session.drain_pauses.pop_front() {
+		let _ = entered.send(());
+		let _ = resume.await;
+	}
 
 	let mut reader_finished = false;
 	let mut reader_output = None;
