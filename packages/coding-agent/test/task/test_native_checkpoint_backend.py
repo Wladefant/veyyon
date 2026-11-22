@@ -910,6 +910,33 @@ class NativeCheckpointBackend(unittest.TestCase):
         self.git("update-ref", "HEAD", self.head, output_head)
         self.assertNotEqual(self.claim(host_pid=os.getpid()), old_run)
 
+    def test_unpublished_preparation_does_not_pin_a_later_request_epoch(self):
+        self.write_requests({
+            TICKET: self.make_request(
+                state="implementation", acceptance_criteria=self.make_criteria(),
+                evidence=[], history=[],
+            ),
+        })
+        with self.fail_ledger_rename(), self.assertRaises(OSError):
+            self.claim(host_pid=os.getpid())
+        self.assertNotIn("native_claim", self.ticket())
+        (prepared,) = (self.scratch / "worker_runs").glob("native_*/dispatch.json")
+        old_run = prepared.parent.name
+        self.assertEqual(self.record(old_run)["state"], "prepared")
+
+        other_head = self.advance_commit(self.head, "temporary head while claim was unpublished")
+        ledger = self.request_ledger()
+        ledger.update_request(TICKET, head=other_head, actor="fixture")
+        ledger.update_request(TICKET, head=self.head, actor="fixture")
+        self.git("update-ref", "HEAD", self.head, other_head)
+        new_run = self.claim(host_pid=os.getpid())
+        self.assertNotEqual(new_run, old_run)
+        self.assertEqual(self.record(old_run)["state"], "retired")
+        self.assertIsNone(self.backend.get_native_outcome(old_run))
+        self.assertEqual(self.record(new_run)["request"]["request_epoch"], 2)
+        self.dispatch(new_run)
+        self.assertTrue(self.admit(new_run, host_pid=os.getpid())["admitted"])
+
     def test_torn_outcome_is_released_after_canonical_advance_outside_worker_stages(self):
         self.write_requests({
             TICKET: self.make_request(acceptance_criteria=self.make_criteria(), evidence=[], history=[]),

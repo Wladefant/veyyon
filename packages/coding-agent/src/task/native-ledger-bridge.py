@@ -842,7 +842,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
                         criteria=cand_req.get("criteria", []),
                         task_type=str(cand_req.get("task_type") or "feature"),
                     )
-                    native_ticket = backend.prepare_native(wb_req)
+                    native_ticket = backend.prepare_native(wb_req, ledger_unclaimed=True)
                     if native_ticket.state == "retired":
                         if not has_retired_retry_authorization(cand_req, native_ticket.run_id):
                             refusal = (
