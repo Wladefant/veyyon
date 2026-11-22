@@ -1060,7 +1060,10 @@ export class TopicReplenishmentEngine {
 	#cycleOptions?: ReplenishmentCycleOptions;
 	#claimedPreviousStates = new Map<string, string>();
 	#rolledBackRuns = new Set<string>();
-	#pendingPostLease: { roster: readonly (NativeActorSnapshot | Record<string, unknown>)[]; options?: ReplenishmentCycleOptions } | null = null;
+	#pendingPostLease: {
+		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[];
+		options?: ReplenishmentCycleOptions;
+	} | null = null;
 	#postLeaseScheduled = false;
 	#pendingReplenishPromise: Promise<void> | null = null;
 
@@ -1426,12 +1429,7 @@ export class TopicReplenishmentEngine {
 				const alreadyRolledBack = this.#rolledBackRuns.delete(claimKey);
 				const rollback = alreadyRolledBack
 					? { rolled_back: true }
-					: await this.rollbackClaimedTicket(
-							ticket.id,
-							String(err),
-							ticket.runId,
-							ticket.previousState,
-						);
+					: await this.rollbackClaimedTicket(ticket.id, String(err), ticket.runId, ticket.previousState);
 				return {
 					reconciliation,
 					memoryAdmission,

@@ -850,9 +850,7 @@ export async function runSpawn(
 				ticketId: lifecycleState.ticketId,
 				runId: lifecycleState.runId,
 				taskHandle:
-					lifecycleState.bound && lifecycleState.agentId
-						? `agent://${lifecycleState.agentId}`
-						: undefined,
+					lifecycleState.bound && lifecycleState.agentId ? `agent://${lifecycleState.agentId}` : undefined,
 				reason,
 				detached: request.detached,
 			});

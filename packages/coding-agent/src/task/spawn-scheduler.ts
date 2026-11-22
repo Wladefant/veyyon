@@ -615,12 +615,7 @@ export class SpawnScheduler {
 					if (!params.runId?.trim() || !params.ledgerPath?.trim()) {
 						throw new Error("Native dispatch requires a run ID and ledger path");
 					}
-					await recordNativeDispatch(
-						params.runId,
-						`agent://${spawn.agentId}`,
-						params.ledgerPath,
-						params.ticketId,
-					);
+					await recordNativeDispatch(params.runId, `agent://${spawn.agentId}`, params.ledgerPath, params.ticketId);
 					params.nativeDispatchBound = true;
 				}
 				const jobId = this.#registerJob(call, spawn, batch, options, params);
@@ -715,13 +710,7 @@ export class SpawnScheduler {
 					return delivery.text;
 				} catch (error) {
 					if (!admitted) {
-						await this.#notifyStartFailed(
-							params,
-							agentId,
-							progress.agent,
-							errorMessage(error),
-							true,
-						);
+						await this.#notifyStartFailed(params, agentId, progress.agent, errorMessage(error), true);
 						throw error;
 					}
 					if (!settled) {
