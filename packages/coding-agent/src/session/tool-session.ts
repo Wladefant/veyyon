@@ -62,6 +62,7 @@ export interface SessionToolSessionInputs {
 		| "onSubagentStart"
 		| "onSubagentStartFailed"
 		| "onSubagentComplete"
+		| "onSubagentSettled"
 	>;
 }
 

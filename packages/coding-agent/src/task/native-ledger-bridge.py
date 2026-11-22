@@ -13,13 +13,17 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import errno
 import json
 import os
+import platform
 import re
+import socket
+import subprocess
 import sys
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 workflows_dir = os.environ.get("VEYYON_WORKFLOWS_DIR")
 if workflows_dir and os.path.isdir(workflows_dir) and workflows_dir not in sys.path:
@@ -263,6 +267,173 @@ def get_iso_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+BASE_NATIVE_CLAIM_KEYS = frozenset({"version", "state", "worker_id", "run_id", "task_handle"})
+ACTIVE_NATIVE_CLAIM_KEYS = BASE_NATIVE_CLAIM_KEYS | frozenset({"host", "fence", "claim_id"})
+
+
+def lifecycle_stage(state: Any) -> Optional[str]:
+    if not isinstance(state, str) or not state.strip():
+        return None
+    value = state.strip().lower()
+    return "build" if value in ("pending", "implementation", "build") else value
+
+
+def request_epoch(req: Mapping[str, Any]) -> int:
+    if WorkerBackend is not None:
+        # The installed backend and adapter compute the same epoch.
+        from worker_backend import request_stage_epoch
+        return request_stage_epoch(req)
+    epoch = 0
+    for entry in req.get("history") or []:
+        if not isinstance(entry, dict):
+            continue
+        before, after = lifecycle_stage(entry.get("from_state")), lifecycle_stage(entry.get("to_state"))
+        if entry.get("native_head_changed") is True or (before and after and before != after):
+            epoch += 1
+    return epoch
+
+
+def request_fence(req: Mapping[str, Any]) -> Dict[str, Any]:
+    state = str(req.get("state") or "pending").lower()
+    return {
+        "state": state,
+        "stage": str(req.get("stage") or lifecycle_stage(state) or "build").lower(),
+        "epoch": request_epoch(req),
+        "head": req.get("head"),
+    }
+
+
+def local_host_name() -> str:
+    try:
+        name = socket.gethostname().strip()
+    except OSError:
+        name = ""
+    if not name:
+        try:
+            name = platform.node().strip()
+        except OSError:
+            name = ""
+    return name
+
+
+def parse_positive_pid(raw: Any) -> Tuple[Optional[int], Optional[str]]:
+    if raw is None:
+        return None, None
+    if type(raw) is int:
+        pid = raw
+    elif isinstance(raw, str):
+        s = raw.strip()
+        if not s or not re.fullmatch(r"[+-]?\d+", s):
+            return None, "Invalid host PID: must be a positive integer"
+        try:
+            pid = int(s, 10)
+        except ValueError:
+            return None, "Invalid host PID: must be a positive integer"
+    else:
+        return None, "Invalid host PID: must be a positive integer"
+    if pid <= 0:
+        return None, "Invalid host PID: must be a positive integer"
+    return pid, None
+
+
+def local_process_identity(pid: int) -> Tuple[str, Optional[str]]:
+    """Read the process birth identity without signalling or opening it for write."""
+    if type(pid) is not int or pid <= 0:
+        return "unknown", None
+    if sys.platform == "win32":
+        if pid > 0xFFFFFFFF:
+            return "unknown", None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            kernel32.GetProcessTimes.restype = wintypes.BOOL
+
+            # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION. Never request terminate access.
+            handle = kernel32.OpenProcess(0x00101000, False, pid)
+            if not handle:
+                return ("dead", None) if ctypes.get_last_error() == 87 else ("unknown", None)
+            try:
+                wait = kernel32.WaitForSingleObject(handle, 0)
+                if wait == 0:
+                    return "dead", None
+                if wait != 0x102:
+                    return "unknown", None
+                times = [wintypes.FILETIME() for _ in range(4)]
+                if not kernel32.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+                    return "unknown", None
+                created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                return "alive", f"win:{created}"
+            finally:
+                kernel32.CloseHandle(handle)
+        except (OSError, ValueError, OverflowError):
+            return "unknown", None
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead", None
+    except OSError as exc:
+        return ("dead", None) if exc.errno == errno.ESRCH else ("unknown", None)
+    except OverflowError:
+        return "unknown", None
+    try:
+        if sys.platform.startswith("linux"):
+            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as stat_file:
+                # comm is parenthesized and can contain spaces or parentheses.
+                fields = stat_file.read().rsplit(")", 1)[1].split()
+            if fields[0] in ("Z", "X"):
+                return "dead", None
+            with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as boot_file:
+                boot = boot_file.read().strip()
+            return "alive", f"linux:{boot}:{fields[19]}"
+        if sys.platform == "darwin":
+            value = subprocess.run(
+                ["/bin/ps", "-p", str(pid), "-o", "lstart="], capture_output=True,
+                text=True, env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}, timeout=2,
+            )
+            if value.returncode == 0 and value.stdout.strip():
+                return "alive", f"darwin:{value.stdout.strip()}"
+    except (OSError, IndexError, subprocess.TimeoutExpired):
+        pass
+    return "unknown", None
+
+
+def claim_host_liveness(claim: Mapping[str, Any], current_host: Optional[str] = None) -> str:
+    """
+    Determine same-host owner liveness for a validated active claim.
+    Returns 'alive', 'dead', or 'unknown'.
+    Anonymous legacy claims and foreign-host claims always return 'unknown'.
+    """
+    host = claim.get("host")
+    if not isinstance(host, dict):
+        return "unknown"
+    claim_host_name = host.get("name")
+    claim_host_pid = host.get("pid")
+    if not isinstance(claim_host_name, str) or not claim_host_name.strip():
+        return "unknown"
+    if type(claim_host_pid) is not int or claim_host_pid <= 0:
+        return "unknown"
+    local_name = local_host_name() if current_host is None else current_host
+    if not local_name or claim_host_name != local_name:
+        return "unknown"
+    started = host.get("started")
+    if not isinstance(started, str) or not started:
+        return "unknown"
+    liveness, actual_start = local_process_identity(claim_host_pid)
+    if liveness == "alive" and actual_start != started:
+        return "dead"
+    return liveness
+
+
 def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
     """Validate the persisted execution identity without changing accountable ownership."""
     if any(req.get(key) not in (None, "") for key in ("native_run_id", "native_task_handle")):
@@ -270,11 +441,16 @@ def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
     if "native_claim" not in req:
         return None
     claim = req["native_claim"]
-    if not isinstance(claim, dict) or set(claim) != {"version", "state", "worker_id", "run_id", "task_handle"}:
+    if not isinstance(claim, dict):
+        return "Malformed native claim"
+    claim_keys = set(claim)
+    if not BASE_NATIVE_CLAIM_KEYS.issubset(claim_keys) or not claim_keys.issubset(ACTIVE_NATIVE_CLAIM_KEYS):
         return "Malformed native claim"
     if type(claim["version"]) is not int or claim["version"] != 1:
         return "Unsupported native claim version"
     if claim["state"] == "retryable":
+        if claim_keys != BASE_NATIVE_CLAIM_KEYS:
+            return "Malformed native claim"
         if any(claim[key] is not None for key in ("worker_id", "run_id", "task_handle")):
             return "Retryable native claim still has an execution identity"
         return None
@@ -287,6 +463,33 @@ def native_claim_error(req: Dict[str, Any]) -> Optional[str]:
         return "Invalid native task handle"
     if handle is not None and handle.removeprefix("agent://") != claim["worker_id"]:
         return "Conflicting native worker and task identities"
+    if "host" in claim:
+        host = claim["host"]
+        if not isinstance(host, dict) or set(host) not in ({"name", "pid"}, {"name", "pid", "started"}):
+            return "Malformed native claim host"
+        host_name = host["name"]
+        host_pid = host["pid"]
+        if not isinstance(host_name, str) or not host_name.strip():
+            return "Invalid native claim host name"
+        if type(host_pid) is not int or host_pid <= 0:
+            return "Invalid native claim host PID"
+        if "started" in host and (not isinstance(host["started"], str) or not host["started"].strip()):
+            return "Invalid native claim host start identity"
+    if "claim_id" in claim and (
+        not isinstance(claim["claim_id"], str) or not claim["claim_id"].strip()
+        or "host" not in claim or "fence" not in claim
+    ):
+        return "Malformed native claim generation"
+    if "fence" in claim:
+        fence = claim["fence"]
+        if (
+            not isinstance(fence, dict) or set(fence) != {"state", "stage", "epoch", "head"}
+            or not isinstance(fence["state"], str) or not fence["state"]
+            or not isinstance(fence["stage"], str) or not fence["stage"]
+            or type(fence["epoch"]) is not int or fence["epoch"] < 0
+            or (fence["head"] is not None and not isinstance(fence["head"], str))
+        ):
+            return "Malformed native claim request fence"
     return None
 
 
@@ -301,12 +504,262 @@ def active_native_claim(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return claim if claim and claim["state"] == "active" else None
 
 
+def write_ledger_atomic(ledger_path: str, data: Mapping[str, Any]) -> None:
+    temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(temp_path, ledger_path)
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        raise
+
+
+def normalize_optional_task_handle(raw: Any) -> Tuple[Optional[str], Optional[str]]:
+    if raw is None or raw == "":
+        return None, None
+    if not isinstance(raw, str) or not raw.startswith("agent://") or not raw[8:].strip():
+        return None, "Invalid native task handle"
+    return raw, None
+
+
+def is_valid_task_handle(handle: Any) -> bool:
+    return isinstance(handle, str) and handle.startswith("agent://") and bool(handle[8:].strip())
+
+
+def has_retired_retry_authorization(req: Mapping[str, Any], run_id: str) -> bool:
+    for entry in req.get("history") or []:
+        if isinstance(entry, dict) and entry.get("native_retired_run_id") == run_id:
+            return True
+    return False
+
+
+def has_legacy_rollback_retry_authorization(req: Mapping[str, Any], run_id: str) -> bool:
+    for entry in req.get("history") or []:
+        if isinstance(entry, dict) and entry.get("native_rollback_run_id") == run_id:
+            return True
+    return False
+
+
+def is_backend_wide_prepare_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return (
+        "Native attempt index" in msg
+        or "recurrence history that governs unchanged retry is unreadable" in msg
+    )
+
+
+def has_projected_native_outcome(req: Mapping[str, Any], run_id: str) -> bool:
+    for entry in req.get("history") or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("actor") == "WorkerBackend"
+            and entry.get("native_run_id") == run_id
+        ):
+            return True
+    return False
+
+
+def project_native_outcome(
+    req: Dict[str, Any],
+    run_id: str,
+    outcome_dict: Mapping[str, Any],
+    now_iso: Optional[str] = None,
+    *,
+    prepared_head: Optional[str] = None,
+) -> bool:
+    """
+    Apply one canonical WorkerOutcome projection to a ledger request at most once.
+    Returns False for a duplicate or an outcome fenced by a newer request head.
+    """
+    if has_projected_native_outcome(req, run_id):
+        req["native_claim"] = retryable_native_claim()
+        return False
+
+    ts = now_iso or get_iso_now()
+    from_state = req.get("state") or "implementation"
+    history = req.setdefault("history", [])
+    claim = active_native_claim(req)
+    captured = claim.get("fence") if claim else None
+    stale_generation = (
+        (captured is None and WorkerBackend is not None)
+        or (captured is not None and (
+            captured != request_fence(req)
+            or (outcome_dict.get("ok") and WorkerBackend is not None and outcome_dict.get("stage") != captured["stage"])
+        ))
+    )
+    current_head = req.get("head")
+    if stale_generation or (prepared_head is not None and current_head and (
+        current_head != prepared_head
+        or (
+            outcome_dict.get("ok") and outcome_dict.get("stage") in ("qa", "review")
+            and current_head != outcome_dict.get("head_sha")
+        )
+    )):
+        # A build can report a new output head, but it still belongs to the
+        # immutable input head captured when the backend prepared this run.
+        req["native_claim"] = retryable_native_claim()
+        req["updated_at"] = ts
+        history.append({
+            "actor": "TopicReplenishmentEngine",
+            "timestamp": ts,
+            "from_state": from_state,
+            "to_state": from_state,
+            "reason": "Discarded native outcome because the request head, stage or epoch changed",
+            "stale_native_run_id": run_id,
+        })
+        return False
+
+    if outcome_dict.get("ok"):
+        next_state = from_state
+        if str(from_state).lower() in ("pending", "implementation", "build"):
+            next_state = "QA"
+        elif str(from_state).lower() == "qa":
+            next_state = "review"
+        elif str(from_state).lower() == "review":
+            next_state = "awaiting authorization"
+
+        req["state"] = next_state
+        if outcome_dict.get("head_sha"):
+            req["head"] = outcome_dict["head_sha"]
+        req["blocker"] = None
+        req["updated_at"] = ts
+        req["native_claim"] = retryable_native_claim()
+
+        evidence_list = req.setdefault("evidence", [])
+        if outcome_dict.get("evidence"):
+            evidence_list.append(outcome_dict["evidence"])
+
+        history.append({
+            "actor": "WorkerBackend",
+            "timestamp": ts,
+            "from_state": from_state,
+            "to_state": next_state,
+            "reason": f"Stage {outcome_dict.get('stage')} validated successfully",
+            "native_run_id": run_id,
+            **({"native_head_changed": True} if req.get("head") != current_head else {}),
+        })
+    else:
+        reason = outcome_dict.get("blocked_reason") or "Worker verification failed"
+        req["blocker"] = reason
+        req["updated_at"] = ts
+        req["native_claim"] = retryable_native_claim()
+        history.append({
+            "actor": "WorkerBackend",
+            "timestamp": ts,
+            "from_state": from_state,
+            "to_state": from_state,
+            "reason": f"Stage {outcome_dict.get('stage')} refused/blocked: {reason}",
+            "native_run_id": run_id,
+        })
+    return True
+
+
+def claim_ticket(
+    ledger_path: str, req_id: str, topic: str, req: Dict[str, Any],
+    previous_state: str, prompt: str, repo_root: str, result_schema: Any,
+) -> Dict[str, Any]:
+    claim = req["native_claim"]
+    fence = claim["fence"]
+    return {
+        "id": req_id,
+        "topic": topic,
+        "prompt": prompt,
+        "task": prompt,
+        "state": fence["state"],
+        "previousState": previous_state,
+        "owner": req.get("owner", ""),
+        "role": str(req.get("agent_role") or "task"),
+        "criteria": req.get("criteria", []),
+        "dependencies": req.get("dependencies", []),
+        "head": fence["head"],
+        "authorization": json.dumps(req.get("authorization")) if isinstance(req.get("authorization"), dict) else str(req.get("authorization")),
+        "claimedAt": req["claimed_at"],
+        "runId": claim["run_id"],
+        "resultSchema": result_schema,
+        "stage": fence["stage"],
+        "repoRoot": repo_root,
+        "ledgerPath": ledger_path,
+    }
+
+
+def replay_claim(
+    ledger_path: str, requests: Mapping[str, Any], claim_id: str, host: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Resolve a lost claim reply before selecting any new candidate."""
+    already_used = False
+    for req_id, req in requests.items():
+        claim = req.get("native_claim")
+        if not isinstance(claim, dict) or claim.get("claim_id") != claim_id:
+            already_used = already_used or any(
+                isinstance(entry, dict) and entry.get("native_claim_id") == claim_id
+                for entry in (req.get("history") or [])
+            )
+            continue
+        if native_claim_error(req) or claim.get("host") != host or claim["task_handle"] is not None:
+            return {"claimed": False, "reason": "Claim generation is not an unbound claim owned by this SDK"}
+
+        raw_prompt = req.get("prompt", "")
+        repo_root = str(req.get("repo_root") or os.getcwd())
+        prompt, result_schema = raw_prompt, None
+        if WorkerBackend is not None:
+            backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+            ticket = backend.get_native_dispatch(claim["run_id"])
+            if ticket.state != "prepared" or ticket.task_handle is not None:
+                return {"claimed": False, "reason": "Claim generation no longer owns a prepared dispatch"}
+            prompt = ticket.prompt or raw_prompt
+            repo_root = ticket.request["repo_root"]
+            result_schema = ticket.result_schema
+        # The claim and its history row were published in the same rename.
+        previous_state = next(
+            (entry["from_state"] for entry in reversed(req.get("history") or [])
+             if isinstance(entry, dict) and entry.get("native_claim_id") == claim_id),
+            claim["fence"]["state"],
+        )
+        topic = resolve_topic(req_id, raw_prompt, req.get("topic"), req.get("metadata"))
+        return {
+            "claimed": True,
+            "ticket": claim_ticket(ledger_path, req_id, topic, req, previous_state, prompt, repo_root, result_schema),
+        }
+    return {"claimed": False, "reason": "Claim generation has already been released"} if already_used else None
+
+
 def cmd_claim(args: argparse.Namespace) -> int:
     ledger_path = os.path.abspath(args.ledger)
     lock_path = ledger_path + ".lock"
     worker_id = args.worker_id or f"native-replenish-{int(time.time()*1000)}"
     covered_topics = set(args.covered_topics.split(",") if args.covered_topics else [])
     timeout = float(args.timeout)
+    claim_id = getattr(args, "claim_id", None)
+    host_pid, host_pid_err = parse_positive_pid(getattr(args, "host_pid", None))
+    if host_pid_err:
+        print(json.dumps({
+            "claimed": False,
+            "reason": host_pid_err,
+            "blockedTopics": [],
+            "blocked_topics": [],
+        }))
+        return 0
+    host = None
+    if host_pid is not None:
+        host_name = local_host_name()
+        liveness, started = local_process_identity(host_pid)
+        if not host_name or liveness != "alive" or not started:
+            print(json.dumps({
+                "claimed": False,
+                "reason": "Unable to identify the live SDK process for native claim",
+                "blockedTopics": [],
+                "blocked_topics": [],
+            }))
+            return 0
+        host = {"name": host_name, "pid": host_pid, "started": started}
+    if claim_id is not None and (not isinstance(claim_id, str) or not claim_id.strip() or host is None):
+        print(json.dumps({"claimed": False, "reason": "A claim generation requires a live SDK identity"}))
+        return 0
 
     with FileLock(lock_path, timeout=timeout):
         if not os.path.exists(ledger_path):
@@ -318,6 +771,11 @@ def cmd_claim(args: argparse.Namespace) -> int:
             data = json.load(f)
 
         requests = data.get("requests", {})
+        if claim_id is not None:
+            replay = replay_claim(ledger_path, requests, claim_id, host)
+            if replay is not None:
+                print(json.dumps(replay))
+                return 0
         drivable_states = {"pending", "implementation", "qa", "review"}
         candidates = []
         blocked_topics = []
@@ -411,13 +869,159 @@ def cmd_claim(args: argparse.Namespace) -> int:
             print(json.dumps(res))
             return 0
 
+        if not worker_id.strip():
+            print(json.dumps({"claimed": False, "reason": "Invalid native worker or run identity"}))
+            return 0
+
         # Sort candidate by priority (uncovered first), then id
         candidates.sort(key=lambda c: (c[0], c[1]))
-        _, chosen_id, chosen_topic, chosen_req = candidates[0]
+
+        backend = None
+        if WorkerBackend is not None:
+            try:
+                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+            except Exception as exc:
+                print(json.dumps({
+                    "claimed": False,
+                    "reason": f"WorkerBackend preparation failed: {exc}",
+                    "blockedTopics": blocked_topics,
+                    "blocked_topics": blocked_topics,
+                }))
+                return 0
+
+        chosen_id = None
+        chosen_topic = None
+        chosen_req = None
+        run_id = None
+        result_schema = None
+        prepared_prompt = ""
+        from_state = "pending"
+        repo_root = os.getcwd()
+        last_candidate_error = None
+
+        for _, cand_id, cand_topic, cand_req in candidates:
+            cand_from_state = cand_req.get("state") or "pending"
+            cand_prompt = cand_req.get("prompt", "")
+            candidate_fence = request_fence(cand_req)
+            cand_stage = candidate_fence["stage"]
+            cand_repo_root = str(cand_req.get("repo_root") or os.getcwd())
+            cand_head_sha = cand_req.get("head")
+            cand_result_schema = None
+            cand_run_id = None
+
+            if backend is not None:
+                try:
+                    wb_req = WorkerRequest(
+                        request_id=cand_id,
+                        stage=cand_stage,
+                        repo_root=cand_repo_root,
+                        head_sha=cand_head_sha,
+                        request_epoch=candidate_fence["epoch"],
+                        model=str(cand_req.get("model") or os.environ.get("VEYYON_DEFAULT_MODEL") or ""),
+                        agent_role=str(cand_req.get("agent_role") or "task"),
+                        prompt=cand_prompt,
+                        criteria=cand_req.get("criteria", []),
+                        task_type=str(cand_req.get("task_type") or "feature"),
+                    )
+                    native_ticket = backend.prepare_native(wb_req, ledger_unclaimed=True)
+                    if native_ticket.state == "retired":
+                        if not has_retired_retry_authorization(cand_req, native_ticket.run_id):
+                            refusal = (
+                                f"Retired native run {native_ticket.run_id} lacks matching "
+                                "rollback or recovery authorization"
+                            )
+                            blocked_topics.append({
+                                "topic": cand_topic,
+                                "ticketId": cand_id,
+                                "reason": refusal,
+                            })
+                            last_candidate_error = refusal
+                            continue
+                        native_ticket = backend.retry_native(native_ticket.run_id)
+                    elif native_ticket.state == "blocked" and native_ticket.run_id:
+                        outcome = backend.get_native_outcome(native_ticket.run_id)
+                        if has_legacy_rollback_retry_authorization(cand_req, native_ticket.run_id) or (
+                            outcome is not None and outcome.ok is False
+                        ):
+                            native_ticket = backend.retry_native(native_ticket.run_id)
+                except Exception as exc:
+                    if is_backend_wide_prepare_error(exc):
+                        print(json.dumps({
+                            "claimed": False,
+                            "reason": f"WorkerBackend preparation failed: {exc}",
+                            "blockedTopics": blocked_topics,
+                            "blocked_topics": blocked_topics,
+                        }))
+                        return 0
+                    refusal = str(exc)
+                    blocked_topics.append({
+                        "topic": cand_topic,
+                        "ticketId": cand_id,
+                        "reason": refusal,
+                    })
+                    last_candidate_error = refusal
+                    continue
+
+                if (
+                    native_ticket.state != "prepared"
+                    or native_ticket.task_handle is not None
+                    or native_ticket.blocked_reason
+                    or not isinstance(native_ticket.run_id, str)
+                    or not native_ticket.run_id.strip()
+                    or (native_ticket.request.get("request_epoch") or 0) != candidate_fence["epoch"]
+                    or native_ticket.request.get("stage") != candidate_fence["stage"]
+                    or (cand_head_sha is not None and native_ticket.head_sha != cand_head_sha)
+                ):
+                    refusal = (
+                        native_ticket.blocked_reason
+                        or f"WorkerBackend ticket {native_ticket.run_id or cand_id} is '{native_ticket.state}', not prepared"
+                    )
+                    blocked_topics.append({
+                        "topic": cand_topic,
+                        "ticketId": cand_id,
+                        "reason": refusal,
+                    })
+                    last_candidate_error = refusal
+                    continue
+
+                cand_run_id = native_ticket.run_id
+                cand_result_schema = native_ticket.result_schema
+                if native_ticket.prompt:
+                    cand_prompt = native_ticket.prompt
+            else:
+                cand_run_id = f"native_{cand_id}_{uuid.uuid4().hex}"
+
+            if not isinstance(cand_run_id, str) or not cand_run_id.strip():
+                refusal = "Invalid native worker or run identity"
+                blocked_topics.append({
+                    "topic": cand_topic,
+                    "ticketId": cand_id,
+                    "reason": refusal,
+                })
+                last_candidate_error = refusal
+                continue
+
+            chosen_id = cand_id
+            chosen_topic = cand_topic
+            chosen_req = cand_req
+            run_id = cand_run_id
+            result_schema = cand_result_schema
+            prepared_prompt = cand_prompt
+            from_state = cand_from_state
+            repo_root = cand_repo_root
+            break
+
+        if chosen_req is None or chosen_id is None or chosen_topic is None or run_id is None:
+            print(json.dumps({
+                "claimed": False,
+                "reason": last_candidate_error or "No eligible authorized tickets found",
+                "blockedTopics": blocked_topics,
+                "blocked_topics": blocked_topics,
+            }))
+            return 0
 
         now_iso = get_iso_now()
-        from_state = chosen_req.get("state") or "pending"
-        to_state = "implementation" if from_state.lower() == "pending" else chosen_req.get("state")
+        to_state = "implementation" if str(from_state).lower() == "pending" else chosen_req.get("state")
         chosen_req["state"] = to_state
         chosen_req["claimed_at"] = now_iso
         chosen_req["updated_at"] = now_iso
@@ -429,97 +1033,26 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "from_state": from_state,
             "to_state": to_state,
             "reason": "Claimed for native replenishment",
+            **({"native_claim_id": claim_id} if claim_id is not None else {}),
         })
         data["updated_at"] = now_iso
-
-        # Prepare native ticket via WorkerBackend if available
-        run_id = None
-        result_schema = None
-        prepared_prompt = chosen_req.get("prompt", "")
-        stage = str(chosen_req.get("stage") or ("qa" if str(from_state).lower() == "qa" else "review" if str(from_state).lower() == "review" else "build"))
-        repo_root = str(chosen_req.get("repo_root") or os.getcwd())
-        head_sha = chosen_req.get("head")
-
-        if WorkerBackend is not None:
-            try:
-                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
-                wb_req = WorkerRequest(
-                    request_id=chosen_id,
-                    stage=stage,
-                    repo_root=repo_root,
-                    head_sha=head_sha,
-                    model=str(chosen_req.get("model") or os.environ.get("VEYYON_DEFAULT_MODEL") or ""),
-                    agent_role=str(chosen_req.get("agent_role") or "task"),
-                    prompt=prepared_prompt,
-                    criteria=chosen_req.get("criteria", []),
-                    task_type=str(chosen_req.get("task_type") or "feature"),
-                )
-                native_ticket = backend.prepare_native(wb_req)
-            except Exception as exc:
-                print(json.dumps({
-                    "claimed": False,
-                    "reason": f"WorkerBackend preparation failed: {exc}",
-                    "blockedTopics": blocked_topics,
-                    "blocked_topics": blocked_topics,
-                }))
-                return 0
-            if native_ticket.blocked_reason:
-                print(json.dumps({
-                    "claimed": False,
-                    "reason": native_ticket.blocked_reason,
-                    "blockedTopics": blocked_topics + [{
-                        "topic": chosen_topic,
-                        "ticketId": chosen_id,
-                        "reason": native_ticket.blocked_reason,
-                    }],
-                    "blocked_topics": blocked_topics + [{
-                        "topic": chosen_topic,
-                        "ticketId": chosen_id,
-                        "reason": native_ticket.blocked_reason,
-                    }],
-                }))
-                return 0
-            run_id = native_ticket.run_id
-            result_schema = native_ticket.result_schema
-            if native_ticket.prompt:
-                prepared_prompt = native_ticket.prompt
-        else:
-            run_id = f"native_{chosen_id}_{uuid.uuid4().hex}"
-
-        if not isinstance(run_id, str) or not run_id.strip() or not worker_id.strip():
-            print(json.dumps({"claimed": False, "reason": "Invalid native worker or run identity"}))
-            return 0
-        chosen_req["native_claim"] = {
+        native_claim: Dict[str, Any] = {
             "version": 1, "state": "active", "worker_id": worker_id,
             "run_id": run_id, "task_handle": None,
+            "fence": request_fence(chosen_req),
         }
+        if host is not None:
+            native_claim["host"] = host
+        if claim_id is not None:
+            native_claim["claim_id"] = claim_id
+        chosen_req["native_claim"] = native_claim
 
         # Write file atomically inside FileLock
-        temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_path, ledger_path)
+        write_ledger_atomic(ledger_path, data)
 
-        ticket = {
-            "id": chosen_id,
-            "topic": chosen_topic,
-            "prompt": prepared_prompt,
-            "task": prepared_prompt,
-            "state": to_state,
-            "previousState": from_state,
-            "owner": chosen_req.get("owner", ""),
-            "role": str(chosen_req.get("agent_role") or "task"),
-            "criteria": chosen_req.get("criteria", []),
-            "dependencies": chosen_req.get("dependencies", []),
-            "head": head_sha,
-            "authorization": json.dumps(chosen_req.get("authorization")) if isinstance(chosen_req.get("authorization"), dict) else str(chosen_req.get("authorization")),
-            "claimedAt": now_iso,
-            "runId": run_id,
-            "resultSchema": result_schema,
-            "stage": stage,
-            "repoRoot": repo_root,
-            "ledgerPath": ledger_path,
-        }
+        ticket = claim_ticket(
+            ledger_path, chosen_id, chosen_topic, chosen_req, from_state, prepared_prompt, repo_root, result_schema,
+        )
 
         res = {
             "claimed": True,
@@ -539,36 +1072,56 @@ def cmd_record_dispatch(args: argparse.Namespace) -> int:
         return 1
     ledger_path = os.path.abspath(args.ledger)
     with FileLock(ledger_path + ".lock", timeout=float(args.timeout)):
+        if not os.path.exists(ledger_path):
+            print(json.dumps({"recorded": False, "error": "Ledger not found"}))
+            return 1
         with open(ledger_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         req = data.get("requests", {}).get(args.ticket_id)
         claim = active_native_claim(req) if req else None
         if (not claim or claim["run_id"] != run_id
-                or not task_handle.startswith("agent://") or not task_handle[8:].strip()
+                or not is_valid_task_handle(task_handle)
                 or claim["task_handle"] not in (None, task_handle)):
             print(json.dumps({"recorded": False, "error": "Ledger claim no longer owns this native dispatch"}))
+            return 1
+        if claim.get("fence") != request_fence(req) and (WorkerBackend is not None or "fence" in claim):
+            print(json.dumps({"recorded": False, "error": "Native claim's request head, stage or epoch changed"}))
             return 1
         ticket = None
         if WorkerBackend is not None:
             try:
                 backend = WorkerBackend(state_dir=os.path.abspath(args.state_dir))
                 ticket = backend.record_native_dispatch(run_id, task_handle)
+                if ticket.state != "background_dispatched" or ticket.task_handle != task_handle:
+                    raise ValueError(
+                        f"WorkerBackend returned unexpected dispatch state {ticket.state!r} "
+                        f"with handle {ticket.task_handle!r}"
+                    )
             except Exception as exc:
                 print(json.dumps({"recorded": False, "error": str(exc)}))
                 return 1
-        claim["task_handle"] = task_handle
-        claim["worker_id"] = task_handle.removeprefix("agent://")
-        req["updated_at"] = get_iso_now()
-        data["updated_at"] = req["updated_at"]
-        temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_path, ledger_path)
+        if claim["task_handle"] is None:
+            claim["task_handle"] = task_handle
+            claim["worker_id"] = task_handle.removeprefix("agent://")
+            req["updated_at"] = get_iso_now()
+            data["updated_at"] = req["updated_at"]
+            write_ledger_atomic(ledger_path, data)
     print(json.dumps({
         "recorded": True, "run_id": run_id, "task_handle": task_handle,
         "state": ticket.state if ticket is not None else "dispatched",
     }))
     return 0
+
+
+def blocked_native_result(ticket_id: str, stage: str, reason: str) -> Dict[str, Any]:
+    return {
+        "request_id": ticket_id,
+        "stage": stage,
+        "verdict": "blocked",
+        "summary": reason,
+        "checks": [],
+        "artifacts": [],
+    }
 
 
 def cmd_rollback(args: argparse.Namespace) -> int:
@@ -590,23 +1143,100 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         if not req:
             print(json.dumps({"rolled_back": False, "error": f"Ticket {ticket_id} not found"}))
             return 0
+        claim_err = native_claim_error(req)
+        if claim_err:
+            print(json.dumps({"rolled_back": False, "error": claim_err}))
+            return 0
         claim = active_native_claim(req)
         if not claim or not args.run_id or claim["run_id"] != args.run_id:
             print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native run"}))
             return 0
+        requested_handle, handle_err = normalize_optional_task_handle(args.task_handle)
+        if handle_err:
+            print(json.dumps({"rolled_back": False, "error": handle_err}))
+            return 0
+        if claim["task_handle"] is not None and requested_handle != claim["task_handle"]:
+            print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native task handle"}))
+            return 0
 
         now_iso = get_iso_now()
+        retired_run_id = None
+        if WorkerBackend is not None:
+            try:
+                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+                backend_ticket = backend.get_native_dispatch(claim["run_id"])
+                observed_handle = backend_ticket.task_handle
+                if observed_handle is not None and not is_valid_task_handle(observed_handle):
+                    raise ValueError(f"WorkerBackend has invalid task handle {observed_handle!r}")
+                if (claim["task_handle"] is not None and observed_handle != claim["task_handle"]
+                        or requested_handle is not None and observed_handle not in (None, requested_handle)):
+                    raise ValueError("WorkerBackend no longer owns this native task handle")
+
+                if backend_ticket.state in ("finalized", "blocked"):
+                    outcome = backend.get_native_outcome(claim["run_id"])
+                    if outcome is None:
+                        raise ValueError(
+                            f"WorkerBackend run {claim['run_id']} is {backend_ticket.state!r} with no readable outcome"
+                        )
+                    applied = project_native_outcome(
+                        req, claim["run_id"], outcome.to_dict(), now_iso, prepared_head=backend_ticket.head_sha,
+                    )
+                    data["updated_at"] = now_iso
+                    write_ledger_atomic(ledger_path, data)
+                    print(json.dumps({
+                        "rolled_back": False,
+                        "reconciled": True,
+                        "ok": applied and outcome.ok,
+                        "state": req["state"],
+                        "error": (
+                            f"WorkerBackend run {claim['run_id']} already reached terminal state "
+                            f"{backend_ticket.state!r}; reconciled against the current request instead of rolling back"
+                        ),
+                    }))
+                    return 0
+
+                if backend_ticket.state not in ("prepared", "background_dispatched", "retired"):
+                    raise ValueError(
+                        f"WorkerBackend run {claim['run_id']} has unsupported state {backend_ticket.state!r} for rollback"
+                    )
+
+                if backend_ticket.state == "prepared" and observed_handle is not None:
+                    raise ValueError(f"Prepared WorkerBackend run {claim['run_id']} unexpectedly has handle {observed_handle!r}")
+                if backend_ticket.state == "background_dispatched" and observed_handle is None:
+                    raise ValueError(f"Dispatched WorkerBackend run {claim['run_id']} is missing its bound handle")
+
+                retired_ticket = backend.retire_native(claim["run_id"], observed_handle, reason)
+                if retired_ticket.state != "retired" or retired_ticket.task_handle != observed_handle:
+                    raise ValueError(
+                        f"WorkerBackend did not retire run {claim['run_id']} under handle {observed_handle!r}"
+                    )
+                retired_run_id = retired_ticket.run_id
+            except Exception as exc:
+                print(json.dumps({"rolled_back": False, "error": f"WorkerBackend rollback failed: {exc}"}))
+                return 0
+
         from_state = req.get("state") or "implementation"
-        previous_state = args.previous_state
-        to_state = (
-            previous_state
-            if isinstance(previous_state, str)
-            and previous_state.lower() in {"pending", "implementation", "qa", "review"}
-            else "pending"
-        )
+        to_state = from_state
+        fence = claim.get("fence")
+        # The run and handle identify what may retire. The full saved fence
+        # also has to match before restoring any request fields.
+        if fence == request_fence(req) or (fence is None and WorkerBackend is None):
+            previous_state = args.previous_state
+            valid_states = {"pending", "implementation", "qa", "review"}
+            if not isinstance(previous_state, str) or previous_state.lower() not in valid_states:
+                previous_state = next(
+                    (entry["from_state"] for entry in reversed(req.get("history") or [])
+                     if isinstance(entry, dict)
+                     and entry.get("actor") == "TopicReplenishmentEngine"
+                     and entry.get("reason") == "Claimed for native replenishment"
+                     and isinstance(entry.get("from_state"), str)
+                     and entry["from_state"].lower() in valid_states),
+                    "pending",
+                )
+            to_state = previous_state
+            req["blocker"] = None
         req["state"] = to_state
         req["native_claim"] = retryable_native_claim()
-        req["blocker"] = None
         req["updated_at"] = now_iso
 
         history = req.setdefault("history", [])
@@ -616,25 +1246,29 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             "from_state": from_state,
             "to_state": to_state,
             "reason": f"Rollback: {reason}",
+            **({"native_retired_run_id": retired_run_id} if retired_run_id else {}),
         })
         data["updated_at"] = now_iso
+        write_ledger_atomic(ledger_path, data)
 
-        temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_path, ledger_path)
-
-        print(json.dumps({"rolled_back": True, "ticket_id": ticket_id}))
+        out: Dict[str, Any] = {"rolled_back": True, "ticket_id": ticket_id}
+        if retired_run_id:
+            out["retired_run_id"] = retired_run_id
+        print(json.dumps(out))
         return 0
 
 
 def cmd_recover(args: argparse.Namespace) -> int:
     ledger_path = os.path.abspath(args.ledger)
     lock_path = ledger_path + ".lock"
-    running_worker_ids = set(filter(None, args.running_worker_ids.split(",")))
-    recovered = []
+    running_worker_ids = set(filter(None, (getattr(args, "running_worker_ids", "") or "").split(",")))
+    recovered: List[str] = []
+    retired: List[str] = []
+    reconciled_outcomes: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    current_host = local_host_name()
 
-    with FileLock(lock_path, timeout=float(args.timeout)):
+    with FileLock(lock_path, timeout=float(getattr(args, "timeout", 15.0))):
         if not os.path.exists(ledger_path):
             print(json.dumps({"recovered": recovered}))
             return 0
@@ -642,31 +1276,159 @@ def cmd_recover(args: argparse.Namespace) -> int:
             data = json.load(f)
 
         now_iso = get_iso_now()
+        ledger_modified = False
+        backend = None
+        backend_init_error = None
+
         for ticket_id, req in data.get("requests", {}).items():
             state = str(req.get("state") or "pending").lower()
             claim = active_native_claim(req)
-            if state not in {"implementation", "qa", "review"} or not claim or claim["worker_id"] in running_worker_ids:
+            if not claim:
                 continue
-            owner = claim["worker_id"]
-            req["native_claim"] = retryable_native_claim()
-            req["updated_at"] = now_iso
-            req.setdefault("history", []).append({
-                "actor": "TopicReplenishmentEngine",
-                "timestamp": now_iso,
-                "from_state": req.get("state") or state,
-                "to_state": req.get("state") or state,
-                "reason": f"Recovered orphaned claim from absent worker {owner}",
-            })
-            recovered.append(ticket_id)
 
-        if recovered:
+            host_status = claim_host_liveness(claim, current_host)
+
+            if WorkerBackend is None:
+                roster_live = claim["worker_id"] in running_worker_ids
+                if roster_live or host_status != "dead":
+                    continue
+                owner = claim["worker_id"]
+                req["native_claim"] = retryable_native_claim()
+                req["updated_at"] = now_iso
+                req.setdefault("history", []).append({
+                    "actor": "TopicReplenishmentEngine",
+                    "timestamp": now_iso,
+                    "from_state": req.get("state") or state,
+                    "to_state": req.get("state") or state,
+                    "reason": f"Recovered orphaned claim from absent worker {owner}",
+                })
+                recovered.append(ticket_id)
+                ledger_modified = True
+                continue
+
+            if backend is None and backend_init_error is None:
+                try:
+                    backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+                except Exception as exc:
+                    backend_init_error = str(exc)
+            if backend is None:
+                errors.append(f"{ticket_id}: WorkerBackend unavailable during recovery: {backend_init_error}")
+                continue
+
+            run_id = claim["run_id"]
+            try:
+                backend_ticket = backend.get_native_dispatch(run_id)
+            except Exception as exc:
+                errors.append(f"{ticket_id}: cannot read WorkerBackend dispatch {run_id}: {exc}")
+                continue
+
+            bound_handle = backend_ticket.task_handle
+            if bound_handle is not None and not is_valid_task_handle(bound_handle):
+                errors.append(f"{ticket_id}: WorkerBackend dispatch {run_id} has invalid handle {bound_handle!r}")
+                continue
+            if claim["task_handle"] is not None and bound_handle != claim["task_handle"]:
+                errors.append(
+                    f"{ticket_id}: ledger task_handle {claim['task_handle']!r} conflicts with "
+                    f"WorkerBackend handle {bound_handle!r} for run {run_id}"
+                )
+                continue
+
+            bound_worker_id = bound_handle.removeprefix("agent://") if bound_handle is not None else None
+            roster_worker_id = bound_worker_id if bound_worker_id is not None else claim["worker_id"]
+            roster_live = roster_worker_id in running_worker_ids
+
+            if backend_ticket.state in ("finalized", "blocked"):
+                if roster_live:
+                    continue
+                try:
+                    outcome = backend.get_native_outcome(run_id)
+                except Exception as exc:
+                    errors.append(f"{ticket_id}: cannot read WorkerBackend outcome for {run_id}: {exc}")
+                    continue
+                if outcome is None:
+                    errors.append(
+                        f"{ticket_id}: WorkerBackend run {run_id} is {backend_ticket.state!r} with no readable outcome"
+                    )
+                    continue
+                outcome_dict = outcome.to_dict()
+                applied = project_native_outcome(
+                    req, run_id, outcome_dict, now_iso, prepared_head=backend_ticket.head_sha,
+                )
+                recovered.append(ticket_id)
+                reconciled_outcomes.append({
+                    "ticket_id": ticket_id,
+                    "run_id": run_id,
+                    "ok": applied and bool(outcome_dict.get("ok")),
+                    **({"discarded": True} if not applied else {}),
+                    "state": req["state"],
+                })
+                ledger_modified = True
+                continue
+
+            if backend_ticket.state in ("prepared", "background_dispatched", "retired"):
+                known_live_handle = bound_worker_id is not None and bound_worker_id in running_worker_ids
+                if (
+                    known_live_handle
+                    and claim["task_handle"] is None
+                    and backend_ticket.state == "background_dispatched"
+                    and claim.get("fence") == request_fence(req)
+                ):
+                    claim["task_handle"] = bound_handle
+                    claim["worker_id"] = bound_worker_id
+                    req["updated_at"] = now_iso
+                    ledger_modified = True
+                    continue
+                if backend_ticket.state != "retired" and (roster_live or host_status != "dead"):
+                    continue
+                if backend_ticket.state == "prepared" and bound_handle is not None:
+                    errors.append(f"{ticket_id}: prepared WorkerBackend run {run_id} unexpectedly has handle {bound_handle!r}")
+                    continue
+                if backend_ticket.state == "background_dispatched" and bound_handle is None:
+                    errors.append(f"{ticket_id}: dispatched WorkerBackend run {run_id} is missing its bound handle")
+                    continue
+
+                owner = bound_worker_id or claim["worker_id"]
+                retire_reason = f"Recovered orphaned claim from absent worker {owner}"
+                try:
+                    retired_ticket = backend.retire_native(run_id, bound_handle, retire_reason)
+                except Exception as exc:
+                    errors.append(f"{ticket_id}: failed to retire WorkerBackend run {run_id}: {exc}")
+                    continue
+                if retired_ticket.state != "retired" or retired_ticket.task_handle != bound_handle:
+                    errors.append(
+                        f"{ticket_id}: WorkerBackend did not retire run {run_id} under handle {bound_handle!r}"
+                    )
+                    continue
+
+                req["native_claim"] = retryable_native_claim()
+                req["updated_at"] = now_iso
+                req.setdefault("history", []).append({
+                    "actor": "TopicReplenishmentEngine",
+                    "timestamp": now_iso,
+                    "from_state": req.get("state") or state,
+                    "to_state": req.get("state") or state,
+                    "reason": retire_reason,
+                    "native_retired_run_id": retired_ticket.run_id,
+                })
+                recovered.append(ticket_id)
+                retired.append(ticket_id)
+                ledger_modified = True
+                continue
+
+            errors.append(f"{ticket_id}: unsupported WorkerBackend state {backend_ticket.state!r} for run {run_id}")
+
+        if ledger_modified:
             data["updated_at"] = now_iso
-            temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_path, ledger_path)
+            write_ledger_atomic(ledger_path, data)
 
-    print(json.dumps({"recovered": recovered}))
+    out: Dict[str, Any] = {"recovered": recovered}
+    if retired:
+        out["retired"] = retired
+    if reconciled_outcomes:
+        out["reconciled_outcomes"] = reconciled_outcomes
+    if errors:
+        out["errors"] = errors
+    print(json.dumps(out))
     return 0
 
 
@@ -700,179 +1462,191 @@ def cmd_complete(args: argparse.Namespace) -> int:
         except Exception as e:
             structured_result = {"error": f"Invalid file: {e}"}
 
+    if not isinstance(structured_result, dict):
+        structured_result = {}
+
     with FileLock(lock_path, timeout=timeout):
         if not os.path.exists(ledger_path):
             print(json.dumps({"completed": False, "error": "Ledger not found"}))
             return 0
-        with open(ledger_path, "r", encoding="utf-8") as f:
-            preflight_data = json.load(f)
-        preflight_req = preflight_data.get("requests", {}).get(ticket_id)
-        if not preflight_req:
-            print(json.dumps({"completed": False, "error": f"Ticket {ticket_id} not found"}))
-            return 0
-        identity_error = completion_identity_error(preflight_req, run_id, task_handle)
-        if identity_error:
-            print(json.dumps({"completed": False, "ok": False, "error": identity_error}))
-            return 0
-
-    # 1. Validate through WorkerBackend.complete_native whenever it is installed.
-    outcome_dict = None
-    if WorkerBackend is not None:
-        if not run_id:
-            outcome_dict = {
-                "ok": False,
-                "stage": structured_result.get("stage", "unknown"),
-                "exit_code": args.exit_code,
-                "command": [],
-                "head_sha": structured_result.get("head_sha"),
-                "evidence": structured_result,
-                "artifacts": [],
-                "blocked_reason": "Native run ID is required for WorkerBackend completion",
-            }
-        else:
-            try:
-                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
-                outcome = backend.complete_native(run_id, task_handle, structured_result)
-                outcome_dict = outcome.to_dict()
-            except Exception as exc:
-                outcome_dict = {
-                    "ok": False,
-                    "stage": structured_result.get("stage", "unknown"),
-                    "exit_code": args.exit_code,
-                    "command": [],
-                    "head_sha": structured_result.get("head_sha"),
-                    "evidence": structured_result,
-                    "artifacts": [],
-                    "blocked_reason": f"WorkerBackend completion failed: {exc}",
-                }
-
-    if args.error:
-        outcome_dict = {
-            "ok": False,
-            "stage": structured_result.get("stage", "unknown"),
-            "exit_code": args.exit_code,
-            "command": [],
-            "head_sha": structured_result.get("head_sha"),
-            "evidence": structured_result,
-            "artifacts": [],
-            "blocked_reason": args.error,
-        }
-    elif outcome_dict is None:
-        # Canonical validation rules if WorkerBackend is uninstantiated
-        verdict = structured_result.get("verdict")
-        checks = structured_result.get("checks", [])
-        has_verifications = any(
-            isinstance(c, dict) and c.get("purpose") == "verification" and c.get("exit_code") == 0
-            for c in checks
-        )
-        ok = bool(
-            verdict == "pass"
-            and len(checks) > 0
-            and has_verifications
-            and not args.error
-            and int(args.exit_code or 0) == 0
-        )
-        blocked_reason = None
-        if not ok:
-            if verdict != "pass":
-                blocked_reason = f"Worker returned verdict '{verdict}'"
-            elif len(checks) == 0:
-                blocked_reason = "Worker returned verdict 'pass' with no executed checks"
-            elif not has_verifications:
-                blocked_reason = "Worker checks contain no successful verification check"
-            elif args.error or int(args.exit_code or 0) != 0:
-                blocked_reason = args.error or f"Worker exited with code {args.exit_code}"
-
-        outcome_dict = {
-            "ok": ok,
-            "stage": structured_result.get("stage", "unknown"),
-            "exit_code": args.exit_code,
-            "command": [],
-            "head_sha": structured_result.get("head_sha"),
-            "evidence": structured_result,
-            "artifacts": [a.get("path") for a in structured_result.get("artifacts", []) if isinstance(a, dict)],
-            "blocked_reason": blocked_reason,
-        }
-
-    # 2. Update ledger request under FileLock based on canonical outcome
-    with FileLock(lock_path, timeout=timeout):
-        if not os.path.exists(ledger_path):
-            print(json.dumps({"completed": False, "error": "Ledger not found"}))
-            return 0
-
         with open(ledger_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-
         req = data.get("requests", {}).get(ticket_id)
         if not req:
             print(json.dumps({"completed": False, "error": f"Ticket {ticket_id} not found"}))
             return 0
-
         identity_error = completion_identity_error(req, run_id, task_handle)
         if identity_error:
             print(json.dumps({"completed": False, "ok": False, "error": identity_error}))
             return 0
-        now_iso = get_iso_now()
-        from_state = req.get("state") or "implementation"
-        history = req.setdefault("history", [])
 
-        if outcome_dict["ok"]:
-            # Advance state only on validated canonical success
-            next_state = from_state
-            if from_state.lower() in ("pending", "implementation", "build"):
-                next_state = "QA"
-            elif from_state.lower() == "qa":
-                next_state = "review"
-            elif from_state.lower() == "review":
-                next_state = "awaiting authorization"
-
-            req["state"] = next_state
-            if outcome_dict.get("head_sha"):
-                req["head"] = outcome_dict["head_sha"]
-            req["blocker"] = None
-            req["updated_at"] = now_iso
-            req["native_claim"] = retryable_native_claim()
-
-            evidence_list = req.setdefault("evidence", [])
-            if outcome_dict.get("evidence"):
-                evidence_list.append(outcome_dict["evidence"])
-
-            history.append({
-                "actor": "WorkerBackend",
-                "timestamp": now_iso,
-                "from_state": from_state,
-                "to_state": next_state,
-                "reason": f"Stage {outcome_dict.get('stage')} validated successfully",
-            })
+        completion_error = args.error or (
+            f"Worker exited with code {args.exit_code}" if args.exit_code else None
+        )
+        prepared_head = None
+        if WorkerBackend is not None:
+            try:
+                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+                ticket = backend.get_native_dispatch(run_id)
+                prepared_head = ticket.head_sha
+                if ticket.task_handle != task_handle or ticket.state == "retired":
+                    raise ValueError(f"Native dispatch {run_id} is retired or no longer owns this handle")
+                result_for_backend = (
+                    blocked_native_result(ticket_id, ticket.request["stage"], completion_error)
+                    if completion_error else structured_result
+                )
+                outcome_dict = backend.complete_native(run_id, task_handle, result_for_backend).to_dict()
+                durable = backend.get_native_outcome(run_id)
+                if durable is None or outcome_dict != durable.to_dict():
+                    raise ValueError(outcome_dict.get("blocked_reason") or "No matching durable outcome")
+                if completion_error:
+                    outcome_dict["blocked_reason"] = completion_error
+            except Exception as exc:
+                # Recovery can project a durable outcome or retire an orphan.
+                print(json.dumps({"completed": False, "ok": False, "error": f"WorkerBackend completion failed: {exc}"}))
+                return 0
         else:
-            # State remains unadvanced on blocked/refused/failed outcome
-            reason = outcome_dict.get("blocked_reason") or "Worker verification failed"
-            req["blocker"] = reason
-            req["updated_at"] = now_iso
-            req["native_claim"] = retryable_native_claim()
-            history.append({
-                "actor": "WorkerBackend",
-                "timestamp": now_iso,
-                "from_state": from_state,
-                "to_state": from_state,
-                "reason": f"Stage {outcome_dict.get('stage')} refused/blocked: {reason}",
-            })
-
+            verdict = structured_result.get("verdict")
+            checks = structured_result.get("checks") or []
+            has_verifications = any(
+                isinstance(check, dict) and check.get("purpose") == "verification" and check.get("exit_code") == 0
+                for check in checks
+            )
+            blocked_reason = completion_error
+            if not blocked_reason:
+                if verdict != "pass":
+                    blocked_reason = f"Worker returned verdict '{verdict}'"
+                elif not checks:
+                    blocked_reason = "Worker returned verdict 'pass' with no executed checks"
+                elif not has_verifications:
+                    blocked_reason = "Worker checks contain no successful verification check"
+            outcome_dict = {
+                "ok": blocked_reason is None,
+                "stage": structured_result.get("stage", "unknown"),
+                "head_sha": structured_result.get("head_sha"),
+                "evidence": structured_result,
+                "blocked_reason": blocked_reason,
+            }
+        now_iso = get_iso_now()
+        applied = project_native_outcome(req, run_id, outcome_dict, now_iso, prepared_head=prepared_head)
         data["updated_at"] = now_iso
-        temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_path, ledger_path)
-
+        write_ledger_atomic(ledger_path, data)
         print(json.dumps({
             "completed": True,
-            "ok": outcome_dict["ok"],
+            "ok": applied and outcome_dict["ok"],
+            **({"discarded": True} if not applied else {}),
             "stage": outcome_dict.get("stage"),
             "state": req["state"],
             "blocked_reason": outcome_dict.get("blocked_reason"),
-            "head_sha": outcome_dict.get("head_sha"),
+            "head_sha": outcome_dict.get("head_sha") if applied else req.get("head"),
         }))
         return 0
+
+def _admit_refusal(error: str) -> int:
+    msg = error.strip() if isinstance(error, str) and error.strip() else "Native dispatch not admitted"
+    if len(msg) > 512:
+        msg = msg[:509] + "..."
+    print(json.dumps({"admitted": False, "error": msg}))
+    return 0
+
+
+def cmd_admit(args: argparse.Namespace) -> int:
+    raw_ledger = getattr(args, "ledger", "")
+    ticket_id = getattr(args, "ticket_id", "")
+    run_id = getattr(args, "run_id", "")
+    task_handle = getattr(args, "task_handle", "")
+    raw_host_pid = getattr(args, "host_pid", None)
+    timeout = float(getattr(args, "timeout", 15.0))
+
+    if not isinstance(raw_ledger, str) or not raw_ledger.strip():
+        return _admit_refusal("A ledger path is required for native admission")
+    if not isinstance(ticket_id, str) or not ticket_id.strip():
+        return _admit_refusal("A ticket ID is required for native admission")
+    if not isinstance(run_id, str) or not run_id.strip():
+        return _admit_refusal("A native run ID is required for native admission")
+    if not is_valid_task_handle(task_handle):
+        return _admit_refusal("Invalid native task handle")
+
+    host_pid, pid_err = parse_positive_pid(raw_host_pid)
+    if pid_err or host_pid is None:
+        return _admit_refusal(pid_err or "A positive host PID is required for native admission")
+
+    current_host = local_host_name()
+    ledger_path = os.path.abspath(raw_ledger)
+    lock_path = ledger_path + ".lock"
+
+    with FileLock(lock_path, timeout=timeout):
+        if not os.path.exists(ledger_path):
+            return _admit_refusal("Ledger not found")
+        try:
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            return _admit_refusal(f"Failed to read ledger: {exc}")
+
+        if not isinstance(data, dict) or not isinstance(data.get("requests"), dict):
+            return _admit_refusal("Malformed ledger structure")
+
+        req = data["requests"].get(ticket_id)
+        if not isinstance(req, dict):
+            return _admit_refusal(f"Ticket {ticket_id} not found")
+
+        if str(req.get("state") or "").lower() in ("cancelled", "dropped"):
+            return _admit_refusal(f"Ticket {ticket_id} is {req.get('state')}")
+
+        claim_err = native_claim_error(req)
+        if claim_err:
+            return _admit_refusal(claim_err)
+
+        claim = active_native_claim(req)
+        if not claim:
+            return _admit_refusal("Ticket has no active native claim")
+
+        if claim["run_id"] != run_id:
+            return _admit_refusal("Ledger claim no longer owns this native run")
+
+        if claim["task_handle"] is None:
+            return _admit_refusal("Ledger claim has no bound native task handle")
+
+        if claim["task_handle"] != task_handle:
+            return _admit_refusal("Ledger claim no longer owns this native task handle")
+        if claim.get("fence") != request_fence(req) and (WorkerBackend is not None or "fence" in claim):
+            return _admit_refusal("Native claim's request head, stage or epoch changed")
+
+        if "host" in claim:
+            claim_host = claim["host"]
+            if not current_host:
+                return _admit_refusal("Unable to verify local host name for native admission")
+            if claim_host["name"] != current_host:
+                return _admit_refusal(
+                    f"Native claim belongs to foreign host {claim_host['name']!r}, not {current_host!r}"
+                )
+            if claim_host["pid"] != host_pid:
+                return _admit_refusal(
+                    f"Native claim belongs to host PID {claim_host['pid']}, not {host_pid}"
+                )
+            if claim_host_liveness(claim, current_host) != "alive":
+                return _admit_refusal("Native claim's SDK process creation identity no longer matches")
+
+        if WorkerBackend is not None:
+            try:
+                backend = WorkerBackend(state_dir=os.path.dirname(ledger_path))
+                backend_ticket = backend.get_native_dispatch(run_id)
+            except Exception as exc:
+                return _admit_refusal(f"WorkerBackend admission check failed: {exc}")
+
+            if backend_ticket.state != "background_dispatched":
+                return _admit_refusal(
+                    f"WorkerBackend run {run_id} is in state {backend_ticket.state!r}, not 'background_dispatched'"
+                )
+            if backend_ticket.task_handle != task_handle:
+                return _admit_refusal(
+                    f"WorkerBackend run {run_id} handle {backend_ticket.task_handle!r} does not match {task_handle!r}"
+                )
+
+    print(json.dumps({"admitted": True}))
+    return 0
+
 
 
 def cmd_hold_lock(args: argparse.Namespace) -> int:
@@ -896,6 +1670,8 @@ def main():
     p_claim.add_argument("--worker-id", default="", help="Worker ID")
     p_claim.add_argument("--covered-topics", default="", help="Comma-separated covered topic names")
     p_claim.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
+    p_claim.add_argument("--host-pid", default=None, help="Deploying host process PID (positive integer)")
+    p_claim.add_argument("--claim-id", default=None, help="Replayable claim generation chosen by the SDK")
 
     p_record = subparsers.add_parser("record-dispatch", help="Record native dispatch binding in WorkerBackend")
     p_record.add_argument("--state-dir", required=True, help="WorkerBackend state directory")
@@ -909,7 +1685,8 @@ def main():
     p_rollback.add_argument("--ledger", required=True, help="Path to ledger.json")
     p_rollback.add_argument("--ticket-id", required=True, help="Ticket ID")
     p_rollback.add_argument("--run-id", required=True, help="Native run ID that still owns the claim")
-    p_rollback.add_argument("--previous-state", required=True, help="Ticket state to restore after a rejected dispatch")
+    p_rollback.add_argument("--previous-state", default="auto", help="Ticket state to restore after a rejected dispatch")
+    p_rollback.add_argument("--task-handle", default="", help="Native task handle that still owns the claim")
     p_rollback.add_argument("--reason", default="", help="Reason for rolling back the claim")
     p_rollback.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 
@@ -930,6 +1707,14 @@ def main():
     p_complete.add_argument("--error", default="")
     p_complete.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 
+    p_admit = subparsers.add_parser("admit", help="Verify active claim, host PID, and backend dispatch before starting worker")
+    p_admit.add_argument("--ledger", required=True, help="Path to ledger.json")
+    p_admit.add_argument("--ticket-id", required=True, help="Ticket ID")
+    p_admit.add_argument("--run-id", required=True, help="Native run ID")
+    p_admit.add_argument("--task-handle", required=True, help="Native task handle (agent://...)")
+    p_admit.add_argument("--host-pid", required=True, help="Deploying host process PID (positive integer)")
+    p_admit.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
+
     p_hold = subparsers.add_parser("hold-lock", help="Hold lock for testing contention")
     p_hold.add_argument("--lock-path", required=True, help="Lock file path")
     p_hold.add_argument("--duration", default="1.0", help="Duration to hold in seconds")
@@ -947,6 +1732,8 @@ def main():
         sys.exit(cmd_recover(args))
     elif args.subcommand == "complete":
         sys.exit(cmd_complete(args))
+    elif args.subcommand == "admit":
+        sys.exit(cmd_admit(args))
     elif args.subcommand == "hold-lock":
         sys.exit(cmd_hold_lock(args))
 

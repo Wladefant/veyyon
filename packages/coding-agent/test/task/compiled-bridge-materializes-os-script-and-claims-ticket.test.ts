@@ -14,6 +14,7 @@
  * 4. Cross-process FileLock works under the compiled binary without ENOENT errors.
  */
 
+import { test } from "bun:test";
 import * as assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -26,7 +27,7 @@ const TOPIC_REPLENISHMENT_SOURCE = path
 	.join(REPO_ROOT, "packages/coding-agent/src/task/topic-replenishment.ts")
 	.replace(/\\/g, "/");
 
-async function main(): Promise<void> {
+test("compiled bridge can claim an authorized ticket and take the ledger lock", () => {
 	console.log("Starting compiled-bridge-materializes-os-script-and-claims-ticket test suite...\n");
 
 	const scratchDir = path.join(
@@ -172,6 +173,7 @@ process.exit(1);
 					"req-valid-claim-1": {
 						prompt: "Implement compiled bridge asset extraction",
 						topic: "Workflow",
+						owner: "review-coordinator",
 						authorization: {
 							status: "authorized",
 							timestamp: "2026-09-06T10:00:00Z",
@@ -199,7 +201,7 @@ process.exit(1);
 			assert.equal(parsed.claimed, true, "Must claim eligible authorized ticket");
 			assert.ok(parsed.ticket, "Ticket must be defined");
 			assert.equal(parsed.ticket.id, "req-valid-claim-1", "Must claim expected ticket id");
-			assert.equal(parsed.ticket.owner, "test-worker-valid", "Must assign specified worker id");
+			assert.equal(parsed.ticket.owner, "review-coordinator", "The claim must preserve accountable ownership");
 
 			// Verify on-disk ledger state mutation through the Python bridge
 			const updatedLedger = JSON.parse(fs.readFileSync(validLedgerPath, "utf-8"));
@@ -210,9 +212,11 @@ process.exit(1);
 			);
 			assert.equal(
 				updatedLedger.requests["req-valid-claim-1"].owner,
-				"test-worker-valid",
-				"Ledger request owner must be updated",
+				"review-coordinator",
+				"Accountable ownership must stay unchanged",
 			);
+			assert.equal(updatedLedger.requests["req-valid-claim-1"].native_claim.worker_id, "test-worker-valid");
+			assert.equal(updatedLedger.requests["req-valid-claim-1"].native_claim.run_id, parsed.ticket.runId);
 			console.log("  [PASS] Valid ticket claimed and ledger state atomically updated");
 		}
 
@@ -243,9 +247,4 @@ process.exit(1);
 			fs.rmSync(scratchDir, { recursive: true, force: true });
 		} catch {}
 	}
-}
-
-main().catch(err => {
-	console.error("FATAL: Test suite failed:", err);
-	process.exit(1);
-});
+}, 60_000);

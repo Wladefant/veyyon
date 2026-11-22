@@ -22,8 +22,10 @@ import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
 import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
 import { Semaphore } from "@veyyon/coding-agent/task/parallel";
+import * as ledger from "@veyyon/coding-agent/task/topic-replenishment";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { TempDir } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
@@ -105,6 +107,32 @@ describe("task spawn routing", () => {
 		}
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
+	});
+
+	// A detached dispatch that never binds must fail before the parent gets a job ID.
+	it("does not accept a detached native worker whose run binding was rejected", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		vi.spyOn(ledger, "recordNativeDispatch").mockRejectedValue(new Error("native run binding rejected"));
+		const run = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("NativeWorker"));
+		const manager = createManager();
+		const tool = await TaskTool.create(createSession({ manager, settings: { "async.enabled": true } }));
+
+		const result = await tool.execute("tc-native-bind-rejected", {
+			agent: "task",
+			name: "NativeWorker",
+			task: "Claimed work.",
+			ticketId: "ticket-native",
+			runId: "run-native",
+			ledgerPath: "/repo/native-tickets.json",
+		} as TaskParams);
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.async).toBeUndefined();
+		expect(firstToolResultText(result)).toContain("native run binding rejected");
+		expect(run).not.toHaveBeenCalled();
 	});
 
 	/**
@@ -195,6 +223,27 @@ describe("task spawn routing", () => {
 	});
 
 	it("reports the resolved spawn identity before execution and again at completion", async () => {
+		using scratch = TempDir.createSync("task-spawn-native-identity-");
+		const ledgerPath = scratch.join("ledger.json");
+		await Bun.write(
+			ledgerPath,
+			JSON.stringify({
+				version: 2,
+				requests: {
+					"ticket-verifier": {
+						state: "review",
+						native_claim: {
+							version: 1,
+							state: "active",
+							worker_id: "VerifierSpawn",
+							run_id: "run-verifier",
+							task_handle: "agent://VerifierSpawn",
+							fence: { state: "review", stage: "review", epoch: 0, head: null },
+						},
+					},
+				},
+			}),
+		);
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent, reviewerAgent],
 			projectAgentsDir: null,
@@ -204,11 +253,14 @@ describe("task spawn routing", () => {
 		const completions: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
 		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			events.push("execute");
-			return makeResult(options.id, { agent: "reviewer" });
+			return makeResult(options.id, {
+				agent: "reviewer",
+				output: JSON.stringify({ verdict: "pass", stage: "review" }),
+			});
 		});
 		const tool = await TaskTool.create(
 			makeToolSession({
-				cwd: "/tmp",
+				cwd: scratch.path(),
 				settings: Settings.isolated({
 					"async.enabled": false,
 					"agent.agents": { reviewer: { enabled: true } },
@@ -224,14 +276,24 @@ describe("task spawn routing", () => {
 			}),
 		);
 
-		const result = await tool.execute("tc-verifier-spawn", {
+		const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
+		process.env.VEYYON_WORKFLOWS_DIR = scratch.join("no-worker-backend");
+		const spawn = tool.execute("tc-verifier-spawn", {
 			agent: "reviewer",
 			name: "VerifierSpawn",
 			task: "Review this.",
 			ticketId: "ticket-verifier",
 			runId: "run-verifier",
+			ledgerPath,
 			nativeDispatchBound: true,
 		} as TaskParams);
+		const result = await spawn.finally(() => {
+			if (previousWorkflowsDir === undefined) {
+				delete process.env.VEYYON_WORKFLOWS_DIR;
+			} else {
+				process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
+			}
+		});
 
 		expect(result.details?.results[0]?.agent).toBe("reviewer");
 		expect(runSpy).toHaveBeenCalledTimes(1);
@@ -246,6 +308,7 @@ describe("task spawn routing", () => {
 		]);
 		expect(completions).toHaveLength(1);
 		expect(completions[0]).toMatchObject(starts[0]!);
+		expect(completions[0]).toMatchObject({ structuredResult: { verdict: "pass", stage: "review" } });
 	});
 
 	/**
@@ -316,8 +379,8 @@ describe("task spawn routing", () => {
 		} as TaskParams);
 
 		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual([
-			"openai-codex/gpt-6-luna",
 			"google/gemini-3.8-flash",
+			"openai-codex/gpt-6-luna",
 			"anthropic/claude-sonnet-4",
 		]);
 	});

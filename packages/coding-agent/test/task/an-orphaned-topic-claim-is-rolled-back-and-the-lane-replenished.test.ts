@@ -659,7 +659,7 @@ async function runTests(): Promise<void> {
 		const liveRosterAfterCompletion = currentRoster.filter(worker => worker.id !== "worker-1");
 		const failOutcome = await engineFailing.replenish(liveRosterAfterCompletion);
 		assert.equal(failOutcome.status, "error");
-		assert.ok(failOutcome.reason?.includes("claimed ticket rolled back to pending"));
+		assert.ok(failOutcome.reason?.includes("claim released"));
 
 		// Rollback is retryable: the claim is released and the failure remains in history,
 		// not in the blocker field that eligibility intentionally rejects.
@@ -1012,7 +1012,7 @@ async function runTests(): Promise<void> {
 		console.log("  [PASS] concurrent cycles share reservations and respect maxCeiling\n");
 	}
 
-	// Test 10: session recovery releases only native claims absent from the live roster.
+	// Test 10: a prior process identity cannot own a newly reused PID.
 	{
 		console.log("Test 10: recovery reclaims a crashed worker's durable claim");
 		const testDir = path.join(
@@ -1034,6 +1034,7 @@ async function runTests(): Promise<void> {
 						worker_id: "worker-that-crashed",
 						run_id: "old-run",
 						task_handle: "agent://worker-that-crashed",
+						host: { name: os.hostname(), pid: process.pid, started: "prior-sdk-process" },
 					},
 					authorization: validAuthorization,
 				},
@@ -1094,6 +1095,7 @@ async function runTests(): Promise<void> {
 		await rollbackClaimedTicket(ledgerPath, "reclaimed-ticket", "old dispatch failed", {
 			runId: oldClaim.ticket.runId,
 			previousState: oldClaim.ticket.previousState,
+			taskHandle: "agent://old-worker",
 		});
 		const newClaim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "new-dispatch" });
 		assert.ok(newClaim.ticket?.runId);
