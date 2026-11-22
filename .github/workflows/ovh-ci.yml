@@ -370,6 +370,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      # Fit each serial job to its deadline without drawing more shared runner slots.
       max-parallel: 1
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
@@ -494,6 +495,7 @@ jobs:
             echo 'no-related-tests: 0 selected, 0 passed, 0 failed'
             shard_end=$(date +%s)
             shard_elapsed=$((shard_end - shard_start))
+            printf 'files-started=0\nfiles-finished=0\nfiles-zero-case=0\nfiles-timed-out=0\nskip=0\n' >> "$RECEIPT"
             sed -i "s/^shard-end=.*/shard-end=$shard_end/;s/^shard-elapsed=.*/shard-elapsed=$shard_elapsed/" "$RECEIPT"
             if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
               {
@@ -512,28 +514,67 @@ jobs:
           fi
 
           status=0; total_pass=0; total_fail=0; total_ran=0
+          total_skip=0; started=0; finished=0; zero_case=0; timed_out=0
+          # Only resolve the guest path once. Each file still gets a fresh bwrap namespace.
+          sandbox_root="$(timeout --kill-after=5s 30s bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)" || exit "$?"
+          runtime_bin="$sandbox_root/.ovh-tools/bin"
+          if [[ "$FLEET_ADAPTER" == "true" ]]; then mkdir -p .ovh-tools/fleet-ci; fi
           if [[ "$FLEET_ADAPTER" == "true" && "${{ matrix.index }}" == "0" ]]; then
-            mkdir -p .ovh-tools/fleet-ci
             unit_log="$GITHUB_WORKSPACE/.ovh-tools/fleet-ci/reducer-unit.log"
             if timeout 180 bash scripts/test-sandbox/run.sh --rung=bwrap /usr/bin/python3 -m unittest discover -s scripts/fleet -p 'test_*.py' 2>&1 | tee "$unit_log"; then :; else status=1; fi
           fi
           while IFS= read -r file; do
             [[ -n "$file" ]] || continue
+            started=$((started+1))
+            printf 'OVH_FILE_START ordinal=%s file=%s\n' "$started" "$file"
+            printf 'started-test=%s\n' "$file" >> "$RECEIPT" || exit 1
             log="$RUNNER_TEMP/ovh-test-$(printf '%s' "$file" | sha256sum | cut -c1-16).log"
-            sandbox_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
-            runtime_bin="$sandbox_root/.ovh-tools/bin"
             junit_args=()
-            if [[ "$FLEET_ADAPTER" == "true" ]]; then mkdir -p .ovh-tools/fleet-ci; junit_args=(--reporter=junit --reporter-outfile="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"); fi
-            if timeout 600 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" "${junit_args[@]}" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
+            if [[ "$FLEET_ADAPTER" == "true" ]]; then junit_args=(--reporter=junit --reporter-outfile="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"); fi
+            file_start="${EPOCHREALTIME/./}"
+            # Bound a stuck file independently of the 12-minute shard wrapper.
+            if timeout --verbose --kill-after=5s 120s bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" "${junit_args[@]}" 2>&1 | tee "$log"; then
+              pipeline_status=(0 0)
+            else
+              pipeline_status=("${PIPESTATUS[@]}")
+            fi
+            rc=${pipeline_status[0]}
+            elapsed_ms=$(( (${EPOCHREALTIME/./} - file_start) / 1000 ))
+            if ((pipeline_status[1] != 0)); then echo "::error::Could not save test log: $file"; exit 1; fi
             if [[ "$FLEET_ADAPTER" == "true" ]]; then report="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"; receipt="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").json"; if timeout 180 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'exec /usr/bin/python3 scripts/fleet/junit_receipt.py --input "$1" --head-sha "$(git rev-parse HEAD)" --output "$2"' _ "$report" "$receipt"; then :; else status=1; fi; fi
-            summary="$(grep -E '^[[:space:]]*[0-9]+ (pass|fail)([,[:space:]]|$)|Ran [0-9]+' "$log" || true)"; printf '%s\n' "$summary"
-            pass="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) pass.*/\1/p' | awk '{s+=$1} END{print s+0}')"
-            fail="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) fail.*/\1/p' | awk '{s+=$1} END{print s+0}')"
-            ran="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*Ran ([0-9]+).*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            counts="$(awk '
+              /^[[:space:]]*[0-9]+ pass([,[:space:]]|$)/ { pass += $1 }
+              /^[[:space:]]*[0-9]+ skip([,[:space:]]|$)/ { skip += $1 }
+              /^[[:space:]]*[0-9]+ fail([,[:space:]]|$)/ { fail += $1 }
+              /^Ran [0-9]+ tests? across / { ran += $2 }
+              /^timeout: sending signal (TERM|KILL) to command / { deadline = 1 }
+              END { print pass+0, skip+0, fail+0, ran+0, deadline+0 }
+            ' "$log")" || exit 1
+            read -r pass skip fail ran timeout_message <<< "$counts"
+            deadline=0
+            if ((rc == 124 || (rc == 137 && timeout_message))); then
+              deadline=1
+              timed_out=$((timed_out+1))
+              echo "::error::Per-file timeout (120s): $file"
+            elif ((ran == 0)); then
+              zero_case=$((zero_case+1))
+            fi
+            total_skip=$((total_skip+skip))
             total_pass=$((total_pass+pass)); total_fail=$((total_fail+fail)); total_ran=$((total_ran+ran))
             if ((rc!=0||ran==0||fail!=0)); then echo "::error::Test failed or ran zero cases: $file exit=$rc ran=$ran fail=$fail"; status=1; fi
             printf 'test=%s pass=%s fail=%s ran=%s exit=%s\n' "$file" "$pass" "$fail" "$ran" "$rc" >> "$RECEIPT"
+            finished=$((finished+1))
+            printf 'OVH_FILE_END ordinal=%s exit=%s elapsed_ms=%s pass=%s skip=%s fail=%s ran=%s timeout=%s file=%s\n' "$finished" "$rc" "$elapsed_ms" "$pass" "$skip" "$fail" "$ran" "$deadline" "$file"
           done < "$SHARD_FILE"
+          expected=${{ matrix.files }}
+          printf 'files-started=%s\nfiles-finished=%s\nfiles-zero-case=%s\nfiles-timed-out=%s\nskip=%s\n' "$started" "$finished" "$zero_case" "$timed_out" "$total_skip" >> "$RECEIPT"
+          printf 'OVH_FILE_TOTAL selected=%s started=%s finished=%s zero_case=%s timed_out=%s skip=%s\n' "$expected" "$started" "$finished" "$zero_case" "$timed_out" "$total_skip"
+          if ((started != expected || finished != expected)); then
+            echo "::error::Planned $expected files but started $started and finished $finished"
+            exit 1
+          fi
+          coverage='all planned files accounted for'
+          if ((timed_out > 0 || zero_case > 0)); then coverage='incomplete (timeout or zero cases)'; fi
           echo "OVH_TEST_TOTAL pass=$total_pass fail=$total_fail ran=$total_ran"
           shard_end=$(date +%s)
           shard_elapsed=$((shard_end - shard_start))
@@ -541,14 +582,19 @@ jobs:
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             {
               echo "### OVH CI Test Shard ${{ matrix.index }} of ${{ matrix.count }}"
-              echo "- Coverage: complete related coverage"
+              echo "- Coverage: $coverage"
               echo "- Start: $shard_start"
               echo "- End: $shard_end"
               echo "- Elapsed: ${shard_elapsed}s"
               echo "- Selected: ${{ matrix.files }}"
+              echo "- Files started: $started"
+              echo "- Files finished: $finished"
+              echo "- Files with zero cases: $zero_case"
+              echo "- Files timed out: $timed_out"
               echo "- Projected: ${{ matrix.projected_ms }}ms"
               echo "- Pass: $total_pass"
               echo "- Fail: $total_fail"
+              echo "- Skip: $total_skip"
               echo "- Ran: $total_ran"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
