@@ -67,7 +67,8 @@ describe("task launch grants", () => {
 
 	function observeChild(atStart: (manager: SessionManager) => Promise<void>) {
 		return vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
-			const manager = options.sessionManager!;
+			const manager = options?.sessionManager;
+			if (!manager) throw new Error("Expected the child session manager");
 			managers.push(manager);
 			await atStart(manager);
 			return createSessionResult(createMockSession(({ emit }) => emit(yieldSuccessEvent({ ok: true }, "receipt"))));
@@ -159,8 +160,9 @@ describe("task launch grants", () => {
 			fs.renameSync(source, target);
 			return 1;
 		});
+		// The test uses JavaScript callbacks in place of Bun-branded native functions.
 		const load = vi.spyOn(ffi, "dlopen").mockReturnValue({
-			symbols: { MoveFileExW: moveFileEx, GetLastError: () => 1117 },
+			symbols: { MoveFileExW: moveFileEx, GetLastError: () => 1117 } as unknown as ffi.Library<ffi.Symbols>["symbols"],
 			close: () => {},
 		});
 		const sync = fs.fsyncSync;

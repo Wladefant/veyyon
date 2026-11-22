@@ -992,7 +992,7 @@ export class FileSessionStorage implements SessionStorage {
 				return allowed;
 			};
 			try {
-				const publishScope = this.#captureStagedPublishScope(fpath, tempPath);
+				const publishScope = this.#captureStagedPublishScope(fpath, tempPath, options?.sourceSnapshot);
 				writeChunksSync(tempPath, body);
 				if (!commitGuard()) throw new Error("Original journal changed before synchronous publication");
 				this.#withStagedPublishScope(publishScope, () => {
