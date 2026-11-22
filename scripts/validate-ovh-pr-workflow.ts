@@ -408,6 +408,79 @@ function validate(workflow: Workflow): void {
 		equal(evaluate(downloadStep?.if, context({ nativeReady: "false" })), false);
 	});
 
+	check("a per-file timeout stays red but records the later files", () => {
+		const step = workflow.jobs.test.steps.find(candidate => candidate.name === "Run selected tests serially");
+		if (!step?.run) throw new Error("Missing shard test command");
+		const sandbox = mkdtempSync(join(tmpdir(), "veyyon-ovh-shard-"));
+		try {
+			const bin = join(sandbox, "bin");
+			const driver = join(sandbox, "scripts/test-sandbox");
+			mkdirSync(bin);
+			mkdirSync(driver, { recursive: true });
+			const timeout = join(bin, "timeout");
+			writeFileSync(
+				timeout,
+				[
+					"#!/usr/bin/env bash",
+					'if [[ "$1" == "--verbose" && "${!#}" == "hang.test.ts" ]]; then',
+					'  echo "timeout: sending signal KILL to command bash" >&2',
+					"  exit 137",
+					"fi",
+					'while [ "$1" != "bash" ]; do [ "$#" -gt 0 ] || exit 90; shift; done',
+					'exec "$@"',
+				].join("\n"),
+			);
+			chmodSync(timeout, 0o755);
+			writeFileSync(
+				join(driver, "run.sh"),
+				[
+					'case "${!#}" in',
+					'  /bin/pwd) printf "%s\\n" "$PWD";;',
+					'  skip.test.ts) printf " 0 pass\\n 1 skip\\n 0 fail\\nRan 1 test across 1 file.\\n";;',
+					"  zero.test.ts) exit 0;;",
+					"  *) exit 91;;",
+					"esac",
+				].join("\n"),
+			);
+			const bun = join(bin, "bun");
+			writeFileSync(bun, "#!/bin/sh\nexit 0\n");
+			chmodSync(bun, 0o755);
+			const git = join(bin, "git");
+			writeFileSync(git, `#!/bin/sh\necho ${head}\n`);
+			chmodSync(git, 0o755);
+			const shard = join(sandbox, "shard.txt");
+			const receipt = join(sandbox, "receipt.txt");
+			writeFileSync(shard, "hang.test.ts\nskip.test.ts\nzero.test.ts\n");
+			const command = step.run
+				.replaceAll("${{ matrix.index }}", "0")
+				.replaceAll("${{ matrix.count }}", "1")
+				.replaceAll("${{ matrix.files }}", "3");
+			const run = spawnSync("bash", ["-c", command], {
+				cwd: sandbox,
+				env: {
+					...process.env,
+					PATH: `${bin}:${process.env.PATH}`,
+					RUNNER_TEMP: sandbox,
+					SHARD_FILE: shard,
+					RECEIPT: receipt,
+					FLEET_ADAPTER: "false",
+					GITHUB_STEP_SUMMARY: "",
+				},
+				encoding: "utf8",
+				timeout: 10_000,
+			});
+			equal(run.status, 1);
+			equal(run.stdout?.includes("Per-file timeout (120s): hang.test.ts"), true);
+			equal(run.stdout?.includes("OVH_FILE_TOTAL selected=3 started=3 finished=3 zero_case=1 timed_out=1 skip=1"), true);
+			equal(
+				readFileSync(receipt, "utf8").match(/^started-test=.*$/gm),
+				["started-test=hang.test.ts", "started-test=skip.test.ts", "started-test=zero.test.ts"],
+			);
+		} finally {
+			rmSync(sandbox, { recursive: true, force: true });
+		}
+	});
+
 	check("shard preflight order", () => {
 		const steps = workflow.jobs.test.steps;
 		const installIndex = steps.findIndex(step => step.id === "install" || step.uses?.includes("bun-install"));

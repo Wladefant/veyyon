@@ -93,6 +93,29 @@ describe("OVH shard planner writes the selected plan", () => {
 			})),
 		});
 	});
+
+	it("splits 400 unmeasured files across multiple shards under isolated file budget", async () => {
+		const input = path.join(dir, "selected-400.txt");
+		const output = path.join(dir, "shards-400");
+		const files = Array.from(
+			{ length: 400 },
+			(_, index) => `tests/unmeasured-ovh-shard-budget-${String(index).padStart(3, "0")}.test.ts`,
+		);
+		await writeFile(input, `${files.join("\n")}\n`);
+		const plan = await runCli(["--input", input, "--output", output]);
+		if (typeof plan === "number") throw new Error(`expected shard plan, got number ${plan}`);
+		expect(plan.targetDurationMs).toBe(480000);
+		expect(plan.shardCount).toBe(2);
+		expect(plan.shards).toHaveLength(2);
+		expect(plan.shards.map(shard => shard.durationMs)).toEqual([300000, 300000]);
+		const assigned = plan.shards.flatMap(shard => shard.files);
+		expect(assigned).toHaveLength(400);
+		expect(new Set(assigned)).toEqual(new Set(files));
+		for (const shard of plan.shards) {
+			const shardLines = (await readFile(path.join(output, `shard-${shard.index}.txt`), "utf8")).trimEnd().split("\n");
+			expect(shardLines).toEqual(shard.files);
+		}
+	});
 });
 
 // WHY: a shard whose test list is missing or short once passed as "no related tests" and hid unrun tests.
