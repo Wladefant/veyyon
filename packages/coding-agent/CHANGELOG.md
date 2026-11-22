@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Record child native transcript open and launch-grant persistence timings separately while keeping `sessionOpenMs` inclusive, and report the concrete setup phase when the startup watchdog expires before the first turn ([Refs #1232](https://github.com/Wladefant/veyyon/issues/1232)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
 ## [1.12.3] - 2026-11-21

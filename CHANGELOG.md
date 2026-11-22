@@ -10,6 +10,9 @@
 
 ### Fixed
 
+- Record child native transcript open and launch-grant persistence timings separately while keeping `sessionOpenMs` inclusive, and report the concrete setup phase when the startup watchdog expires before the first turn ([Refs #1232](https://github.com/Wladefant/veyyon/issues/1232)).
+- Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
+- Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
 - Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
 
 ## [1.12.3] - 2026-11-21
@@ -56,6 +59,7 @@
 - Allow native agent sessions to reserve their transcript until close, so a second process cannot open the same transcript for a concurrent turn.
 - Refuse to move session artifacts while a native child owns its transcript. Retry the move after the child closes.
 - A stalled shell output callback no longer hides a completed command's exit status. Results mark incomplete capture and retain up to 64 KiB of diagnostics when no callback succeeded.
+- A Windows shell timeout stops descendants even if an intermediate process has exited ([#1182](https://github.com/Wladefant/veyyon/issues/1182)).
 - Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
 - Queue same-process Windows file-lock contenders, retry sharing errors at release, and recover failed releases from the owning process.
 - Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
