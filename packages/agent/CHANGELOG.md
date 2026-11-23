@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in experiment that restarts provider context with a tool-free recap and emits numeric usage receipts ([#1235](https://github.com/Wladefant/veyyon/issues/1235)).
+
 ## [1.9.2] - 2026-11-12
 
 ### Fixed

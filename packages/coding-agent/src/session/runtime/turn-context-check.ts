@@ -190,6 +190,7 @@ export class TurnContextCheck {
 		skipAbortedCheck = true,
 		autoContinue = true,
 	): Promise<CompactionCheckResult> {
+		if (this.#session.agent.compactionExperiment?.active) return COMPACTION_CHECK_NONE;
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return COMPACTION_CHECK_NONE;
 		const model = this.#session.model;
@@ -244,6 +245,7 @@ export class TurnContextCheck {
 	 * switch keeps the history whole; the post-turn check orders the two the same way.
 	 */
 	async beforePrompt(messages: AgentMessage[]): Promise<void> {
+		if (this.#session.agent.compactionExperiment?.active) return;
 		const model = this.#session.model;
 		if (!model) return;
 		const contextWindow = model.contextWindow ?? 0;
@@ -292,6 +294,7 @@ export class TurnContextCheck {
 	): Promise<void> {
 		const session = this.#session;
 		if (
+			session.agent.compactionExperiment?.active ||
 			signal?.aborted ||
 			this.#host.isDisposed() ||
 			session.isCompacting ||

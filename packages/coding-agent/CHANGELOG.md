@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Let the SDK opt a fresh session into the context-compaction benchmark without changing the default behavior ([#1235](https://github.com/Wladefant/veyyon/issues/1235)).
+
 ### Fixed
 
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).

@@ -1562,6 +1562,9 @@ class SessionStartup {
 		const sessionManager = this.#sessionManager;
 		const { model, effectiveThinkingLevel } = this.#modelSelection;
 		const toolRegistry = this.#toolRegistry;
+		if (options.compactionExperiment && this.#hasExistingSession) {
+			throw new Error("The compaction experiment requires a fresh session.");
+		}
 		this.#preferWebsockets = openaiWebsocketPreference(settings.get("providers.openaiWebsockets"));
 		this.#serviceTierByFamily = startingServiceTierByFamily(
 			this.#hasServiceTierEntry,
@@ -1589,6 +1592,7 @@ class SessionStartup {
 			sessionId: this.#providerSessionId,
 			promptCacheKey: this.#providerPromptCache.key,
 			deadline: options.deadline,
+			compactionExperiment: options.compactionExperiment,
 			transformContext: hooks.transformContext,
 			transformProviderContext: hooks.transformProviderContext,
 			steeringMode: settings.get("steeringMode"),

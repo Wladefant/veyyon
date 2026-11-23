@@ -164,6 +164,8 @@ export interface AgentOptions {
 	 * Custom stream function (for proxy backends, etc.). Default uses streamSimple.
 	 */
 	streamFn?: StreamFn;
+	/** Opt-in compaction experiment and its per-session receipt meter. */
+	compactionExperiment?: AgentLoopConfig["compactionExperiment"];
 	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
 	deadline?: number;
 
@@ -438,6 +440,7 @@ export class Agent {
 	#asideMessageProvider?: () => AsideMessage[] | Promise<AsideMessage[]>;
 	#telemetry?: AgentLoopConfig["telemetry"];
 	#appendOnlyContext?: AppendOnlyContextManager;
+	readonly compactionExperiment: AgentLoopConfig["compactionExperiment"];
 
 	/** Buffered Cursor tool results with text length at time of call (for correct ordering) */
 	#cursorToolResultBuffer: CursorToolResultEntry[] = [];
@@ -490,6 +493,7 @@ export class Agent {
 		this.#followUpMode = opts.followUpMode || "one-at-a-time";
 		this.#interruptMode = opts.interruptMode || "immediate";
 		this.streamFn = opts.streamFn || streamSimple;
+		this.compactionExperiment = opts.compactionExperiment;
 		this.#sessionId = opts.sessionId;
 		this.#deadline = opts.deadline;
 		this.#promptCacheKey = opts.promptCacheKey;
@@ -1232,6 +1236,7 @@ export class Agent {
 			metadataResolver: this.#metadataResolver,
 			providerSessionState: this.#providerSessionState,
 			thinkingBudgets: this.#thinkingBudgets,
+			compactionExperiment: this.compactionExperiment,
 			maxRetryDelayMs: this.#maxRetryDelayMs,
 			kimiApiFormat: this.#kimiApiFormat,
 			preferWebsockets: this.#preferWebsockets,

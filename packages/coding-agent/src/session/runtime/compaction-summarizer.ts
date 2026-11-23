@@ -362,6 +362,8 @@ export class CompactionSummarizer {
 			return undefined;
 		}
 		if (!serverCompactionChainsWindow(preparation, model)) await readCompactionSpanBack(preparation);
+		// This endpoint does not return normalized per-attempt usage to the native meter.
+		this.#session.agent.compactionExperiment?.noteUnpricedCompaction();
 		try {
 			return await compactWithProvider(
 				this.#host.secrets().obfuscatePreparationForProvider(preparation),
@@ -401,6 +403,18 @@ export class CompactionSummarizer {
 			}
 			return undefined;
 		}
+	}
+
+	#getCompactionCompletion(): SideCompleteImpl {
+		const complete = this.#session.sideComplete;
+		const experiment = this.#session.agent.compactionExperiment;
+		if (!experiment) return complete;
+		return async (model, context, options) => {
+			const started = performance.now();
+			const message = await complete(model, context, options);
+			experiment.observeRecap(model, message, performance.now() - started);
+			return message;
+		};
 	}
 
 	async #compactWithFallbackModel(
@@ -501,7 +515,7 @@ export class CompactionSummarizer {
 						// agents auto/manually compacting issued uncapped
 						// summary requests in parallel (chatgpt-codex review on
 						// #3751).
-						completeImpl: this.#session.sideComplete,
+						completeImpl: this.#getCompactionCompletion(),
 						// Compaction sends the largest payload of the session. Without
 						// the tier the operator selected for this candidate's family,
 						// that request is billed and paced on a tier they never chose.
@@ -659,7 +673,7 @@ export class CompactionSummarizer {
 				providerSessionState: this.#host.providerSessionState(),
 				obfuscateProviderText: text => this.#session.obfuscateProviderText(text),
 				codexCompaction,
-				completeImpl: this.#session.sideComplete,
+				completeImpl: this.#getCompactionCompletion(),
 				serviceTier: this.#host.effectiveServiceTier(candidate),
 				summaryStaging: this.#stagedSummaryModels.has(formatModelString(candidate)) ? "staged" : undefined,
 				stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
