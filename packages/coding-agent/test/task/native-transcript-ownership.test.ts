@@ -68,11 +68,12 @@ it("opens 19 siblings while another native owner is waiting for its record to sy
 		allowSync.resolve();
 		openSpy.mockRestore();
 		const settled = await Promise.allSettled([stalled, ...siblings]);
-		await Promise.allSettled(settled.flatMap(result => (result.status === "fulfilled" ? [result.value.close()] : [])));
+		await Promise.allSettled(
+			settled.flatMap(result => (result.status === "fulfilled" ? [result.value.close()] : [])),
+		);
 		dir.removeSync();
 	}
 }, 20_000);
-
 
 const run = promisify(execFile);
 const sessionManagerUrl = new URL("../../../../kernel/src/session/session-manager.ts", import.meta.url);

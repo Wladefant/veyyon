@@ -214,61 +214,41 @@ interface GrantRequest {
 	reject(error: unknown): void;
 }
 
-interface NativeOwnerRequest {
-	name: string;
-	resolve(handle: FileLockHandle): void;
-	reject(error: unknown): void;
+interface NativeOwnerBatch {
+	gate: Promise<FileLockHandle>;
+	released: PromiseWithResolvers<void>;
+	pending: number;
 }
 
-// Only opens awaiting the same gate acquisition share a batch. Arrivals during
-// publication take a new turn, so a queued move does not wait for a growing batch.
-const pendingNativeOwnerBatches = new Map<string, NativeOwnerRequest[]>();
+// Only ready publications awaiting the same gate acquisition share a batch.
+// Arrivals during publication take a new turn and do not delay a queued move.
+const pendingNativeOwnerBatches = new Map<string, NativeOwnerBatch>();
 
-function reserveNativeOwner(transcript: string): Promise<FileLockHandle> {
-	const directory = path.dirname(transcript);
-	const { promise, resolve, reject } = Promise.withResolvers<FileLockHandle>();
-	const request = { name: path.basename(transcript), resolve, reject };
-	const pending = pendingNativeOwnerBatches.get(directory);
-	if (pending) {
-		pending.push(request);
-	} else {
-		const batch = [request];
+async function publishNativeOwner<T>(directory: string, publish: () => Promise<T>): Promise<T> {
+	let batch = pendingNativeOwnerBatches.get(directory);
+	if (!batch) {
+		const gate = acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS).finally(() => {
+			pendingNativeOwnerBatches.delete(directory);
+		});
+		batch = { gate, released: Promise.withResolvers<void>(), pending: 0 };
 		pendingNativeOwnerBatches.set(directory, batch);
-		void publishNativeOwners(directory, batch);
 	}
-	return promise;
-}
-
-async function publishNativeOwners(directory: string, batch: NativeOwnerRequest[]): Promise<void> {
-	let outcomes: PromiseSettledResult<FileLockHandle>[] | undefined;
+	batch.pending++;
+	let gate: FileLockHandle | undefined;
 	try {
-		const gate = await acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS);
-		pendingNativeOwnerBatches.delete(directory);
-		try {
-			// Publish under the same gate that protects a move's owner scan and rename.
-			const owners = nativeOwnerDirectory(directory);
-			await fs.promises.mkdir(owners, { recursive: true });
-			outcomes = await Promise.allSettled(
-				batch.map(({ name }) => acquireFileLock(path.join(owners, name), NATIVE_OWNER_LOCK_OPTIONS)),
-			);
-		} finally {
-			await gate.release();
+		gate = await batch.gate;
+		return await publish();
+	} finally {
+		if (--batch.pending === 0) {
+			try {
+				await gate?.release();
+				batch.released.resolve();
+			} catch (error) {
+				batch.released.reject(error);
+			}
 		}
-	} catch (error) {
-		if (pendingNativeOwnerBatches.get(directory) === batch) pendingNativeOwnerBatches.delete(directory);
-		if (outcomes) {
-			// If returning the gate failed, no caller received these leases.
-			await Promise.allSettled(
-				outcomes.flatMap(result => (result.status === "fulfilled" ? [result.value.release()] : [])),
-			);
-		}
-		for (const request of batch) request.reject(error);
-		return;
-	}
-	for (const [index, result] of outcomes.entries()) {
-		const request = batch[index]!;
-		if (result.status === "fulfilled") request.resolve(result.value);
-		else request.reject(result.reason);
+		// The opener cannot load or write its transcript before the batch returns the gate.
+		await batch.released.promise;
 	}
 }
 
@@ -5051,7 +5031,15 @@ export class SessionManager {
 			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
 			throw error;
 		});
-		const handle = await reserveNativeOwner(transcript);
+		const directory = path.dirname(transcript);
+		const owners = nativeOwnerDirectory(directory);
+		await fs.promises.mkdir(owners, { recursive: true });
+		// Stage and sync each candidate independently. A move scans only published
+		// leases and their transitions, and publication still takes the move gate.
+		const handle = await acquireFileLock(path.join(owners, path.basename(transcript)), {
+			...NATIVE_OWNER_LOCK_OPTIONS,
+			publishUnder: publish => publishNativeOwner(directory, publish),
+		});
 		try {
 			if (options.requireNew && storage.existsStateSync(transcript) !== "absent") {
 				throw new Error("A new launch grant requires a fresh child transcript");
