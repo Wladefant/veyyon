@@ -216,6 +216,7 @@ interface GrantRequest {
 
 interface NativeOwnerBatch {
 	gate: Promise<FileLockHandle>;
+	directory?: Promise<fs.BigIntStats | undefined>;
 	released: PromiseWithResolvers<void>;
 	pending: number;
 }
@@ -224,7 +225,11 @@ interface NativeOwnerBatch {
 // Arrivals during publication take a new turn and do not delay a queued move.
 const pendingNativeOwnerBatches = new Map<string, NativeOwnerBatch>();
 
-async function publishNativeOwner<T>(directory: string, publish: () => Promise<T>): Promise<T> {
+async function publishNativeOwner<T>(
+	directory: string,
+	expected: fs.BigIntStats,
+	publish: () => Promise<T>,
+): Promise<T> {
 	let batch = pendingNativeOwnerBatches.get(directory);
 	if (!batch) {
 		const gate = acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS).finally(() => {
@@ -237,6 +242,19 @@ async function publishNativeOwner<T>(directory: string, publish: () => Promise<T
 	let gate: FileLockHandle | undefined;
 	try {
 		gate = await batch.gate;
+		// A move can replace the artifact directory while the sibling owner directory stays in place.
+		// Check the live directory once under the gate, against each opener's pre-sync snapshot.
+		const current = await (batch.directory ??= fs.promises.lstat(directory, { bigint: true }).catch(error => {
+			if (!isEnoent(error)) throw error;
+		}));
+		if (
+			!current?.isDirectory() ||
+			current.dev !== expected.dev ||
+			current.ino !== expected.ino ||
+			current.birthtimeNs !== expected.birthtimeNs
+		) {
+			throw new Error("Cannot open native transcript: artifact directory changed before owner publication");
+		}
 		return await publish();
 	} finally {
 		if (--batch.pending === 0) {
@@ -5032,13 +5050,14 @@ export class SessionManager {
 			throw error;
 		});
 		const directory = path.dirname(transcript);
+		const expectedDirectory = await fs.promises.lstat(directory, { bigint: true });
 		const owners = nativeOwnerDirectory(directory);
 		await fs.promises.mkdir(owners, { recursive: true });
 		// Stage and sync each candidate independently. A move scans only published
 		// leases and their transitions, and publication still takes the move gate.
 		const handle = await acquireFileLock(path.join(owners, path.basename(transcript)), {
 			...NATIVE_OWNER_LOCK_OPTIONS,
-			publishUnder: publish => publishNativeOwner(directory, publish),
+			publishUnder: publish => publishNativeOwner(directory, expectedDirectory, publish),
 		});
 		try {
 			if (options.requireNew && storage.existsStateSync(transcript) !== "absent") {
