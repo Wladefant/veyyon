@@ -7,9 +7,11 @@ import {
 	CompactionExperimentMeter,
 	type CompactionExperimentReceipt,
 	type CompactionPriceTierSplits,
+	type CompactionScorerManifest,
 	type CompactionScorerRow,
 	toCompactionScorerRow,
 } from "./experiment-receipt";
+import { markCompactionRecapRequest } from "./recap-request";
 import { estimateTokens } from "./token-estimate";
 import { serializeConversationForSummary } from "./utils";
 
@@ -46,8 +48,9 @@ const RECAP_PROMPT = `Stop work. Write only a concise handoff recap; do not call
 6. Remaining plan in order, the next action, and the condition for being done.
 If necessary output was truncated, give a narrow command to recover it. Later operator instructions are carried verbatim separately; do not replace them with your wording.`;
 
-function operatorMessage(message: AgentMessage): message is UserMessage {
-	return message.role === "user" && message.attribution !== "agent" && message.synthetic !== true;
+function operatorMessage(message: AgentMessage): boolean {
+	if (message.role === "user") return message.attribution !== "agent" && message.synthetic !== true;
+	return (message.role === "custom" || message.role === "developer") && message.attribution === "user";
 }
 
 function userText(content: string): UserMessage {
@@ -183,6 +186,7 @@ export class CompactionExperiment {
 				tools: undefined,
 				messages: [userText(`${RECAP_PROMPT}\n\nConversation to recap:\n${transcript}`)],
 			};
+			markCompactionRecapRequest(request, context);
 			const maxTokens = Math.min(modelOutputLimit, hardLimit - contextTokens(request));
 			if (maxTokens <= 0) this.fail(new OversizeCompactionRecapError());
 			const started = performance.now();
@@ -193,10 +197,11 @@ export class CompactionExperiment {
 					await stream(model, request, {
 						...options,
 						maxTokens,
+						onPayload: undefined,
 						toolChoice: "none",
 						providerSessionState: undefined,
 						preferWebsockets: false,
-						fallbacks: undefined,
+						fallbacks: [],
 						execHandlers: undefined,
 						cursorExecHandlers: undefined,
 						cursorOnToolResult: undefined,
@@ -301,10 +306,12 @@ export class CompactionExperiment {
 	finishForScorer(
 		success: boolean,
 		compactionQualityPass: boolean | null,
-		armOverride?: string,
+		manifest: CompactionScorerManifest,
+		arm?: string,
 	): { receipt: CompactionExperimentReceipt; sample: CompactionScorerSample } {
 		const receipt = this.finish(success);
-		const row = toCompactionScorerRow(receipt, armOverride);
+		const row = toCompactionScorerRow(receipt, manifest, arm);
+		const policy = receipt.arm === "baseline" ? manifest.control : manifest.arms[row.arm];
 		const recap = this.#recapMeter?.finish(false);
 		if (Boolean(row.compactions) !== Boolean(recap)) {
 			throw new Error("Compaction count and measured recap usage disagree.");
@@ -329,7 +336,7 @@ export class CompactionExperiment {
 			sample: {
 				...row,
 				wall_ms: Math.max(row.wall_ms, recapMs),
-				compaction_model: receipt.model,
+				compaction_model: policy.compaction_model,
 				fallback_chain: [],
 				compaction_quality_pass: compactionQualityPass,
 				fallback_triggered: false,

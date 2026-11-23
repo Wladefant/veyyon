@@ -6,6 +6,9 @@ import { Agent } from "../src/agent";
 import { agentLoop } from "../src/agent-loop";
 import { CompactionExperimentError, OversizeCompactionRecapError } from "../src/compaction/errors";
 import { CompactionExperiment, type CompactionExperimentOptions } from "../src/compaction/experiment";
+import type { CompactionScorerManifest } from "../src/compaction/experiment-receipt";
+import { createCustomMessage } from "../src/compaction/messages";
+import { compactionRecapSource } from "../src/compaction/recap-request";
 import type { StreamFn } from "../src/types";
 import { createAssistantMessage, createUserMessage, identityConverter } from "./helpers";
 
@@ -14,9 +17,22 @@ const SYSTEM = ["System prefix\r\nFirst block.", "Unmodified second block."];
 const ORIGINAL = "  Exact original task.\nDo not alter the spaces.  ";
 const CORRECTION = "Actually: KEEP `Case`.\r\n\tDo not do step 3.  ";
 const DEAD_END = "Do not repeat the DB cache change: the check failed, and I undid it.";
+const SETTINGS_SHA256 = "a".repeat(64);
+const MODEL_ID = `${MODEL.provider}/${MODEL.id}`;
+const MANIFEST: CompactionScorerManifest = {
+	schema_version: 2,
+	model: MODEL_ID,
+	settings_sha256: SETTINGS_SHA256,
+	cases: ["native-fixture", ...Array.from({ length: 9 }, (_, i) => `fixture-${i}`)],
+	control: { compaction_model: null, fallback_chain: [] },
+	arms: {
+		"36k-48k": { mode: "36k-48k", compaction_model: MODEL_ID, fallback_chain: [] },
+		"24k-32k": { mode: "24k-32k", compaction_model: MODEL_ID, fallback_chain: [] },
+	},
+};
 
 function experiment(arm: CompactionExperimentOptions["arm"]): CompactionExperiment {
-	return new CompactionExperiment({ arm, caseId: "native-fixture", settingsSha256: "a".repeat(64) });
+	return new CompactionExperiment({ arm, caseId: "native-fixture", settingsSha256: SETTINGS_SHA256 });
 }
 
 function reply(input: number, output: number, text: string, reason: "stop" | "length" = "stop"): AssistantMessage {
@@ -103,6 +119,8 @@ describe("native compaction experiment request boundary", () => {
 			const [first, recap, restart] = endpoint.calls;
 			expect(first.options?.maxTokens).toBeLessThan(hard);
 			expect(recap.context.tools).toBeUndefined();
+			expect(compactionRecapSource(recap.context)?.messages.at(-1)?.content).toBe(CORRECTION);
+			expect(compactionRecapSource(restart.context)).toBeUndefined();
 			expect(recap.options?.toolChoice).toBe("none");
 			expect(recap.options?.cursorExecHandlers).toBeUndefined();
 			expect(recap.context.messages).toHaveLength(1);
@@ -118,7 +136,7 @@ describe("native compaction experiment request boundary", () => {
 				{ role: "user", content: CORRECTION },
 			]);
 			expect(agent.state.messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant"]);
-			const { receipt, sample } = exp.finishForScorer(true, true);
+			const { receipt, sample } = exp.finishForScorer(true, true, MANIFEST);
 			expect(receipt).toMatchObject({
 				arm,
 				success: true,
@@ -158,6 +176,41 @@ describe("native compaction experiment request boundary", () => {
 			}
 		});
 	}
+
+	it("carries user-authored custom messages verbatim without retaining agent notices", async () => {
+		const exp = experiment("24k-32k");
+		const endpoint = provider([reply(23_999, 1, DEAD_END), reply(25, 5, DEAD_END), reply(20, 2, "done")]);
+		const agent = new Agent({
+			initialState: { model: MODEL, systemPrompt: SYSTEM },
+			compactionExperiment: exp,
+			streamFn: endpoint.stream,
+		});
+		const skill = createCustomMessage(
+			"skill-prompt",
+			CORRECTION,
+			true,
+			undefined,
+			new Date(120).toISOString(),
+			"user",
+		);
+		const notice = createCustomMessage(
+			"notice",
+			"Not an operator ask.",
+			true,
+			undefined,
+			new Date(121).toISOString(),
+			"agent",
+		);
+		await agent.prompt(ORIGINAL);
+		await agent.prompt([skill, notice, createUserMessage("Keep that correction.", 122)]);
+		expect(endpoint.calls).toHaveLength(3);
+		expect(endpoint.calls[2].context.messages).toMatchObject([
+			{ role: "user", content: ORIGINAL },
+			{ role: "user", content: expect.stringContaining(DEAD_END) },
+			{ role: "developer", attribution: "user", content: [{ type: "text", text: CORRECTION }] },
+			{ role: "user", content: "Keep that correction." },
+		]);
+	});
 
 	it("keeps a finite arm limit when catalog window and output limits are unknown", async () => {
 		const exp = experiment("24k-32k");

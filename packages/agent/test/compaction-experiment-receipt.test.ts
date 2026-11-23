@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import type { Model, Usage } from "@veyyon/ai";
-import { CompactionExperimentMeter, toCompactionScorerRow } from "../src/compaction/experiment-receipt";
+import {
+	CompactionExperimentMeter,
+	type CompactionScorerManifest,
+	toCompactionScorerRow,
+} from "../src/compaction/experiment-receipt";
 
 const THRESHOLD = 1000;
 const TIERED = {
@@ -225,10 +229,28 @@ describe("run lifecycle and grading", () => {
 });
 
 describe("scorer projection", () => {
-	it("emits exactly the scorer's sample keys", () => {
-		const m = meter(TIERED, "24k-32k");
+	const MANIFEST: CompactionScorerManifest = {
+		schema_version: 2,
+		model: "fixture/tiered",
+		settings_sha256: SHA,
+		cases: Array.from({ length: 10 }, (_, i) => `case-${i + 1}`),
+		arms: {
+			"36k-48k": { compaction_model: "fixture/tiered", fallback_chain: [], mode: "36k-48k" },
+			"24k-32k": { compaction_model: "fixture/tiered", fallback_chain: [], mode: "24k-32k" },
+			"custom-36": { compaction_model: "fixture/tiered", fallback_chain: [], mode: "36k-48k" },
+		},
+		control: { compaction_model: null, fallback_chain: [] },
+	};
+
+	function receiptFor(arm: string, model: Model = TIERED, compactions = 0) {
+		const m = meter(model, arm);
+		for (let i = 0; i < compactions; i++) m.noteCompaction();
 		m.observe(usage({ input: 1200, output: 3 }));
-		const row = toCompactionScorerRow(m.finish(true));
+		return m.finish(true);
+	}
+
+	it("emits exactly the scorer's sample keys for a matching treatment", () => {
+		const row = toCompactionScorerRow(receiptFor("24k-32k"), MANIFEST);
 		expect(Object.keys(row).sort()).toEqual([
 			"arm",
 			"case",
@@ -245,23 +267,82 @@ describe("scorer projection", () => {
 		expect(row.tokens.long).toEqual({ uncached: 1200, cache_read: 0, cache_write: 0, output: 3 });
 	});
 
-	it("maps a numeric receipt arm to a native preset with armOverride", () => {
-		const receipt = meter(TIERED, "123-456").finish(true);
-		expect(() => toCompactionScorerRow(receipt)).toThrow();
-		expect(toCompactionScorerRow(receipt, "36k-48k").arm).toBe("36k-48k");
+	it("projects a baseline receipt onto baseline or an A/A label", () => {
+		const baseline = receiptFor("baseline");
+		expect(toCompactionScorerRow(baseline, MANIFEST).arm).toBe("baseline");
+		expect(toCompactionScorerRow(baseline, MANIFEST, "aa3").arm).toBe("aa3");
+		expect(() => toCompactionScorerRow(baseline, MANIFEST, "36k-48k")).toThrow();
 	});
 
-	it("allows A/A labels only for baseline receipts", () => {
-		const baseline = meter(TIERED, "baseline").finish(true);
-		expect(toCompactionScorerRow(baseline, "aa3").arm).toBe("aa3");
-		expect(() => toCompactionScorerRow(baseline, "36k-48k")).toThrow();
-		const treatment = meter(TIERED, "36k-48k").finish(true);
-		expect(() => toCompactionScorerRow(treatment, "aa3")).toThrow();
+	it("accepts an arbitrary manifest label whose mode matches the receipt's preset", () => {
+		expect(toCompactionScorerRow(receiptFor("36k-48k"), MANIFEST, "custom-36").arm).toBe("custom-36");
+	});
+
+	it("maps a numeric arm only to the scorer mode with identical thresholds", () => {
+		expect(toCompactionScorerRow(receiptFor("36000-48000"), MANIFEST, "36k-48k").arm).toBe("36k-48k");
+		expect(() => toCompactionScorerRow(receiptFor("24000-32000"), MANIFEST, "36k-48k")).toThrow();
+		expect(() => toCompactionScorerRow(receiptFor("123-456"), MANIFEST, "36k-48k")).toThrow();
+		expect(toCompactionScorerRow(receiptFor("36000-48000"), MANIFEST, "custom-36").arm).toBe("custom-36");
+	});
+
+	it("rejects a receipt from another provider or model", () => {
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k", FLAT), MANIFEST)).toThrow();
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k"), { ...MANIFEST, model: "fixture/other" })).toThrow();
+	});
+
+	it("rejects a receipt whose settings SHA differs from the manifest", () => {
+		const receipt = { ...receiptFor("36k-48k"), settings_sha256: "c".repeat(64) };
+		expect(() => toCompactionScorerRow(receipt, MANIFEST)).toThrow();
+		expect(() =>
+			toCompactionScorerRow(receiptFor("36k-48k"), { ...MANIFEST, settings_sha256: "c".repeat(64) }),
+		).toThrow();
+	});
+
+	it("rejects a case the manifest does not pin", () => {
+		expect(() => toCompactionScorerRow({ ...receiptFor("36k-48k"), case_id: "case-11" }, MANIFEST)).toThrow();
+	});
+
+	it("rejects a treatment whose mode differs from its own preset", () => {
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k"), MANIFEST, "24k-32k")).toThrow();
+		expect(() => toCompactionScorerRow(receiptFor("24k-32k"), MANIFEST, "36k-48k")).toThrow();
+	});
+
+	it("never maps a treatment to the control or an A/A label", () => {
+		const treatment = receiptFor("36k-48k");
+		expect(() => toCompactionScorerRow(treatment, MANIFEST, "baseline")).toThrow();
+		expect(() => toCompactionScorerRow(treatment, MANIFEST, "aa3")).toThrow();
+	});
+
+	it("rejects a policy with a fallback chain or a compaction model other than the receipt's", () => {
+		const withFallback = {
+			...MANIFEST,
+			arms: { ...MANIFEST.arms, "36k-48k": { ...MANIFEST.arms["36k-48k"], fallback_chain: ["fixture/backup"] } },
+		};
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k"), withFallback)).toThrow();
+		const foreign = {
+			...MANIFEST,
+			arms: { ...MANIFEST.arms, "36k-48k": { ...MANIFEST.arms["36k-48k"], compaction_model: "fixture/other" } },
+		};
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k"), foreign)).toThrow();
+		const nullTreatment = {
+			...MANIFEST,
+			arms: { ...MANIFEST.arms, "36k-48k": { ...MANIFEST.arms["36k-48k"], compaction_model: null } },
+		};
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k"), nullTreatment)).toThrow();
+	});
+
+	it("allows a null compaction model only for a baseline with zero compactions", () => {
+		expect(toCompactionScorerRow(receiptFor("baseline"), MANIFEST).compactions).toBe(0);
+		expect(() => toCompactionScorerRow(receiptFor("baseline", TIERED, 1), MANIFEST)).toThrow();
+	});
+
+	it("rejects a manifest that is not schema v2", () => {
+		expect(() => toCompactionScorerRow(receiptFor("36k-48k"), { ...MANIFEST, schema_version: 1 } as never)).toThrow();
 	});
 
 	it("rejects receipts with extra fields or splits that disagree with totals", () => {
-		const receipt = meter(TIERED, "baseline").finish(true);
-		expect(() => toCompactionScorerRow({ ...receipt, prompt: "secret" } as never)).toThrow();
-		expect(() => toCompactionScorerRow({ ...receipt, uncached_input_tokens: 1 })).toThrow();
+		const receipt = receiptFor("baseline");
+		expect(() => toCompactionScorerRow({ ...receipt, prompt: "secret" } as never, MANIFEST)).toThrow();
+		expect(() => toCompactionScorerRow({ ...receipt, uncached_input_tokens: 1 }, MANIFEST)).toThrow();
 	});
 });

@@ -14,12 +14,16 @@ const MODEL_ID_PATTERN = /^[A-Za-z0-9_.:/-]{1,128}$/;
 const SETTINGS_SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ARM_PATTERN = /^(?:baseline|36k-48k|24k-32k|\d{1,6}-\d{1,6})$/;
 const AA_ARM_PATTERN = /^aa[1-5]$/;
-/** Treatment arms the scorer accepts, besides `baseline`. */
-const SCORER_TREATMENT_ARMS: Record<string, true> = {
-	"36k-48k": true,
-	"24k-32k": true,
-	"12k-16k": true,
-	"file-backed": true,
+/**
+ * Receipt arms mapped to the scorer mode with the same thresholds. Other numeric
+ * pairs have no scorer mode and are rejected.
+ */
+const TREATMENT_MODE_BY_RECEIPT_ARM: Record<string, string> = {
+	"36k-48k": "36k-48k",
+	"24k-32k": "24k-32k",
+	"36000-48000": "36k-48k",
+	"24000-32000": "24k-32k",
+	"12000-16000": "12k-16k",
 };
 
 const RECEIPT_KEYS: Record<string, true> = {
@@ -93,6 +97,31 @@ export interface CompactionScorerRow {
 	compactions: number;
 	peak_context: number;
 	wall_ms: number;
+}
+
+/** One arm's frozen policy in the scorer manifest. */
+export interface CompactionScorerArmPolicy {
+	/** `provider/id` of the compaction model, or null for a control that never compacts. */
+	compaction_model: string | null;
+	/** Ordered fallbacks. A v2 receipt runs with none. */
+	readonly fallback_chain: readonly string[];
+}
+
+interface CompactionScorerTreatment extends CompactionScorerArmPolicy {
+	readonly mode: "36k-48k" | "24k-32k" | "12k-16k" | "file-backed";
+}
+
+/**
+ * The identity subset of the scorer's exact v2 manifest that a receipt is checked
+ * against. The full manifest may hold more fields; they are not read here.
+ */
+export interface CompactionScorerManifest {
+	readonly schema_version: 2;
+	readonly model: string;
+	readonly settings_sha256: string;
+	readonly cases: readonly string[];
+	readonly arms: Readonly<Record<string, CompactionScorerTreatment>>;
+	readonly control: CompactionScorerArmPolicy;
 }
 
 type PriceTier = keyof CompactionPriceTierSplits;
@@ -339,28 +368,78 @@ export class CompactionExperimentMeter {
 	}
 }
 
-function resolveScorerArm(receiptArm: string, armOverride: string | undefined): string {
-	const arm = armOverride ?? receiptArm;
-	if (receiptArm === "baseline") {
-		if (arm === "baseline" || AA_ARM_PATTERN.test(arm)) return arm;
-		throw new Error("a baseline receipt may only be relabeled as baseline or an A/A control (aa1-aa5)");
+function validateManifestIdentity(receipt: CompactionExperimentReceipt, manifest: CompactionScorerManifest): void {
+	if (manifest?.schema_version !== 2) throw new Error("scorer manifest must be schema_version 2");
+	if (receipt.model !== manifest.model) throw new Error("receipt model does not match the scorer manifest");
+	if (receipt.settings_sha256 !== manifest.settings_sha256) {
+		throw new Error("receipt settings_sha256 does not match the scorer manifest");
 	}
-	if (AA_ARM_PATTERN.test(arm) || arm === "baseline" || !Object.hasOwn(SCORER_TREATMENT_ARMS, arm)) {
-		throw new Error(`arm ${arm} is not a scorer treatment arm; pass a native preset as armOverride`);
+	if (!Array.isArray(manifest.cases) || !manifest.cases.includes(receipt.case_id)) {
+		throw new Error("receipt case_id is not in the scorer manifest");
 	}
-	return arm;
 }
 
 /**
- * Projects a receipt onto the scorer's sample row. `armOverride` maps a receipt
- * to the scorer's arm name: a native preset for a receipt whose arm is numeric,
- * or an A/A label (`aa1`-`aa5`) for a baseline receipt. It never relabels a
- * treatment as baseline.
- *
- * Throws on any receipt that holds extra or malformed fields, or whose token
- * splits do not sum to its flat totals.
+ * Checks the policy a row runs under: no fallback, and the receipt's own compaction
+ * model. A control may use null, but only for a baseline receipt with no compactions.
  */
-export function toCompactionScorerRow(receipt: CompactionExperimentReceipt, armOverride?: string): CompactionScorerRow {
+function assertArmPolicy(
+	receipt: CompactionExperimentReceipt,
+	arm: string,
+	policy: CompactionScorerArmPolicy,
+	control: boolean,
+): void {
+	if (!Array.isArray(policy?.fallback_chain) || policy.fallback_chain.length !== 0) {
+		throw new Error(`arm ${arm} declares a fallback chain; a v2 receipt runs without fallbacks`);
+	}
+	if (policy.compaction_model === receipt.model) return;
+	if (control && policy.compaction_model === null && receipt.compactions === 0) return;
+	throw new Error(
+		`arm ${arm} compaction model must be the receipt model${control ? " (or null for a control with zero compactions)" : ""}`,
+	);
+}
+
+function validateScorerArm(
+	receipt: CompactionExperimentReceipt,
+	manifest: CompactionScorerManifest,
+	arm: string,
+): void {
+	if (typeof arm !== "string") throw new Error("scorer arm must be a string");
+	const control = arm === "baseline" || AA_ARM_PATTERN.test(arm);
+	if (receipt.arm === "baseline") {
+		if (!control) throw new Error("a baseline receipt requires a baseline or A/A slot");
+		assertArmPolicy(receipt, arm, manifest.control, true);
+		return;
+	}
+	if (control || !CASE_ID_PATTERN.test(arm)) {
+		throw new Error("a treatment receipt requires a treatment arm");
+	}
+	if (!manifest.arms || !Object.hasOwn(manifest.arms, arm))
+		throw new Error("treatment arm is not in the scorer manifest");
+	const mode = TREATMENT_MODE_BY_RECEIPT_ARM[receipt.arm];
+	const policy = manifest.arms[arm];
+	if (!mode || policy?.mode !== mode) throw new Error("receipt thresholds do not match the scorer arm's mode");
+	assertArmPolicy(receipt, arm, policy, false);
+}
+
+/**
+ * Projects a receipt onto the scorer's sample row under the exact v2 manifest.
+ * `arm` names the manifest arm the run is scored as and defaults to the receipt's
+ * own arm.
+ *
+ * Throws when the receipt's model, settings or case is not the manifest's, when the
+ * arm does not match the receipt, or when the arm's policy declares a fallback or a
+ * compaction model other than the receipt's. Throws on any receipt that holds extra
+ * or malformed fields, or whose token splits do not sum to its flat totals.
+ *
+ * Returns exactly the scorer's row keys. The caller adds the v2 policy and telemetry
+ * fields after this validation.
+ */
+export function toCompactionScorerRow(
+	receipt: CompactionExperimentReceipt,
+	manifest: CompactionScorerManifest,
+	arm: string = receipt.arm,
+): CompactionScorerRow {
 	assertExactKeys(receipt, RECEIPT_KEYS, "compaction experiment receipt");
 	if (!CASE_ID_PATTERN.test(receipt.case_id)) throw new Error("case_id must match [a-z0-9-]{1,80}");
 	if (!MODEL_ID_PATTERN.test(receipt.model))
@@ -369,6 +448,8 @@ export function toCompactionScorerRow(receipt: CompactionExperimentReceipt, armO
 		throw new Error("settings_sha256 must be 64 lowercase hex digits");
 	if (!ARM_PATTERN.test(receipt.arm)) throw new Error("arm must be baseline, 36k-48k, 24k-32k, or a numeric N-M");
 	if (typeof receipt.success !== "boolean") throw new Error("success must be a boolean");
+	validateManifestIdentity(receipt, manifest);
+	validateScorerArm(receipt, manifest, arm);
 	const splits = validateSplits(receipt.long_context_price_tier_splits);
 	const totals = sumTotals(splits);
 	if (
@@ -381,7 +462,7 @@ export function toCompactionScorerRow(receipt: CompactionExperimentReceipt, armO
 	}
 	const row: CompactionScorerRow = {
 		case: receipt.case_id,
-		arm: resolveScorerArm(receipt.arm, armOverride),
+		arm,
 		success: receipt.success,
 		tokens: splits,
 		compactions: requireCounter(receipt.compactions, "compactions"),

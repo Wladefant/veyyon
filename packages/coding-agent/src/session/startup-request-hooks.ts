@@ -12,14 +12,15 @@ import {
 	type StreamFn,
 	type ToolCallArgumentTransform,
 } from "@veyyon/agent-core";
+import { compactionRecapSource } from "@veyyon/agent-core/compaction/recap-request";
 import type { Context, Message, Model, SimpleStreamOptions } from "@veyyon/ai";
 import { errorMessage, logger } from "@veyyon/utils";
 import type { ArgotSession } from "argot/session";
 import { expandToolArguments } from "../argot-wire";
 import type { Settings } from "../config/settings";
 import type { ExtensionRunner } from "../extensibility/extensions";
-import { SecretRequestLeases } from "../secrets/request-leases";
 import { bindProducerSecretOwner } from "../secrets/producer-owner";
+import { SecretRequestLeases } from "../secrets/request-leases";
 import type { SessionSecretRuntime } from "../secrets/session-runtime";
 import type { SecretRuntimeLease } from "./agent-session-types";
 import { convertToLlm } from "./messages";
@@ -87,7 +88,7 @@ export function createRequestHooks(
  * The agent's stream function. `onFirstChatDispatch`, the launch-latency marker, fires once, before the
  * first request reaches the provider transport. Each request's payload passes through the session's
  * payload hook, then any `onPayload` the request carries, then the secret lease the request was
- * admitted under.
+ * admitted under. A request branded as a compaction recap skips the session hook and its `onPayload`.
  */
 export function createLeasedStreamFn(
 	requestLeases: SecretRequestLeases,
@@ -106,10 +107,15 @@ export function createLeasedStreamFn(
 				logger.warn("onFirstChatDispatch hook threw", { error: errorMessage(err) });
 			}
 		}
-		const runtime = requestLeases.requestLease(context);
 		const optionsForRequest = streamOptions ?? {};
-		const sessionOnPayload = payloadHook();
-		const requestOnPayload = optionsForRequest.onPayload;
+		// A compaction recap runs under the source request's lease, and bypasses the session payload hook and any
+		// `onPayload` the caller supplied. Redaction still applies to its wire payload.
+		const recapSource = compactionRecapSource(context);
+		const recapLease = recapSource ? requestLeases.forContext(recapSource) : undefined;
+		if (recapSource && !recapLease) throw new Error("compaction recap request has no source secret lease");
+		const runtime = recapLease ?? requestLeases.requestLease(context);
+		const sessionOnPayload = recapSource ? undefined : payloadHook();
+		const requestOnPayload = recapSource ? undefined : optionsForRequest.onPayload;
 		const leasedOnPayload =
 			runtime.hasRedactions || sessionOnPayload || requestOnPayload
 				? async (payload: unknown, payloadModel?: Model) => {
