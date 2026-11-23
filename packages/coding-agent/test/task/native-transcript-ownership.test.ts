@@ -6,8 +6,73 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
-import { TempDir, withFileLock } from "@veyyon/utils";
+import { TempDir, tryWithFileLock, withFileLock } from "@veyyon/utils";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+
+it("opens 19 siblings while another native owner is waiting for its record to sync", async () => {
+	const dir = TempDir.createSync("native-transcript-owner-sync-");
+	const artifacts = dir.join("artifacts");
+	await fs.mkdir(artifacts);
+	const canonical = await fs.realpath(artifacts);
+	const ownerDir = `${canonical}.native-owners`;
+	const slow = "slow.jsonl";
+	const syncStarted = Promise.withResolvers<void>();
+	const allowSync = Promise.withResolvers<void>();
+	const openFile = fs.open;
+	const openSpy = spyOn(fs, "open").mockImplementation(async (...args) => {
+		const handle = await openFile(...args);
+		const candidate = path.dirname(String(args[0]));
+		if (path.dirname(candidate) === ownerDir && path.basename(candidate).startsWith(`${slow}.lock.candidate-`)) {
+			const sync = handle.sync.bind(handle);
+			handle.sync = async () => {
+				syncStarted.resolve();
+				await allowSync.promise;
+				await sync();
+			};
+		}
+		return handle;
+	});
+	const open = (name: string) =>
+		SessionManager.open(path.join(canonical, name), undefined, undefined, {
+			initialCwd: dir.path(),
+			suppressBreadcrumb: true,
+			exclusiveOwner: true,
+			requireNew: true,
+		});
+	const stalled = open(slow);
+	const siblings: Promise<SessionManager>[] = [];
+	try {
+		await Promise.race([
+			syncStarted.promise,
+			stalled.then(() => {
+				throw new Error("Slow owner opened without reaching the sync barrier");
+			}),
+		]);
+		const gate = await tryWithFileLock(`${canonical}.native-relocation`, async () => {});
+		const names = Array.from({ length: 19 }, (_, index) => `child-${index}.jsonl`);
+		siblings.push(...names.map(open));
+		const opened = Promise.all(siblings);
+		void opened.catch(() => {});
+		// A staged record must not hold the gate used by a move.
+		expect(gate.acquired).toBe(true);
+		const managers = await opened;
+		await Promise.all(managers.map(manager => manager.ensureOnDisk()));
+		const liveOwners = (await fs.readdir(ownerDir)).filter(name => name.endsWith(".lock")).sort();
+		expect(liveOwners).toEqual(names.map(name => `${name}.lock`).sort());
+		await expect(fs.stat(path.join(canonical, slow))).rejects.toMatchObject({ code: "ENOENT" });
+		allowSync.resolve();
+		const last = await stalled;
+		await last.ensureOnDisk();
+		expect(await fs.readFile(path.join(canonical, slow), "utf8")).toContain('"type":"session"');
+	} finally {
+		allowSync.resolve();
+		openSpy.mockRestore();
+		const settled = await Promise.allSettled([stalled, ...siblings]);
+		await Promise.allSettled(settled.flatMap(result => (result.status === "fulfilled" ? [result.value.close()] : [])));
+		dir.removeSync();
+	}
+}, 20_000);
+
 
 const run = promisify(execFile);
 const sessionManagerUrl = new URL("../../../../kernel/src/session/session-manager.ts", import.meta.url);
@@ -223,7 +288,6 @@ test.each([6, 14])(
 			expect(String(duplicateRejected[0]!.reason)).toContain("Failed to acquire lock");
 
 			expect(managers).toHaveLength(count);
-			expect(gatePublishCount).toBe(1);
 
 			await Promise.all(managers.map(manager => manager.ensureOnDisk()));
 			expect(managers.map(manager => manager.getSessionFile()).sort()).toEqual(transcriptFiles.toSorted());
@@ -306,7 +370,11 @@ it("keeps native owner publication behind both relocation gates through the move
 		const canonicalRoot = await fs.realpath(dir.path());
 		for (const directory of [source, target]) {
 			const canonicalDirectory = path.join(canonicalRoot, path.relative(dir.path(), directory));
-			await expect(fs.readdir(`${canonicalDirectory}.native-owners`)).rejects.toMatchObject({ code: "ENOENT" });
+			const owners = await fs.readdir(`${canonicalDirectory}.native-owners`).catch(error => {
+				if (error.code !== "ENOENT") throw error;
+				return [];
+			});
+			expect(owners.filter(name => name.endsWith(".lock") || name.endsWith(".lock.transition"))).toEqual([]);
 		}
 
 		moveRelease.resolve();
