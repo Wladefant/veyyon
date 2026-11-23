@@ -163,12 +163,13 @@ export class CompactionExperiment {
 	): Promise<{ context: Context; options: SimpleStreamOptions }> {
 		const budget = this.#budget;
 		if (!budget) return { context, options };
-		const hardLimit = Math.min(budget.hardLimitTokens, model.contextWindow);
+		const hardLimit = Math.min(budget.hardLimitTokens, model.contextWindow ?? budget.hardLimitTokens);
+		const modelOutputLimit = model.maxTokens ?? hardLimit;
+		if (budget.triggerTokens >= hardLimit) {
+			this.fail(new CompactionExperimentError("The compaction arm does not fit the model context window."));
+		}
 		let tokens = contextTokens(context);
 		if (tokens >= budget.triggerTokens || this.#lastContext >= budget.triggerTokens) {
-			if (budget.triggerTokens >= hardLimit) {
-				this.fail(new CompactionExperimentError("The compaction arm does not fit the model context window."));
-			}
 			const operator = messages.filter(operatorMessage);
 			const original = operator[0];
 			if (!original || !messages.some(message => message.role === "assistant" || message.role === "toolResult")) {
@@ -182,7 +183,7 @@ export class CompactionExperiment {
 				tools: undefined,
 				messages: [userText(`${RECAP_PROMPT}\n\nConversation to recap:\n${transcript}`)],
 			};
-			const maxTokens = Math.min(model.maxTokens, hardLimit - contextTokens(request));
+			const maxTokens = Math.min(modelOutputLimit, hardLimit - contextTokens(request));
 			if (maxTokens <= 0) this.fail(new OversizeCompactionRecapError());
 			const started = performance.now();
 			this.#meter?.noteCompaction();
@@ -234,7 +235,7 @@ export class CompactionExperiment {
 			context = restarted;
 			this.#restarted = true;
 		}
-		const maxTokens = Math.min(options.maxTokens ?? model.maxTokens, hardLimit - tokens);
+		const maxTokens = Math.min(options.maxTokens ?? modelOutputLimit, hardLimit - tokens);
 		if (maxTokens <= 0) this.fail(new OversizeCompactionRecapError());
 		// Do not reattach a provider-side conversation saved before the restart. The cache key,
 		// credentials, cwd and executable tool registry stay with the native session.
@@ -249,8 +250,15 @@ export class CompactionExperiment {
 	observe(message: AssistantMessage): void {
 		this.#meter?.observe(message.usage);
 		this.#lastContext = reportedContext(message);
-		if (this.#budget && this.#lastContext > this.#budget.hardLimitTokens)
-			this.fail(new OversizeCompactionRecapError());
+		if (this.#budget) {
+			const hardLimit = Math.min(
+				this.#budget.hardLimitTokens,
+				this.#model?.contextWindow ?? Number.POSITIVE_INFINITY,
+			);
+			if (this.#lastContext > hardLimit) {
+				this.fail(new CompactionExperimentError("The provider reported a context above the arm's hard limit."));
+			}
+		}
 	}
 
 	noteLegacyCompaction(): void {

@@ -159,6 +159,33 @@ describe("native compaction experiment request boundary", () => {
 		});
 	}
 
+	it("keeps a finite arm limit when catalog window and output limits are unknown", async () => {
+		const exp = experiment("24k-32k");
+		const endpoint = provider([reply(31_999, 1, "done")]);
+		const model = { ...MODEL, contextWindow: null, maxTokens: null };
+		const stream = agentLoop(
+			[createUserMessage(ORIGINAL)],
+			{ systemPrompt: SYSTEM, messages: [], tools: [] },
+			{ model, convertToLlm: identityConverter, compactionExperiment: exp },
+			undefined,
+			endpoint.stream,
+		);
+		await stream.result();
+		expect(endpoint.calls[0].options?.maxTokens).toBeGreaterThan(0);
+		expect(endpoint.calls[0].options?.maxTokens).toBeLessThan(32_000);
+		expect(exp.finish(true)).toMatchObject({ success: true, peak_context_tokens: 32_000 });
+	});
+
+	it("fails the case when measured usage exceeds the hard limit by one token", async () => {
+		const exp = experiment("36k-48k");
+		const endpoint = provider([reply(48_000, 1, "over budget")]);
+		const agent = native(exp, endpoint.stream);
+		await agent.prompt(ORIGINAL);
+		expect(exp.failure).toBeInstanceOf(CompactionExperimentError);
+		expect(exp.finish(true)).toMatchObject({ success: false, peak_context_tokens: 48_001 });
+		expect(endpoint.calls).toHaveLength(1);
+	});
+
 	it("counts the system prompt and tool schemas before a request", async () => {
 		const exp = experiment({ triggerTokens: 2_000, hardLimitTokens: 4_000 });
 		const endpoint = provider([reply(8, 1, DEAD_END)]);
