@@ -246,6 +246,7 @@ async function publishNativeOwner<T>(
 		// Check the live directory once under the gate, against each opener's pre-sync snapshot.
 		batch.directory ??= fs.promises.lstat(directory, { bigint: true }).catch(error => {
 			if (!isEnoent(error)) throw error;
+			return undefined;
 		});
 		const current = await batch.directory;
 		if (
