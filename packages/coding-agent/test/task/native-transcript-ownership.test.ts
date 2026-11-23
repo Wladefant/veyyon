@@ -9,20 +9,23 @@ import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { TempDir, tryWithFileLock, withFileLock } from "@veyyon/utils";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
-it("opens 19 siblings while another native owner is waiting for its record to sync", async () => {
-	const dir = TempDir.createSync("native-transcript-owner-sync-");
-	const artifacts = dir.join("artifacts");
-	await fs.mkdir(artifacts);
-	const canonical = await fs.realpath(artifacts);
-	const ownerDir = `${canonical}.native-owners`;
-	const slow = "slow.jsonl";
+interface OwnerSyncBarrier {
+	started: Promise<void>;
+	release(): void;
+	restore(): void;
+}
+
+function pauseOwnerRecordSync(ownerDir: string, transcript: string): OwnerSyncBarrier {
 	const syncStarted = Promise.withResolvers<void>();
 	const allowSync = Promise.withResolvers<void>();
 	const openFile = fs.open;
 	const openSpy = spyOn(fs, "open").mockImplementation(async (...args) => {
 		const handle = await openFile(...args);
 		const candidate = path.dirname(String(args[0]));
-		if (path.dirname(candidate) === ownerDir && path.basename(candidate).startsWith(`${slow}.lock.candidate-`)) {
+		if (
+			path.dirname(candidate) === ownerDir &&
+			path.basename(candidate).startsWith(`${transcript}.lock.candidate-`)
+		) {
 			const sync = handle.sync.bind(handle);
 			handle.sync = async () => {
 				syncStarted.resolve();
@@ -32,6 +35,17 @@ it("opens 19 siblings while another native owner is waiting for its record to sy
 		}
 		return handle;
 	});
+	return { started: syncStarted.promise, release: allowSync.resolve, restore: () => openSpy.mockRestore() };
+}
+
+it("opens 19 siblings while another native owner is waiting for its record to sync", async () => {
+	const dir = TempDir.createSync("native-transcript-owner-sync-");
+	const artifacts = dir.join("artifacts");
+	await fs.mkdir(artifacts);
+	const canonical = await fs.realpath(artifacts);
+	const ownerDir = `${canonical}.native-owners`;
+	const slow = "slow.jsonl";
+	const sync = pauseOwnerRecordSync(ownerDir, slow);
 	const open = (name: string) =>
 		SessionManager.open(path.join(canonical, name), undefined, undefined, {
 			initialCwd: dir.path(),
@@ -43,7 +57,7 @@ it("opens 19 siblings while another native owner is waiting for its record to sy
 	const siblings: Promise<SessionManager>[] = [];
 	try {
 		await Promise.race([
-			syncStarted.promise,
+			sync.started,
 			stalled.then(() => {
 				throw new Error("Slow owner opened without reaching the sync barrier");
 			}),
@@ -60,13 +74,13 @@ it("opens 19 siblings while another native owner is waiting for its record to sy
 		const liveOwners = (await fs.readdir(ownerDir)).filter(name => name.endsWith(".lock")).sort();
 		expect(liveOwners).toEqual(names.map(name => `${name}.lock`).sort());
 		await expect(fs.stat(path.join(canonical, slow))).rejects.toMatchObject({ code: "ENOENT" });
-		allowSync.resolve();
+		sync.release();
 		const last = await stalled;
 		await last.ensureOnDisk();
 		expect(await fs.readFile(path.join(canonical, slow), "utf8")).toContain('"type":"session"');
 	} finally {
-		allowSync.resolve();
-		openSpy.mockRestore();
+		sync.release();
+		sync.restore();
 		const settled = await Promise.allSettled([stalled, ...siblings]);
 		await Promise.allSettled(
 			settled.flatMap(result => (result.status === "fulfilled" ? [result.value.close()] : [])),
@@ -397,3 +411,58 @@ it("keeps native owner publication behind both relocation gates through the move
 		dir.removeSync();
 	}
 }, 20_000);
+
+test.each([false, true])(
+	"rejects a staged open after a source move (source directory recreated: %s)",
+	async recreateSource => {
+		const dir = TempDir.createSync("native-transcript-moved-during-sync-");
+		const cwdB = dir.join("cwd-b");
+		const sessionDirB = dir.join("sessions-b");
+		let root: SessionManager | undefined;
+		let stalled: Promise<SessionManager> | undefined;
+		let sync: OwnerSyncBarrier | undefined;
+		try {
+			await fs.mkdir(cwdB);
+			root = SessionManager.create(dir.path(), dir.join("sessions-a"));
+			await root.ensureOnDisk();
+			const source = root.getArtifactsDir()!;
+			await fs.mkdir(source);
+			await fs.writeFile(path.join(source, "artifact.txt"), "kept");
+			const ownerDir = `${await fs.realpath(source)}.native-owners`;
+			const child = "child.jsonl";
+			const file = path.join(source, child);
+			sync = pauseOwnerRecordSync(ownerDir, child);
+			stalled = SessionManager.open(file, undefined, undefined, {
+				initialCwd: dir.path(),
+				suppressBreadcrumb: true,
+				exclusiveOwner: true,
+				requireNew: true,
+			});
+			await Promise.race([
+				sync.started,
+				stalled.then(() => {
+					throw new Error("Source child opened without reaching the sync barrier");
+				}),
+			]);
+
+			await root.moveTo(cwdB, sessionDirB);
+			expect(root.getArtifactsDir()).toBe(path.join(sessionDirB, path.basename(source)));
+			expect(await fs.readFile(path.join(root.getArtifactsDir()!, "artifact.txt"), "utf8")).toBe("kept");
+			await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
+			if (recreateSource) await fs.mkdir(source);
+
+			sync.release();
+			await expect(stalled).rejects.toThrow("artifact directory changed");
+			expect(await fs.readdir(ownerDir)).toEqual([]);
+			await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+		} finally {
+			sync?.release();
+			sync?.restore();
+			const child = await stalled?.catch(() => undefined);
+			await child?.close();
+			await root?.close();
+			dir.removeSync();
+		}
+	},
+	20_000,
+);
