@@ -244,9 +244,10 @@ async function publishNativeOwner<T>(
 		gate = await batch.gate;
 		// A move can replace the artifact directory while the sibling owner directory stays in place.
 		// Check the live directory once under the gate, against each opener's pre-sync snapshot.
-		const current = await (batch.directory ??= fs.promises.lstat(directory, { bigint: true }).catch(error => {
+		batch.directory ??= fs.promises.lstat(directory, { bigint: true }).catch(error => {
 			if (!isEnoent(error)) throw error;
-		}));
+		});
+		const current = await batch.directory;
 		if (
 			!current?.isDirectory() ||
 			current.dev !== expected.dev ||
