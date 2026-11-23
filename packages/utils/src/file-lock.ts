@@ -24,6 +24,8 @@ export interface FileLockOptions {
 	contentionTimeoutMs?: number;
 	/** Non-secret labels for the asynchronous transaction, used only on a stall. */
 	queueContext?: { owner?: string; site: string };
+	/** For async locks, run validated publication under a caller's guard. Await and return the callback once. */
+	publishUnder?: <T>(publish: () => Promise<T>) => Promise<T>;
 }
 
 /** An exclusive advisory lock handle. Releasing an already-released handle is idempotent and safe. */
@@ -815,12 +817,15 @@ function isWindowsRetirementAccessConflict(error: unknown): boolean {
 	return process.platform === "win32" && isPublicationAccessConflict(error);
 }
 
-async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
+async function tryAcquireLock(
+	lockPath: string,
+	publishUnder?: FileLockOptions["publishUnder"],
+): Promise<LockLease | null> {
 	const candidate = await prepareCandidate(lockPath);
 	if (candidate === null) return null;
 	let published = false;
 	let handedOff = false;
-	try {
+	const publish = async () => {
 		await assertParentIdentity(lockPath, candidate.parentIdentity);
 		if ((await inspectLockDirectory(getTransitionPath(lockPath))) !== null) return null;
 		if ((await inspectLockDirectory(lockPath)) !== null) return null;
@@ -845,8 +850,13 @@ async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 			published = !(await withdrawCandidate(lockPath, candidate.path, candidate.observation));
 			return null;
 		}
-		handedOff = true;
+		// Transfer ownership only after the caller's publication guard has completed.
 		return candidate.lease;
+	};
+	try {
+		const lease = publishUnder ? await publishUnder(publish) : await publish();
+		handedOff = lease !== null;
+		return lease;
 	} finally {
 		if (!published) {
 			await discardCandidate(candidate.path, candidate.observation);
@@ -1008,12 +1018,16 @@ function releaseLockSync(lockPath: string, expected: LockLease | string): void {
  * to be fixed in the acquire loop. The grace that IS consulted is 1s against a
  * default retry window of 50 x 100ms, so it stays reachable inside one acquire.
  */
-async function reapStaleAndAcquire(lockPath: string, opts: FilesystemLockOptions): Promise<LockLease | null> {
+async function reapStaleAndAcquire(
+	lockPath: string,
+	opts: FilesystemLockOptions,
+	publishUnder?: FileLockOptions["publishUnder"],
+): Promise<LockLease | null> {
 	const observation = await inspectLockDirectory(lockPath);
 	if (!observation || !observationIsStale(observation, opts.staleMs, Date.now())) return null;
 	const retired = await retireObservedLock(lockPath, observation, { kind: "stale", staleMs: opts.staleMs });
 	if (retired !== "removed") return null;
-	return await tryAcquireLock(lockPath);
+	return tryAcquireLock(lockPath, publishUnder);
 }
 
 /** Synchronous twin of {@link reapStaleAndAcquire}. */
@@ -1129,7 +1143,9 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 		for (let attempt = 0; ; attempt++) {
 			if (attempt > 0 && deadline !== undefined && performance.now() >= deadline) break;
 			await settleTransition(lockPath, opts.staleMs);
-			const lease = (await tryAcquireLock(lockPath)) ?? (await reapStaleAndAcquire(lockPath, opts));
+			const lease =
+				(await tryAcquireLock(lockPath, options.publishUnder)) ??
+				(await reapStaleAndAcquire(lockPath, opts, options.publishUnder));
 			if (lease !== null) {
 				turn.phase = "holding";
 				return async () => {
@@ -1235,7 +1251,7 @@ export async function tryWithFileLock<T>(
 	const lockPath = getLockPath(filePath);
 	for (let attempt = 0; attempt < 2; attempt++) {
 		await settleTransition(lockPath, opts.staleMs);
-		const lease = await tryAcquireLock(lockPath);
+		const lease = await tryAcquireLock(lockPath, options.publishUnder);
 		if (lease !== null) {
 			try {
 				return { acquired: true, value: await fn() };
