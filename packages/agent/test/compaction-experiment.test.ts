@@ -7,7 +7,7 @@ import { agentLoop } from "../src/agent-loop";
 import { CompactionExperimentError, OversizeCompactionRecapError } from "../src/compaction/errors";
 import { CompactionExperiment, type CompactionExperimentOptions } from "../src/compaction/experiment";
 import type { CompactionScorerManifest } from "../src/compaction/experiment-receipt";
-import { createCustomMessage } from "../src/compaction/messages";
+import { createCustomMessage, defaultConvertToLlm } from "../src/compaction/messages";
 import { compactionRecapSource } from "../src/compaction/recap-request";
 import type { StreamFn } from "../src/types";
 import { createAssistantMessage, createUserMessage, identityConverter } from "./helpers";
@@ -183,6 +183,7 @@ describe("native compaction experiment request boundary", () => {
 		const agent = new Agent({
 			initialState: { model: MODEL, systemPrompt: SYSTEM },
 			compactionExperiment: exp,
+			convertToLlm: defaultConvertToLlm,
 			streamFn: endpoint.stream,
 		});
 		const skill = createCustomMessage(
@@ -201,7 +202,7 @@ describe("native compaction experiment request boundary", () => {
 			new Date(121).toISOString(),
 			"agent",
 		);
-		await agent.prompt(ORIGINAL);
+		await agent.prompt(createUserMessage(ORIGINAL, 119));
 		await agent.prompt([skill, notice, createUserMessage("Keep that correction.", 122)]);
 		expect(endpoint.calls).toHaveLength(3);
 		expect(endpoint.calls[2].context.messages).toMatchObject([
