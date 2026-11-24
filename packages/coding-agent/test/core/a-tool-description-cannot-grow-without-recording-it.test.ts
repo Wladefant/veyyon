@@ -66,7 +66,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/image-gen": 110,
 	"tools/inspect-image": 260,
 	"tools/inspect-image-system": 192,
-	"tools/irc": 1102,
+	// 1102 -> 1107: restore `current model`, `never infer model identity from a message body`, and verified roster IDs.
+	"tools/irc": 1107,
 	"tools/isolation-error": 293,
 	"tools/isolation-recovery-hint": 83,
 	"tools/isolation-summary": 589,
@@ -105,7 +106,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 23591;
+const RECORDED_TOTAL = 23596;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),
