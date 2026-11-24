@@ -347,12 +347,34 @@ for (const consumer of allTracked) {
 
 const reverse = new Map();
 for (const graph of [ordinaryReverse, symbolReverse, conservativeReverse, refReverse, cliReverse]) for (const [dependency, consumers] of graph) for (const consumer of consumers) edge(reverse, dependency, consumer);
+function markdownConsumers(file) {
+  if (path.posix.basename(file).toLowerCase() === 'changelog.md') {
+    const dir = path.posix.dirname(file);
+    // The root changelog is generated. These tests read member changelogs, not the root copy.
+    if (dir === '.' || !packageRecords.some(record => record.dir === dir)) return [];
+    const readers = [
+      'scripts/changelog-version-headings-are-unique.test.ts',
+      'scripts/rolling-a-changelog-entry-into-a-version-is-not-deleting-it.test.ts',
+      'scripts/sync-root-changelog.test.ts',
+      'scripts/write-root-changelog-refuses-to-delete-entries.test.ts',
+    ];
+    if (dir === 'packages/coding-agent') readers.push('apps/site/deploy.test.ts');
+    return readers.filter(test => tests.has(test));
+  }
+  // Literal mentions are not proof that source or metadata depends on Markdown content.
+  return [...(refReverse.get(file) ?? [])].filter(consumer => tests.has(consumer));
+}
+
 function reachableFrom(rootFile) {
   const distances = new Map([[rootFile, 0]]);
   const queue = [rootFile];
+  const markdown = /\.md$/i.test(rootFile);
+  if (markdown) for (const test of markdownConsumers(rootFile)) distances.set(test, 1);
   for (let i = 0; i < queue.length; i++) {
     const file = queue[i];
-    for (const next of reverse.get(file) ?? []) if (!distances.has(next)) {
+    // Keep real module imports of Markdown assets, such as Bun's text imports for prompts.
+    const consumers = markdown && i === 0 ? ordinaryReverse.get(file) : reverse.get(file);
+    for (const next of consumers ?? []) if (!distances.has(next)) {
       distances.set(next, distances.get(file) + 1);
       queue.push(next);
     }

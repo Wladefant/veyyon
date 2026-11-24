@@ -72,10 +72,12 @@ function createGitFixture(files: Record<string, string>): { fixtureDir: string; 
 }
 
 describe("OVH related-test selector", () => {
-	it("selects nearby tests for coding-agent settings without falling back to the package", () => {
+	it("keeps coding-agent settings dependencies when the same change touches changelogs", () => {
 		const changedFile = "packages/coding-agent/src/config/settings.ts";
 		const changedTest = "scripts/ovh-test-shards.test.ts";
-		const output = runSelector([changedFile, changedTest]);
+		const rootChangelog = "CHANGELOG.md";
+		const memberChangelog = "packages/coding-agent/CHANGELOG.md";
+		const output = runSelector([changedFile, changedTest, rootChangelog, memberChangelog]);
 		const selectedTests = parseSelectedTests(output);
 		const count = selectedTests.length;
 
@@ -86,6 +88,10 @@ describe("OVH related-test selector", () => {
 		expect(output).toContain(": transitive;");
 		expect(output).toContain("packages/coding-agent/test/config-hot-reload.test.ts");
 		expect(selectedTests).toContain(changedTest);
+		expect(output).toContain(`${rootChangelog}: transitive; transitive tests=0; selected=0`);
+		expect(output).toContain(`${memberChangelog}: transitive; transitive tests=5; selected=5`);
+		expect(selectedTests).toContain("scripts/changelog-version-headings-are-unique.test.ts");
+		expect(selectedTests).toContain("apps/site/deploy.test.ts");
 	}, 120000);
 
 	describe("git fixture regressions", () => {
