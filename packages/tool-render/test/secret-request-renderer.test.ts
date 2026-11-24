@@ -102,7 +102,7 @@ describe("secret_request renderer", () => {
 	it("renders consume and get/cancel actions without label or provider", () => {
 		const consumeSummary = render("Summary", {
 			args: { action: "consume", secretRef: "ref-999", tool: "bash", purpose: "deploy" },
-			result: makeMetadataResult({ status: "consumed", label: undefined, provider: undefined }, "ref-999"),
+			result: makeMetadataResult({ status: "consumed", purpose: "deploy", label: undefined, provider: undefined }),
 		});
 		expect(consumeSummary).toContain("consume");
 		expect(consumeSummary).toContain("consumed");

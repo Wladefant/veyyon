@@ -1106,8 +1106,12 @@ describe("IRC", () => {
 			expect(session.agent.hasIrcInterrupts?.()).toBe(false);
 			expect(queued).toHaveLength(1);
 			const parentSteer = queued[0];
-			expect(parentSteer?.role).toBe("user");
-			if (parentSteer?.role !== "user") throw new Error("expected queued parent IRC steer");
+			expect(parentSteer).toMatchObject({
+				role: "custom",
+				customType: "irc:incoming",
+				details: { id: "msg-parent", relation: "parent", streamingSteer: true },
+			});
+			if (parentSteer?.role !== "custom") throw new Error("expected queued parent IRC steer");
 			expect(parentSteer.content).toContain("change approach");
 		});
 
