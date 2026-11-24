@@ -2549,6 +2549,16 @@ export class SessionManager {
 			operatorNotices: this.#operatorNotices,
 			coolCompactedHistory: true,
 		});
+		// A draft can have a planned path before it is written. Reloading that path must not
+		// materialize a different transcript that cannot be rolled back to the draft's identity.
+		if (
+			resolvedSessionFile === this.#sessionFile &&
+			loaded.entries.length === 0 &&
+			!this.#shouldHaveSessionFile() &&
+			this.#storage.existsStateSync(resolvedSessionFile) === "absent"
+		) {
+			return;
+		}
 		await this.#switchToLoadedFile(resolvedSessionFile, loaded);
 	}
 

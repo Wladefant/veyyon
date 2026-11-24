@@ -137,7 +137,7 @@ import { promisify } from "node:util";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { DEFAULT_COMPACTION_SETTINGS, KEEP_NOTHING_ENTRY_ID, prepareCompaction } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import type { AssistantMessage, Model, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
@@ -858,10 +858,10 @@ async function resumeSession(
 	manager: SessionManager,
 	root: string,
 	reply: AssistantMessage,
+	bundled: Model = requireBundledModel("anthropic", "claude-sonnet-4-5"),
 ): Promise<{ session: AgentSession; close: () => Promise<void> }> {
 	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
-	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
+	authStorage.setRuntimeApiKey(bundled.provider, "test-key");
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
@@ -874,7 +874,17 @@ async function resumeSession(
 			streamFn: () => {
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
-					stream.push({ type: "done", reason: "stop", message: { ...reply, timestamp: Date.now() } });
+					stream.push({
+						type: "done",
+						reason: "stop",
+						message: {
+							...reply,
+							api: bundled.api,
+							provider: bundled.provider,
+							model: bundled.id,
+							timestamp: Date.now(),
+						},
+					});
 					stream.end();
 				});
 				return stream;
@@ -964,11 +974,9 @@ const RESUMED_REPLY: AssistantMessage = {
 };
 
 /**
- * The compactions a resumed session's keep boundary rests on, each resumed onto
- * `anthropic/claude-sonnet-4-5` ({@link resumeSession}): a summary every model reads, and a
- * server-side window the branch's default model minted. The running model cannot read the window,
- * and the context built from the branch still replays it, so a pass that resolved the boundary for
- * the running model treated the whole session as live and read it back.
+ * A resumed session keeps its compacted history on disk behind either a local
+ * summary or a server-side window it can replay. A resume onto another
+ * provider may re-expand that window; the cross-provider cases cover that path.
  */
 const RESUMED_BOUNDARIES: { boundary: string; newest: NewestCompaction }[] = [
 	{ boundary: "a summary", newest: {} },
@@ -1957,7 +1965,8 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			const inMemory = () => compacted.filter(entry => coldFieldsOf(entry) === undefined).map(entry => entry.id);
 			expect(inMemory()).toEqual([]);
 
-			const { session, close } = await resumeSession(manager, path.dirname(fixture.dir), RESUMED_REPLY);
+			const model = arm.newest.windowBy ? requireBundledModel("openai-codex", "gpt-5.5") : undefined;
+			const { session, close } = await resumeSession(manager, path.dirname(fixture.dir), RESUMED_REPLY, model);
 			try {
 				await session.prompt("after the resume");
 				await session.agent.waitForIdle();

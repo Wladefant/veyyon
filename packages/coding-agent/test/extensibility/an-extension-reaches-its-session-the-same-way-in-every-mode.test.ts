@@ -44,7 +44,7 @@ import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { logger } from "@veyyon/utils";
+import { logger, Snowflake } from "@veyyon/utils";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
@@ -159,12 +159,13 @@ const HOSTS: Record<string, Host> = {
 				agent: { name: "task", description: "probe", systemPrompt: "probe", source: "bundled" },
 				task: "probe",
 				index: 0,
-				id: "extension-host-probe",
+				id: `extension-host-probe-${Snowflake.next()}`,
 				modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 				enableLsp: false,
 				settings: Settings.isolated({}),
 			});
 			expect(result.aborted).toBe(false);
+			expect(result.exitCode, result.stderr).toBe(0);
 			// The run is over, so the members the extension reads are swapped in only now: the mock's own
 			// `abort` and `compact` serve the run itself.
 			Object.assign(session, {

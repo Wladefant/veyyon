@@ -55,7 +55,7 @@
 
 import { afterEach, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
-import { createSimulation, type Simulation, simTool } from "./harness";
+import { bulkProse, createSimulation, type Simulation, simTool } from "./harness";
 import { describeViolations, pairingViolations, toolCallsIn } from "./invariants";
 
 let sim: Simulation | undefined;
@@ -81,8 +81,10 @@ const COMPACTING = {
 	"compaction.remote": false,
 } as const;
 
-/** Enough text to cross a 12k threshold in one prompt. */
-const BULK = `bulk. ${"user bulk. ".repeat(6000)}`;
+// Keep the historical turn larger than the retained window, but below the
+// pre-prompt compaction threshold. Report the crossing on the second answer.
+const FIRST_PROMPT = `MARKER-FIRST-QUESTION ${bulkProse(2_400)}`;
+const SECOND_PROMPT = "Keep this question and answer in the recent window.";
 
 function texts(messages: readonly AgentMessage[]): string {
 	return messages
@@ -124,14 +126,14 @@ it("sends the summary after a reload, and not the turns it replaced", async () =
 				return;
 			}
 			outbound.push([...turn.context.messages]);
-			turn.usage({ input: 400, output: 40 });
+			turn.usage({ input: turn.call === 2 ? 13_000 : 400, output: 40 });
 			turn.text(`answer ${turn.call}`);
 			turn.finish();
 		},
 	});
 
-	await sim.session.prompt("MARKER-FIRST-QUESTION");
-	await sim.session.prompt(BULK);
+	await sim.session.prompt(FIRST_PROMPT);
+	await sim.session.prompt(SECOND_PROMPT);
 	expect(summarizerCalls).toBe(1);
 
 	reopened = await sim.reopen();
@@ -161,14 +163,14 @@ it("keeps the pre-compaction history in the stored transcript", async () => {
 				turn.finish();
 				return;
 			}
-			turn.usage({ input: 400, output: 40 });
+			turn.usage({ input: turn.call === 2 ? 13_000 : 400, output: 40 });
 			turn.text(`answer ${turn.call}`);
 			turn.finish();
 		},
 	});
 
-	await sim.session.prompt("MARKER-FIRST-QUESTION");
-	await sim.session.prompt(BULK);
+	await sim.session.prompt(FIRST_PROMPT);
+	await sim.session.prompt(SECOND_PROMPT);
 
 	reopened = await sim.reopen();
 
@@ -185,7 +187,9 @@ it("keeps the pre-compaction history in the stored transcript", async () => {
 		.getEntries()
 		.filter(entry => entry.type === "compaction")
 		.map(entry => (entry as { summary?: string }).summary ?? "");
-	expect(summaries).toEqual(["SUMMARY-OF-EVERYTHING-BEFORE"]);
+	expect(summaries).toEqual([
+		"No prior history.\n\n---\n\n**Turn Context (split turn):**\n\nSUMMARY-OF-EVERYTHING-BEFORE",
+	]);
 });
 
 it("sends a request a provider accepts after reloading a compacted session", async () => {
@@ -202,7 +206,7 @@ it("sends a request a provider accepts after reloading a compacted session", asy
 				return;
 			}
 			outbound.push([...turn.context.messages]);
-			turn.usage({ input: 400, output: 40 });
+			turn.usage({ input: turn.call === 4 ? 13_000 : 400, output: 40 });
 			// Every live turn runs the tool, so the history the compaction cuts through
 			// is full of pairs and a cut in the wrong place is expressible.
 			if (turn.call % 2 === 1) {
@@ -215,8 +219,8 @@ it("sends a request a provider accepts after reloading a compacted session", asy
 		},
 	});
 
-	await sim.session.prompt("MARKER-FIRST-QUESTION");
-	await sim.session.prompt(BULK);
+	await sim.session.prompt(FIRST_PROMPT);
+	await sim.session.prompt(SECOND_PROMPT);
 
 	reopened = await sim.reopen();
 	await reopened.session.prompt("MARKER-AFTER-RELOAD");
@@ -242,14 +246,14 @@ it("does not re-summarize the history it inherited", async () => {
 				turn.finish();
 				return;
 			}
-			turn.usage({ input: 400, output: 40 });
+			turn.usage({ input: turn.call === 2 ? 13_000 : 400, output: 40 });
 			turn.text(`answer ${turn.call}`);
 			turn.finish();
 		},
 	});
 
-	await sim.session.prompt("MARKER-FIRST-QUESTION");
-	await sim.session.prompt(BULK);
+	await sim.session.prompt(FIRST_PROMPT);
+	await sim.session.prompt(SECOND_PROMPT);
 	expect(summarizerCalls).toBe(1);
 
 	reopened = await sim.reopen();
