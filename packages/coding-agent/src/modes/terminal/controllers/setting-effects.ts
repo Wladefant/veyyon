@@ -121,18 +121,6 @@ function applySampling(knob: SamplingKnob): SettingEffect {
 	};
 }
 
-/**
- * Secret settings own live process state, not only persisted configuration. The effect returns
- * the coordinator-backed transition rather than dropping its promise, so rapid toggles keep their
- * initiation order and a caller that awaits the effect observes the committed runtime.
- */
-function refreshSecrets(id: SettingPath): SettingEffect {
-	return ctx =>
-		ctx.session.refreshSecrets().catch(err => {
-			ctx.showError(`Failed to apply "${id}" to the secret runtime: ${errorMessage(err)}`);
-		});
-}
-
 const EFFECTS: { readonly [P in SettingPath]?: SettingEffect } = {
 	// Auth storage and the model registry capture the profile-sharing backing store at startup.
 	// Persisting a different posture without replacing both atomically would leave the UI
@@ -226,17 +214,25 @@ const EFFECTS: { readonly [P in SettingPath]?: SettingEffect } = {
 
 	// Live subscribe/unsubscribe of MCP update injection.
 	"mcp.notifications": (ctx, value) => ctx.mcpManager?.setNotificationsEnabled(value as boolean),
-
-	"secrets.enabled": refreshSecrets("secrets.enabled"),
-	"secrets.defaultTtl": refreshSecrets("secrets.defaultTtl"),
-	"secrets.auditLog": refreshSecrets("secrets.auditLog"),
-	"secrets.expiryWarnings": refreshSecrets("secrets.expiryWarnings"),
 };
+
+/**
+ * Secret settings own live process state, not only persisted configuration. The effect returns
+ * the coordinator-backed transition rather than dropping its promise, so rapid toggles keep their
+ * initiation order and a caller that awaits the effect observes the committed runtime.
+ */
+function refreshSecrets(id: string): SettingEffect {
+	return ctx =>
+		ctx.session.refreshSecrets().catch(err => {
+			ctx.showError(`Failed to apply "${id}" to the secret runtime: ${errorMessage(err)}`);
+		});
+}
 
 /** The live effect of flipping `id` in the settings UI, or `undefined` when storing it is all it needs. */
 export function settingEffect(id: string): SettingEffect | undefined {
 	// An own-key probe: the table is an object literal, and `toString` is not a setting.
 	if (Object.hasOwn(EFFECTS, id)) return EFFECTS[id as SettingPath];
+	if (id.startsWith("secrets.")) return refreshSecrets(id);
 	if (isSamplingKnob(id)) return applySampling(id);
 	return undefined;
 }

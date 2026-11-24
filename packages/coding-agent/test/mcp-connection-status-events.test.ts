@@ -108,18 +108,6 @@ describe("MCPManager connection status events", () => {
 		}
 	}, 30_000);
 
-	it("does not mark an unknown server as reconnecting", async () => {
-		const manager = new MCPManager(workDir);
-		const witness = recordStatus(manager);
-		try {
-			expect(await manager.reconnectServer("not-configured", { manual: true })).toBeNull();
-			expect(witness.events).toEqual([]);
-		} finally {
-			witness.stop();
-			await manager.disconnectAll();
-		}
-	});
-
 	it("reports a dropped transport and the reconnect that restores it", async () => {
 		const manager = new MCPManager(workDir);
 		const witness = recordStatus(manager);

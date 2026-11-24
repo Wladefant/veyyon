@@ -2365,9 +2365,6 @@ export class MCPManager {
 			return pending;
 		}
 
-		const config = this.getServerConfig(name);
-		if (!config) return null;
-
 		if (this.#tripReconnectBreaker(name)) {
 			// A suspended transport is no longer an event-feed owner. Without
 			// this drain, manual recovery has no oldConnection to retire, and
@@ -2377,9 +2374,8 @@ export class MCPManager {
 			return null;
 		}
 
-		const attempt = this.#doReconnect(name, config);
+		const attempt = this.#doReconnect(name);
 		this.#pendingReconnections.set(name, attempt);
-		this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
 		return attempt.finally(() => this.#pendingReconnections.delete(name));
 	}
 
@@ -2486,9 +2482,11 @@ export class MCPManager {
 		return false;
 	}
 
-	async #doReconnect(name: string, config: MCPServerConfig): Promise<MCPServerConnection | null> {
+	async #doReconnect(name: string): Promise<MCPServerConnection | null> {
 		const oldConnection = this.#connections.get(name);
+		const config = oldConnection?.config ?? this.#serverConfigs.get(name);
 		const source = this.#sources.get(name) ?? oldConnection?._source;
+		if (!config) return null;
 
 		logger.debug("MCP reconnecting", { path: `mcp:${name}` });
 
