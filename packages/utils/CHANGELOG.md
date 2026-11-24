@@ -11,6 +11,7 @@
 ### Fixed
 
 - Apply the destination's Windows DACL when creating an opt-in atomic write stage and refuse to overwrite a file that appears during a create ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
+- Keep Windows NTFS replacement to one rename, and reject new alternate streams or changed attributes before publication ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
 
 ## [1.12.1] - 2026-11-20
 

@@ -42,6 +42,13 @@ function Assert-NoJunctionOrReparse([string]$pathToCheck) {
     }
 }
 
+function Assert-ScratchBase([string]$base, [string]$hostHome) {
+    if ((Test-IsUnderOrSame $base $hostHome) -or (Test-IsUnderOrSame $hostHome $base)) {
+        Die "Scratch base must not contain or be inside the host user profile: $base"
+    }
+    Assert-NoJunctionOrReparse $base
+}
+
 function Assert-NoSourceReparsePoints([string]$dirPath) {
     $rootItem = Get-Item -LiteralPath $dirPath -Force
     if ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
@@ -96,6 +103,7 @@ function Expand-WorkspacePattern([string]$repoDir, [string]$pattern) {
 # Parse custom arguments manually from $args to support '--' syntax seamlessly
 $RepoRoot = $null
 $ScratchRoot = $null
+$SecondaryScratchRoot = $null
 $TimeoutSec = if ($env:VEYYON_TEST_SANDBOX_TIMEOUT_SEC) { [int]$env:VEYYON_TEST_SANDBOX_TIMEOUT_SEC } else { 600 }
 $actualCmdArgs = @()
 
@@ -122,6 +130,15 @@ while ($i -lt $args.Count) {
             if ($i -lt $args.Count) {
                 $ScratchRoot = $args[$i]
             }
+            $i++
+            continue
+        }
+        if ($arg -eq "-SecondaryScratchRoot") {
+            $i++
+            if ($i -ge $args.Count -or $args[$i].StartsWith("-")) {
+                Die "-SecondaryScratchRoot requires an existing directory on another volume"
+            }
+            $SecondaryScratchRoot = $args[$i]
             $i++
             continue
         }
@@ -172,16 +189,17 @@ if (-not $ScratchRoot) {
 
 $ScratchRoot = [System.IO.Path]::GetFullPath($ScratchRoot)
 
-# Guard against ScratchRoot being under real home or being an ancestor of real home
-if (Test-IsUnderOrSame $ScratchRoot $realHome) {
-    Die "ScratchRoot cannot be located under or equal to host user home ($realHome)"
+Assert-ScratchBase $ScratchRoot $realHome
+if ($SecondaryScratchRoot) {
+    $SecondaryScratchRoot = [System.IO.Path]::GetFullPath($SecondaryScratchRoot)
+    Assert-ScratchBase $SecondaryScratchRoot $realHome
+    if (-not (Test-Path -LiteralPath $SecondaryScratchRoot -PathType Container)) {
+        Die "Secondary scratch base must already exist: $SecondaryScratchRoot"
+    }
+    if ([System.IO.Path]::GetPathRoot($SecondaryScratchRoot) -eq [System.IO.Path]::GetPathRoot($ScratchRoot)) {
+        Die "Secondary scratch base must be on another volume"
+    }
 }
-if (Test-IsUnderOrSame $realHome $ScratchRoot) {
-    Die "ScratchRoot cannot be an ancestor of host user home ($realHome)"
-}
-
-# Reject any junctions or reparse points in scratch path or its ancestors
-Assert-NoJunctionOrReparse $ScratchRoot
 # Ensure base ScratchRoot directory exists
 try {
     if (-not (Test-Path $ScratchRoot)) {
@@ -245,29 +263,41 @@ $profileCreated = $false
 $sentinelPath = $null
 $exitCode = 1
 $cleanupFailed = $false
+$secondaryScratch = $null
 
 try {
+    if ($SecondaryScratchRoot) {
+        $candidate = Join-Path $SecondaryScratchRoot $uniqueId
+        if (Test-Path -LiteralPath $candidate) {
+            Die "Secondary scratch directory already exists: $candidate"
+        }
+        [System.IO.Directory]::CreateDirectory($candidate, $ds) | Out-Null
+        $secondaryScratch = $candidate
+        Assert-NoJunctionOrReparse $secondaryScratch
+    }
+
     # 1. Create AppContainer Profile
     $sidStr = [AppContainerLauncher]::CreateProfile($profileName, [ref]$pSid)
     $profileCreated = $true
     Log-Message "Created AppContainer profile $profileName ($sidStr)"
 
-    # 2. Grant AppContainer Package SID to private sessionScratch with (OI)(CI)(F) BEFORE populating
-    $grantAcl = "*$sidStr`:(OI)(CI)(F)"
-    & icacls $sessionScratch /grant $grantAcl /Q | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Die "icacls grant on scratch failed with exit code $LASTEXITCODE"
-    }
-
-    $scratchAcl = Get-Acl -LiteralPath $sessionScratch
-    if (-not $scratchAcl.AreAccessRulesProtected) {
-        Die "sessionScratch DACL inheritance is not protected: $sessionScratch"
-    }
-    $forbiddenSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11")
-    foreach ($rule in $scratchAcl.Access) {
-        $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-        if ($forbiddenSids -contains $ruleSid) {
-            Die "sessionScratch DACL contains public/shared ACE ($ruleSid): $sessionScratch"
+    # Grant this profile access to the private per-run directories, never to the scratch bases.
+    foreach ($scratch in @($sessionScratch, $secondaryScratch)) {
+        if (-not $scratch) { continue }
+        & icacls $scratch /grant "*$sidStr`:(OI)(CI)(F)" /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Die "icacls grant on scratch failed with exit code $LASTEXITCODE"
+        }
+        $scratchAcl = Get-Acl -LiteralPath $scratch
+        if (-not $scratchAcl.AreAccessRulesProtected) {
+            Die "Scratch DACL inheritance is not protected: $scratch"
+        }
+        $forbiddenSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11")
+        foreach ($rule in $scratchAcl.Access) {
+            $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+            if ($forbiddenSids -contains $ruleSid) {
+                Die "Scratch DACL contains public/shared ACE ($ruleSid): $scratch"
+            }
         }
     }
 
@@ -556,6 +586,9 @@ child.on('error', (err) => {
     $cleanEnv["LOCALAPPDATA"] = $guestLocalAppData
     $cleanEnv["TMP"] = $guestTmp
     $cleanEnv["TEMP"] = $guestTmp
+    if ($secondaryScratch) {
+        $cleanEnv["VEYYON_TEST_SECONDARY_TEMP"] = $secondaryScratch
+    }
     $cleanEnv["GUEST_CONFIG_PATH"] = $cmdJsonPath
 
     # Launch inside AppContainer
@@ -595,11 +628,13 @@ child.on('error', (err) => {
             $cleanupFailed = $true
         }
     }
-    if (Test-Path -LiteralPath $sessionScratch) {
+    foreach ($scratch in @($sessionScratch, $secondaryScratch)) {
+        if (-not $scratch -or -not (Test-Path -LiteralPath $scratch)) { continue }
         try {
-            Remove-Item -LiteralPath $sessionScratch -Recurse -Force -ErrorAction Stop
+            Assert-NoJunctionOrReparse $scratch
+            Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction Stop
         } catch {
-            Log-Message "cleanup error: failed to remove session scratch '$sessionScratch': $($_.Exception.Message)"
+            Log-Message "cleanup error: failed to remove session scratch '$scratch': $($_.Exception.Message)"
             $cleanupFailed = $true
         }
     }

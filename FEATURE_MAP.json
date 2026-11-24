@@ -126,7 +126,7 @@
     },
     "writetool-windows-stage": {
       "name": "Windows WriteTool staging",
-      "description": "Create replacement stages with the destination DACL, write through the creating handle, and publish new files without clobbering existing entries.",
+      "description": "Create the stage with the destination DACL and publish via one parent-bound NTFS rename. Refuse conflicting creates and metadata the replacement cannot preserve.",
       "entry_files": [
         "packages/utils/src/windows-file-replace.ts",
         "packages/utils/src/atomic-write.ts",

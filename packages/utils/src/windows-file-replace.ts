@@ -3,10 +3,13 @@
  * supplied to NtCreateFile itself. The exclusive creating handle owns writing, publication and
  * cleanup. A creation never clobbers a target that appears after reservation.
  *
- * A replacement uses one handle-relative rename, without a backup or a second rename. The last
- * check verifies the leaf's FileId and security. Windows does not accept an expected destination
- * FileId or a must-exist flag at rename time. A concurrent change to that leaf after the check
- * remains outside this guarantee (issue #1157).
+ * A replacement uses one parent-handle-relative NTFS POSIX rename. It never moves the old file
+ * aside or copies across a volume. A reader that shares delete access can keep reading the old
+ * file; new opens see the replacement. Interruption before publication leaves the old file in place.
+ *
+ * The last check verifies the leaf's FileId, security and supported metadata. Windows does not
+ * accept an expected destination FileId or a must-exist flag at rename time. A peer that can change
+ * the same leaf after the check is outside this contract (issue #1157).
  */
 import { dlopen, FFIType as ffi, type Pointer, ptr, read, toArrayBuffer } from "bun:ffi";
 import { randomUUID } from "node:crypto";
@@ -55,7 +58,8 @@ const FILE_ATTRIBUTE_TAG_INFO = 9;
 const FILE_ID_INFO = 18;
 const FILE_RENAME_INFORMATION = 10;
 const FILE_RENAME_INFORMATION_EX = 65;
-const RENAME_REPLACE_POSIX = 3;
+const FILE_RENAME_REPLACE_IF_EXISTS = 0x1;
+const FILE_RENAME_POSIX_SEMANTICS = 0x2;
 const FILE_DISPOSITION_INFORMATION_EX = 64;
 const DISPOSITION_DELETE_IGNORING_READONLY = 0x11;
 
@@ -72,6 +76,7 @@ function load() {
 			WriteFile: { args: [u64, ptr, u32, ptr, ptr], returns: i32 },
 			FlushFileBuffers: { args: [u64], returns: i32 },
 			GetFileInformationByHandleEx: { args: [u64, u32, ptr, u32], returns: i32 },
+			GetVolumeInformationByHandleW: { args: [u64, ptr, u32, ptr, ptr, ptr, ptr, u32], returns: i32 },
 			SetFileInformationByHandle: { args: [u64, u32, ptr, u32], returns: i32 },
 		}).symbols,
 		nt: dlopen("ntdll.dll", {
@@ -151,7 +156,7 @@ function openRelative(
 function renameRelative(handle: bigint, root: bigint, leaf: string, replace: boolean): number {
 	const name = Buffer.from(leaf, "utf16le");
 	const info = Buffer.alloc(24 + name.length); // FILE_RENAME_INFORMATION(_EX)
-	if (replace) info.writeUInt32LE(RENAME_REPLACE_POSIX, 0);
+	if (replace) info.writeUInt32LE(FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS, 0);
 	info.writeBigUInt64LE(root, 8);
 	info.writeUInt32LE(name.length, 16);
 	name.copy(info, 20);
@@ -183,6 +188,17 @@ function fileIdOf(handle: bigint, target: string): Buffer {
 	return info;
 }
 
+function assertNtfsVolume(parent: bigint, target: string): void {
+	const { kernel } = api.value;
+	const fsName = Buffer.alloc(64);
+	if (!kernel.GetVolumeInformationByHandleW(parent, null, 0, null, null, null, fsName, fsName.length / 2)) {
+		throw failure("GetVolumeInformationByHandleW", kernel.GetLastError(), target);
+	}
+	if (fsName.toString("utf16le", 0, 10) !== "NTFS\0") {
+		throw new Error(`Refusing to replace ${target}: Windows security-preserving replacement requires NTFS.`);
+	}
+}
+
 function openDestination(root: bigint, leaf: string): { status: number; handle: bigint } {
 	return openRelative(
 		root,
@@ -211,6 +227,15 @@ function assertOnlyUnnamedStream(handle: bigint, target: string): void {
 		if (next === 0) return;
 		offset += next;
 	}
+}
+
+function replaceableAttributes(handle: bigint, target: string): number {
+	const attributes = attributesOf(handle, target);
+	if (attributes & (ATTRIBUTE_REPARSE_POINT | ATTRIBUTE_ENCRYPTED)) {
+		throw new Error(`Refusing to replace ${target}: a replacement cannot keep its reparse point or encryption.`);
+	}
+	assertOnlyUnnamedStream(handle, target);
+	return attributes & CARRIED_ATTRIBUTES;
 }
 
 interface Security {
@@ -338,14 +363,8 @@ export function reserveWindowsWriteStage(target: string, options: { readOnly?: b
 		original = opened.status === 0 ? opened.handle : undefined;
 		let attributes = options.readOnly ? ATTRIBUTE_READONLY : 0;
 		if (original !== undefined) {
-			const current = attributesOf(original, target);
-			if (current & (ATTRIBUTE_REPARSE_POINT | ATTRIBUTE_ENCRYPTED)) {
-				throw new Error(
-					`Refusing to replace ${target}: a replacement cannot keep its reparse point or encryption.`,
-				);
-			}
-			assertOnlyUnnamedStream(original, target);
-			attributes = current & CARRIED_ATTRIBUTES;
+			assertNtfsVolume(parent, target);
+			attributes = replaceableAttributes(original, target);
 		}
 		const stageName = `.veyyon-write-${randomUUID()}.tmp`;
 		const create = (descriptor: Pointer | null) => {
@@ -444,6 +463,9 @@ export function publishWindowsWriteStage(write: WindowsWriteStage): void {
 		try {
 			if (!fileIdOf(original, target).equals(fileIdOf(current.handle, target))) {
 				throw new Error(`Refusing to replace ${target}: the destination changed while the write was staged.`);
+			}
+			if (replaceableAttributes(current.handle, target) !== write.attributes) {
+				throw new Error(`Refusing to replace ${target}: its Windows attributes changed while the write was staged.`);
 			}
 			assertSameSecurity(current.handle, stage, target, "its Windows security changed while the write was staged");
 			// The final rename is by leaf name, not expected FileId. See #1157.

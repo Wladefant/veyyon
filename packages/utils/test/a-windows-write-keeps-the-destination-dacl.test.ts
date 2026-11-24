@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { atomicWriteFilePreservingMode, removeWithRetries } from "@veyyon/utils";
 import {
 	closeWindowsWriteStage,
@@ -65,6 +66,9 @@ describe.skipIf(process.platform !== "win32")("Windows security-preserving file 
 		"creates the stage of an unprotected destination with its explicit deny before any byte exists",
 		() => {
 			const { file, original } = restrictedFile("restricted.txt");
+			const inherited = path.join(dir, "inherited.txt");
+			fs.writeFileSync(inherited, "");
+			expect(dacl(inherited)).not.toBe(original);
 			const stage = reserveWindowsWriteStage(file);
 			try {
 				const stagePath = path.join(dir, stage.stageName);
@@ -223,6 +227,143 @@ describe.skipIf(process.platform !== "win32")("Windows security-preserving file 
 		expect(fs.readFileSync(`${file}:Zone.Identifier`, "utf8")).toContain("ZoneId=3");
 		expect(leftovers()).toEqual([]);
 	});
+
+	it("refuses a stream added to the destination after reservation", () => {
+		const file = path.join(dir, "new-stream.txt");
+		const stream = `${file}:Zone.Identifier`;
+		fs.writeFileSync(file, "initial\n");
+		const stage = reserveWindowsWriteStage(file);
+		try {
+			writeWindowsWriteStage(stage, Buffer.from("updated\n"), false);
+			fs.writeFileSync(stream, "[ZoneTransfer]\r\nZoneId=3\r\n");
+			expect(() => publishWindowsWriteStage(stage)).toThrow(/alternate data streams/);
+		} finally {
+			closeWindowsWriteStage(stage);
+		}
+		expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+		expect(fs.readFileSync(stream, "utf8")).toBe("[ZoneTransfer]\r\nZoneId=3\r\n");
+		expect(leftovers()).toEqual([]);
+	});
+
+	it("refuses to restore a read-only attribute that was removed while staging", () => {
+		const file = path.join(dir, "changed-attributes.txt");
+		fs.writeFileSync(file, "initial\n");
+		fs.chmodSync(file, 0o444);
+		expect(fs.statSync(file).mode & 0o200).toBe(0);
+		const stage = reserveWindowsWriteStage(file);
+		try {
+			writeWindowsWriteStage(stage, Buffer.from("updated\n"), false);
+			fs.chmodSync(file, 0o666);
+			expect(() => publishWindowsWriteStage(stage)).toThrow(/attributes changed while the write was staged/);
+		} finally {
+			closeWindowsWriteStage(stage);
+		}
+		expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+		expect(fs.statSync(file).mode & 0o200).toBe(0o200);
+		expect(leftovers()).toEqual([]);
+	});
+
+	it(
+		"publishes new bytes while a reader keeps the old file open",
+		async () => {
+			const { file, original } = restrictedFile("read-open.txt");
+			const reader = fs.openSync(file, "r");
+			try {
+				await atomicWriteFilePreservingMode(file, "replacement\n", { preserveWindowsDacl: true });
+				expect(fs.readFileSync(reader, "utf8")).toBe("initial\n");
+				expect(fs.readFileSync(file, "utf8")).toBe("replacement\n");
+				expect(dacl(file)).toBe(original);
+			} finally {
+				fs.closeSync(reader);
+			}
+			expect(leftovers()).toEqual([]);
+		},
+		aclTestTimeout,
+	);
+
+	it(
+		"leaves the old bytes and DACL at the destination when the writer exits before publication",
+		() => {
+			const { file, original } = restrictedFile("interrupted.txt");
+			const probe = path.join(dir, "exit-before-publish.ts");
+			const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "../src/windows-file-replace.ts")).href;
+			fs.writeFileSync(
+				probe,
+				`import { statSync, writeSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { reserveWindowsWriteStage, writeWindowsWriteStage } from ${JSON.stringify(moduleUrl)};
+const stage = reserveWindowsWriteStage(process.argv[2]);
+const bytes = Buffer.from("replacement\\n");
+writeWindowsWriteStage(stage, bytes, true);
+if (statSync(join(dirname(stage.target), stage.stageName)).size !== bytes.length) process.exit(22);
+writeSync(1, "staged\\n");
+process.exit(23);
+`,
+			);
+			const child = spawnSync(process.execPath, [probe, file], {
+				cwd: dir,
+				encoding: "utf8",
+				timeout: 10_000,
+				windowsHide: true,
+			});
+			if (child.error) throw child.error;
+			expect(child.stderr).toBe("");
+			expect(child.status).toBe(23);
+			expect(child.stdout).toBe("staged\n");
+			expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+			expect(dacl(file)).toBe(original);
+		},
+		aclTestTimeout,
+	);
+
+	it("does not replace a directory or touch its contents", async () => {
+		const target = path.join(dir, "destination");
+		fs.mkdirSync(target);
+		fs.writeFileSync(path.join(target, "entry.txt"), "keep\n");
+		await expect(atomicWriteFilePreservingMode(target, "replacement\n", { preserveWindowsDacl: true })).rejects.toThrow(
+			/it is a directory, and an atomic write would replace it with a regular file/,
+		);
+		expect(() => reserveWindowsWriteStage(target)).toThrow(/NtCreateFile.*Win32 error/);
+		expect(fs.readdirSync(target)).toEqual(["entry.txt"]);
+		expect(fs.readFileSync(path.join(target, "entry.txt"), "utf8")).toBe("keep\n");
+		expect(leftovers()).toEqual([]);
+	});
+
+	const otherVolume = process.env.VEYYON_TEST_SECONDARY_TEMP;
+	it.skipIf(!otherVolume)(
+		"refuses to publish a stage on another volume without copying or removing either original",
+		async () => {
+			if (!otherVolume) throw new Error("The cross-volume check needs a second scratch volume.");
+			const foreignDir = fs.mkdtempSync(path.join(otherVolume, "w-dacl-"));
+			const target = path.join(dir, "destination.txt");
+			const foreign = path.join(foreignDir, "foreign.txt");
+			try {
+				fs.writeFileSync(target, "destination\n");
+				fs.writeFileSync(foreign, "foreign\n");
+				const destination = reserveWindowsWriteStage(target);
+				try {
+					const source = reserveWindowsWriteStage(foreign);
+					try {
+						writeWindowsWriteStage(source, Buffer.from("replacement\n"), false);
+						// Both stages are real. Place the foreign handle at the publication boundary.
+						expect(() => publishWindowsWriteStage({ ...destination, stage: source.stage })).toThrow(
+							/Publishing the replacement.*Win32 error 17/,
+						);
+					} finally {
+						closeWindowsWriteStage(source);
+					}
+				} finally {
+					closeWindowsWriteStage(destination);
+				}
+				expect(fs.readFileSync(target, "utf8")).toBe("destination\n");
+				expect(fs.readFileSync(foreign, "utf8")).toBe("foreign\n");
+				expect(fs.readdirSync(foreignDir)).toEqual(["foreign.txt"]);
+				expect(leftovers()).toEqual([]);
+			} finally {
+				await removeWithRetries(foreignDir);
+			}
+		},
+	);
 
 	it(
 		"creates a missing file with the directory's normal inherited DACL",
