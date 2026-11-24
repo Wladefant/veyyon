@@ -11,7 +11,6 @@ import { scheduler } from "node:timers/promises";
 import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-import { ANTHROPIC_API_ENDPOINT, ANTIGRAVITY_ENDPOINTS, CLOUD_CODE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	calculateRetryBackoffDelayMs,
@@ -46,31 +45,6 @@ import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
 
 // Match the exact socket-close error that the Codex transport emits.
 const CODEX_RETRYABLE_CLOSE = /^websocket closed \((?:1000|1006|1012)\)$/;
-const DNS_LOOKUP_FAILURE = /\bENOTFOUND[\s"']+([a-z0-9.-]+)/i;
-const ANTHROPIC_DNS_HOST = new URL(ANTHROPIC_API_ENDPOINT).hostname;
-const CLOUD_CODE_DNS_HOSTS = [CLOUD_CODE_ENDPOINT, ...ANTIGRAVITY_ENDPOINTS].map(
-	endpoint => new URL(endpoint).hostname,
-);
-
-function isKnownEndpointDnsFailure(message: AssistantMessage, model: Model): boolean {
-	const text = message.errorMessage ?? "";
-	const host = DNS_LOOKUP_FAILURE.exec(text)?.[1]?.toLowerCase();
-	if (!host) return false;
-	const status = message.errorStatus ?? AIError.status({ message: text });
-	if (model.api === "anthropic-messages") {
-		return (
-			status === undefined &&
-			host === ANTHROPIC_DNS_HOST &&
-			URL.parse(model.baseUrl || ANTHROPIC_API_ENDPOINT)?.origin === ANTHROPIC_API_ENDPOINT
-		);
-	}
-	// The Cloud Code Assist sidecar reports the upstream lookup failure in an HTTP 502.
-	return (
-		(model.provider === "google-antigravity" || model.provider === "google-gemini-cli") &&
-		(status === undefined || status === 502) &&
-		CLOUD_CODE_DNS_HOSTS.includes(host)
-	);
-}
 
 /** How a failed turn entered retry handling: which switches the recovery may make. */
 interface RetryEntryOptions {
@@ -78,7 +52,6 @@ interface RetryEntryOptions {
 	fireworksFastFallback?: boolean;
 	hardErrorFallback?: boolean;
 	preserveFailedTurn?: boolean;
-	knownEndpointDns?: boolean;
 }
 
 /** One retry attempt: the failure it answers, and the wait and switches decided for it. */
@@ -98,7 +71,6 @@ interface RetryAttempt {
 	delayMs: number;
 	switchedCredential: boolean;
 	switchedModel: boolean;
-	retryingDnsSelector?: boolean;
 	/** Set when a usage limit pinned the wait to credential availability; the retry-after bump then stays off. */
 	usageLimitWaitMs: number | undefined;
 	quotaMessage?: string;
@@ -138,7 +110,6 @@ export class RetryRuntime {
 	#abortController: AbortController | undefined = undefined;
 	#attempt = 0;
 	#retriedCodexClose = false;
-	readonly #retriedDnsSelectors = new Set<string>();
 	/** Continuations spent on transport deaths inside an unreplayable tool batch;
 	 *  charged against the same budget as a retry, and restored both by a turn that
 	 *  lands and by a new prompt, which is a new incident. */
@@ -185,7 +156,6 @@ export class RetryRuntime {
 		// provider that dies every attempt.
 		this.#batchContinues = 0;
 		this.#retriedCodexClose = false;
-		this.#retriedDnsSelectors.clear();
 	}
 
 	/**
@@ -432,23 +402,7 @@ export class RetryRuntime {
 		) {
 			return true;
 		}
-		const model = this.#session.model;
-		let knownEndpointDns = false;
-		if (
-			model &&
-			msg.stopReason === "error" &&
-			isKnownEndpointDnsFailure(msg, model) &&
-			!this.#host.abortIsDeliberate(msg) &&
-			!isProviderRefusalMessage(msg) &&
-			!AIError.isContextOverflow(msg, model.contextWindow ?? 0) &&
-			!hasReplayUnsafeOutput(msg, this.#session.agent.state.messages)
-		) {
-			const id = this.#classify(msg);
-			knownEndpointDns = (id === 0 || AIError.retriable(id)) && !AIError.is(id, AIError.Flag.UsageLimit);
-		}
-		if (knownEndpointDns) {
-			if (await this.#handleRetryableError(msg, { knownEndpointDns })) return true;
-		} else if (this.#isRetryableError(msg)) {
+		if (this.#isRetryableError(msg)) {
 			if (await this.#handleRetryableError(msg)) return true;
 		} else if (
 			// A non-retryable hard error on a model covered by a configured fallback chain: retrying
@@ -557,18 +511,6 @@ export class RetryRuntime {
 				await this.#parkUsageLimit(attempt, model);
 			}
 			if (!attempt.switchedCredential) await this.#switchModel(attempt, policy.maxDelayMs);
-		}
-		if (options?.knownEndpointDns) {
-			logger.debug("Known endpoint DNS recovery", {
-				sessionId: this.#session.sessionId,
-				generation,
-				attempt: this.#attempt,
-				kind: AIError.stringify(id),
-				policySource: describeRetryPolicySource(policy),
-				maxAttempts: policy.maxRetries,
-				delayMs: attempt.delayMs,
-				selection: attempt.switchedModel ? "fallback" : attempt.retryingDnsSelector ? "same-selector" : "surface",
-			});
 		}
 		if (await this.#closeUnrecoverable(attempt, policy.maxDelayMs)) return false;
 
@@ -680,19 +622,6 @@ export class RetryRuntime {
 		const activeModel = this.#session.model;
 		if (!activeModel) return;
 		const currentSelector = formatRetryFallbackSelector(activeModel, this.#session.thinkingLevel);
-		if (
-			attempt.options?.knownEndpointDns &&
-			!attempt.budgetExhausted &&
-			!this.#retriedDnsSelectors.has(currentSelector)
-		) {
-			const delayMs = Math.max(1, attempt.delayMs, attempt.parsedRetryAfterMs ?? 0);
-			if (maxDelayMs <= 0 || delayMs <= maxDelayMs) {
-				attempt.delayMs = delayMs;
-				this.#retriedDnsSelectors.add(currentSelector);
-				attempt.retryingDnsSelector = true;
-				return;
-			}
-		}
 		const allowModelFallback = attempt.options?.allowModelFallback !== false;
 		// A refusal chain stops at the retry budget: the exhausted-attempt
 		// last resort is for provider failures, not classifier decisions.
@@ -752,9 +681,6 @@ export class RetryRuntime {
 			// The fallback model gets a fresh retry budget — leaving the spent
 			// counter in place would exhaust it again on its first error.
 			this.#attempt = 1;
-		}
-		if (attempt.options?.knownEndpointDns && !switchedModel && !attempt.retryingDnsSelector) {
-			return this.#endWithFailure(message, this.#attempt, attempt.errorMessage);
 		}
 		if (attempt.classifierRefusal && !switchedModel) {
 			this.#attempt = 0;
@@ -928,7 +854,6 @@ export class RetryRuntime {
 		// Reset retry budget for a fresh attempt
 		this.#attempt = 0;
 		this.#retriedCodexClose = false;
-		this.#retriedDnsSelectors.clear();
 
 		// Re-attempt the turn
 		this.#host.scheduleAgentContinue({ delayMs: 1 });
