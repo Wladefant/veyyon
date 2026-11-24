@@ -1,20 +1,18 @@
 /**
- * WHY: A cell's bridge intent must not leak into SearchTool's strict schema, while real
- * cross-type fields still fail validation. It also preserves a registered tool's own i.
- * Unknown-key coercion belongs to the separate validation contract, not this regression.
+ * A cell's bridge intent must not leak into SearchTool's strict schema. A
+ * cross-type field is ignored with a notice, while schema-owned intent survives.
  */
 import { describe, expect, it, vi } from "bun:test";
-import type { AnyAgentTool, AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { AgentTool, AgentToolResult, AnyAgentTool } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { SEARCH_TYPES, SearchTool, type SearchType } from "@veyyon/coding-agent/tools/search/search";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-
-import { SEARCH_TYPES, SearchTool, type SearchType } from "@veyyon/coding-agent/tools/search/search";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
 useIsolatedAgentDir();
@@ -122,27 +120,25 @@ describe("callSessionTool", () => {
 				expect(JSON.stringify(result)).toContain(searchType === "files" ? "fixture.ts" : "needle");
 			}
 		}
-
 	});
 
-	it("rejects SearchTool arguments with fields from another search type", async () => {
-		using tempDir = TempDir.createSync("@js-tool-bridge-invalid-search-");
+	it("keeps SearchTool results and reports ignored fields from another search type", async () => {
+		using tempDir = TempDir.createSync("@js-tool-bridge-search-notice-");
+		await writeFile(path.join(tempDir.path(), "fixture.ts"), "function needle() { return 1; }\n");
 		const session: ToolSession = { ...createSession([]), cwd: tempDir.path() };
 		const registeredSearch: AnyAgentTool = new SearchTool(session);
 		session.getToolByName = name => (name === "search" ? registeredSearch : undefined);
 
-		const invalidFields = [
-			{ type: "files", input: "*.ts", skip: 1, message: 'Search type "files" does not accept: skip.' },
-			{ type: "text", input: "needle", hidden: true, message: 'Search type "text" does not accept: hidden.' },
-			{
-				type: "structure",
-				input: "function needle() { $$$BODY }",
-				case: false,
-				message: 'Search type "structure" does not accept: case.',
-			},
+		const calls = [
+			{ type: "files", input: "*.ts", skip: 1, ignored: "skip" },
+			{ type: "text", input: "needle", hidden: true, ignored: "hidden" },
+			{ type: "structure", input: "function needle() { $$$BODY }", case: false, ignored: "case" },
 		] as const;
-		for (const { message, ...args } of invalidFields) {
-			await expect(callSessionTool("search", args, { session })).rejects.toThrow(message);
+		for (const { ignored, ...args } of calls) {
+			const result = await callSessionTool("search", args, { session });
+			if (typeof result !== "object" || !("text" in result)) throw new Error("Search returned no details");
+			expect(result.text).toContain(`Ignored for a ${args.type} search: ${ignored}.`);
+			expect(result.text).toContain("fixture.ts");
 		}
 	});
 

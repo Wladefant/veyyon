@@ -11,7 +11,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { SecretRequestTool } from "@veyyon/coding-agent/tools/agent/secret-request";
-import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolFactory, type ToolSession } from "@veyyon/coding-agent/tools/index";
+import {
+	BUILTIN_TOOLS,
+	HIDDEN_TOOLS,
+	type Tool,
+	type ToolFactory,
+	type ToolSession,
+} from "@veyyon/coding-agent/tools/index";
 import { GithubTool } from "@veyyon/coding-agent/tools/web/gh";
 import { ArgotSession } from "argot";
 import { makeToolSession } from "./tool-session";

@@ -2,10 +2,15 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseInstalledPluginsRegistry } from "@veyyon/kernel/loader/plugins/installed-registry";
-import { type ProjectFileSnapshot, realProjectPath } from "./project-trust";
 import { hashBoundedFolder } from "./bounded-folder-hash";
+import { type ProjectFileSnapshot, realProjectPath } from "./project-trust";
 
-export const PROJECT_PLUGIN_LIMITS = { maxDepth: 8, maxFiles: 256, maxFileBytes: 1024 * 1024, maxTotalBytes: 16 * 1024 * 1024 } as const;
+export const PROJECT_PLUGIN_LIMITS = {
+	maxDepth: 8,
+	maxFiles: 256,
+	maxFileBytes: 1024 * 1024,
+	maxTotalBytes: 16 * 1024 * 1024,
+} as const;
 const PLUGIN_REGISTRY_HASH_DOMAIN = "veyyon:project-plugin-registry:v1";
 
 /** Snapshot the registry and every payload it names, failing closed on unsafe or incomplete trees. */
@@ -20,7 +25,13 @@ export async function describeProjectPluginRegistry(
 		const registryStat = await fs.stat(realRegistryPath);
 		if (!registryStat.isFile()) return null;
 		const relativeRegistry = path.relative(canonicalRoot, realRegistryPath);
-		if (relativeRegistry === "" || relativeRegistry === ".." || relativeRegistry.startsWith(`..${path.sep}`) || path.isAbsolute(relativeRegistry)) return null;
+		if (
+			relativeRegistry === "" ||
+			relativeRegistry === ".." ||
+			relativeRegistry.startsWith(`..${path.sep}`) ||
+			path.isAbsolute(relativeRegistry)
+		)
+			return null;
 		bytes = await fs.readFile(realRegistryPath);
 	} catch {
 		return null;
@@ -45,8 +56,19 @@ export async function describeProjectPluginRegistry(
 				return null;
 			}
 			const relativePath = path.relative(canonicalRoot, realPath);
-			if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) return null;
-			const scan = await hashBoundedFolder(realPath, canonicalRoot, PROJECT_PLUGIN_LIMITS, "veyyon:plugin-payload:v1");
+			if (
+				relativePath === "" ||
+				relativePath === ".." ||
+				relativePath.startsWith(`..${path.sep}`) ||
+				path.isAbsolute(relativePath)
+			)
+				return null;
+			const scan = await hashBoundedFolder(
+				realPath,
+				canonicalRoot,
+				PROJECT_PLUGIN_LIMITS,
+				"veyyon:plugin-payload:v1",
+			);
 			if (!scan) return null;
 			entry.installPath = resolved;
 			payloads.push({ identity: `${relativePath.split(path.sep).join("/")}\0${realPath}`, hash: scan.hash });

@@ -26,8 +26,8 @@ import {
 	listLiveSessionOwners,
 	SESSION_NOTICE_CAPABILITY,
 	SessionNoticeCapabilityError,
-	sendSessionNotice,
 	type SessionNoticeOwner,
+	sendSessionNotice,
 } from "../../launch/session-notices";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
@@ -630,9 +630,12 @@ function executeList(
 		lines.push("", "Other live sessions (notice capability shown; not in-process lanes):");
 		for (const owner of sessionPeers) {
 			// The roster must not advertise a legacy live owner as a supported notice destination.
-			const noticeSupport = owner.capabilities === undefined
-				? "unverified"
-				: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY) ? "supported" : "unsupported";
+			const noticeSupport =
+				owner.capabilities === undefined
+					? "unverified"
+					: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY)
+						? "supported"
+						: "unsupported";
 			lines.push(
 				`- session:${owner.sessionId} [live; project ${formatSessionNoticeOwnerDisplay(owner.project ?? "unknown")}; cwd ${formatSessionNoticeOwnerDisplay(owner.cwd ?? "unknown")}; notices ${noticeSupport}]`,
 			);

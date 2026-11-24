@@ -4,7 +4,6 @@ import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 import type { ToolCall, TSchema } from "@veyyon/ai";
 import {
 	adaptSchemaForStrict,
-	jsonSchemaToTypeScript,
 	toolWireSchema,
 	validateJsonSchemaValue,
 	validateStrictSchemaEnforcement,
@@ -117,8 +116,14 @@ describe("browser tool schema", () => {
 			name: "known-route",
 			app: { path: "/valid/app" },
 		});
-		expect(validateJsonSchemaValue(wire, { action: "open", name: "headless", app: { path: "/usr/bin/chromium" } }).success).toBe(true);
-		expect(validateJsonSchemaValue(wire, { action: "open", name: "cdp", app: { cdp_url: "http://127.0.0.1:9222" } }).success).toBe(true);
+		expect(
+			validateJsonSchemaValue(wire, { action: "open", name: "headless", app: { path: "/usr/bin/chromium" } })
+				.success,
+		).toBe(true);
+		expect(
+			validateJsonSchemaValue(wire, { action: "open", name: "cdp", app: { cdp_url: "http://127.0.0.1:9222" } })
+				.success,
+		).toBe(true);
 	});
 
 	it("rejects a direct open call without a supported app route before launching", async () => {
@@ -157,7 +162,6 @@ describe("browser tool schema", () => {
 			acquireBrowser.mockRestore();
 		}
 	});
-
 
 	// Reproduces the regression the Codex review flagged on #3647: with default
 	// `tools.intentTracing`, normalizeTools must keep the closed action variants

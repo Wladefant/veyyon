@@ -260,7 +260,12 @@ describe("a project plugin registry does not name plugins until the operator dec
 
 	/** Approve through the operator's own command, so the recorded hash is the one the gate evaluates. */
 	async function approveRegistry(fixture: Fixture): Promise<void> {
-		const result = await runTrustCommand({ cwd: fixture.cwd, agentDir: fixture.agentDir, action: "approve", paths: [] });
+		const result = await runTrustCommand({
+			cwd: fixture.cwd,
+			agentDir: fixture.agentDir,
+			action: "approve",
+			paths: [],
+		});
 		if (result.decision !== "trusted") throw new Error("fixture is wrong: the registry was not approved");
 	}
 
