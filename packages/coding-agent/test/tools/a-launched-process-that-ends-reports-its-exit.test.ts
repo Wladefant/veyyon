@@ -74,6 +74,33 @@ async function projectWith(script: string): Promise<{ dir: string; scriptPath: s
 	return { dir, scriptPath };
 }
 
+/**
+ * A script that prints `output` and exits only after `releaseExit()` runs.
+ * The exit is the trigger for the watcher's `logs` RPC, so gating it lets a test
+ * install its interception before that RPC can be issued.
+ */
+async function projectExitingOnRelease(
+	output: string,
+): Promise<{ dir: string; scriptPath: string; releaseExit: () => Promise<void> }> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-launch-exit-"));
+	cleanupDirs.push(dir);
+	const scriptPath = path.join(dir, "run.ts");
+	const releasePath = path.join(dir, "release");
+	const script = [
+		'import * as fs from "node:fs";',
+		`const release = ${JSON.stringify(releasePath)};`,
+		"const timer = setInterval(() => {",
+		"\tif (!fs.existsSync(release)) return;",
+		"\tclearInterval(timer);",
+		`\tconsole.log(${JSON.stringify(output)});`,
+		"\tprocess.exit(0);",
+		"}, 10);",
+		"",
+	].join("\n");
+	await fs.writeFile(scriptPath, script, "utf8");
+	return { dir, scriptPath, releaseExit: () => fs.writeFile(releasePath, "", "utf8") };
+}
+
 function harness(cwd: string): { tool: LaunchTool; manager: AsyncJobManager; delivered: Delivered[] } {
 	const delivered: Delivered[] = [];
 	const manager = new AsyncJobManager({
@@ -569,7 +596,7 @@ describe("a launched process that ends reports its exit", () => {
 	}, 40_000);
 
 	it("suppresses exit notice when guarded stop succeeds while notice preparation logs RPC is delayed", async () => {
-		const { dir, scriptPath } = await projectWith('console.log("EXIT_OUTPUT");\nprocess.exit(0);\n');
+		const { dir, scriptPath, releaseExit } = await projectExitingOnRelease("EXIT_OUTPUT");
 		const { tool, manager, delivered } = harness(dir);
 
 		const started = await tool.execute("call-1", {
@@ -586,8 +613,10 @@ describe("a launched process that ends reports its exit", () => {
 		const client = await daemonClientForProject(dir);
 		const origRequest = client.request.bind(client);
 
+		// Install the logs interception before the process can exit: the exit releases the watcher's logs RPC.
 		const logsStarted = Promise.withResolvers<void>();
 		const logsRelease = Promise.withResolvers<void>();
+		const logsDone = Promise.withResolvers<void>();
 		let logsIntercepted = false;
 
 		client.request = async (op, signal) => {
@@ -595,11 +624,16 @@ describe("a launched process that ends reports its exit", () => {
 				logsIntercepted = true;
 				logsStarted.resolve();
 				await logsRelease.promise;
+				try {
+					return await origRequest(op, signal);
+				} finally {
+					logsDone.resolve();
+				}
 			}
 			return origRequest(op, signal);
 		};
 
-		// Intercept before starting or right after? If we intercept before, we must make sure logs intercept triggers
+		await releaseExit();
 		await logsStarted.promise;
 		expect(logsIntercepted).toBeTrue();
 		// Delay the stop result so stop pause gate is active while logs RPC finishes.
@@ -625,17 +659,17 @@ describe("a launched process that ends reports its exit", () => {
 
 		await stopEntered.promise;
 
-		// 1. Release the logs RPC first. The watcher finishes exitNotice while stop is still in flight.
+		// 1. Release the logs RPC. The watcher prepares its notice while the stop is still in flight.
 		logsRelease.resolve();
+		await logsDone.promise;
+		// Everything after the logs response is a microtask chain, so one macrotask turn drains it to the gate.
+		await new Promise<void>(resolve => setImmediate(resolve));
 
-		// Yield microtasks so the logs RPC response is processed by exitNotice and reaches the gate check
-		await Promise.resolve();
-		await Promise.resolve();
-
-		// The notice must not be delivered yet while the stop gate is active
+		// The notice is prepared but held by the stop gate: the watch job is still running and nothing is delivered.
+		expect(manager.getRunningJobs()).toHaveLength(1);
 		expect(delivered).toEqual([]);
 
-		// 2. Now let the stop complete successfully
+		// 2. Now let the stop complete successfully: it cancels the captured watch, so the held notice is never published.
 		stopRelease.resolve();
 		await stopPromise;
 		expect(manager.getRunningJobs()).toHaveLength(0);
@@ -645,7 +679,7 @@ describe("a launched process that ends reports its exit", () => {
 	}, 30_000);
 
 	it("delivers exit notice when rejected guarded stop is followed by logs resolution, but suppresses on overlapping successful control", async () => {
-		const { dir, scriptPath } = await projectWith('console.log("EXIT_OUTPUT_2");\nprocess.exit(0);\n');
+		const { dir, scriptPath, releaseExit } = await projectExitingOnRelease("EXIT_OUTPUT_2");
 		const { tool, manager, delivered } = harness(dir);
 
 		const started = await tool.execute("call-1", {
@@ -663,8 +697,10 @@ describe("a launched process that ends reports its exit", () => {
 		const client = await daemonClientForProject(dir);
 		const origRequest = client.request.bind(client);
 
+		// Install the logs interception before the process can exit: the exit releases the watcher's logs RPC.
 		const logsStarted = Promise.withResolvers<void>();
 		const logsRelease = Promise.withResolvers<void>();
+		const logsDone = Promise.withResolvers<void>();
 		let logsIntercepted = false;
 
 		client.request = async (op, signal) => {
@@ -672,10 +708,16 @@ describe("a launched process that ends reports its exit", () => {
 				logsIntercepted = true;
 				logsStarted.resolve();
 				await logsRelease.promise;
+				try {
+					return await origRequest(op, signal);
+				} finally {
+					logsDone.resolve();
+				}
 			}
 			return origRequest(op, signal);
 		};
 
+		await releaseExit();
 		await logsStarted.promise;
 
 		// Part A: Overlap an invalid/rejected guarded control while logs is in-flight.
@@ -685,7 +727,12 @@ describe("a launched process that ends reports its exit", () => {
 
 		const preRejectedRequest = client.request;
 		client.request = async (op, signal) => {
-			if (op.op === "stop" && op.name === "delayed-logs-overlapping-controls" && "expectedId" in op && op.expectedId === "wrong-id") {
+			if (
+				op.op === "stop" &&
+				op.name === "delayed-logs-overlapping-controls" &&
+				"expectedId" in op &&
+				op.expectedId === "wrong-id"
+			) {
 				rejectedEntered.resolve();
 				await rejectedRelease.promise;
 				throw new Error("Daemon identity mismatch: expected wrong-id:1, found actual");
@@ -709,7 +756,12 @@ describe("a launched process that ends reports its exit", () => {
 
 		const preSuccessRequest = client.request;
 		client.request = async (op, signal) => {
-			if (op.op === "stop" && op.name === "delayed-logs-overlapping-controls" && "expectedId" in op && op.expectedId === daemon!.id) {
+			if (
+				op.op === "stop" &&
+				op.name === "delayed-logs-overlapping-controls" &&
+				"expectedId" in op &&
+				op.expectedId === daemon!.id
+			) {
 				successEntered.resolve();
 				await successRelease.promise;
 			}
@@ -729,15 +781,17 @@ describe("a launched process that ends reports its exit", () => {
 		// Release the rejected stop first: it throws, resuming its gate
 		rejectedRelease.resolve();
 		await expect(rejectedStopPromise).rejects.toThrow(/Daemon identity mismatch/);
+		// The rejected control left the watch running.
+		expect(manager.getRunningJobs()).toHaveLength(1);
 
 		// Now release logs RPC while the successful stop is still pending
 		logsRelease.resolve();
+		await logsDone.promise;
+		// Everything after the logs response is a microtask chain, so one macrotask turn drains it to the gate.
+		await new Promise<void>(resolve => setImmediate(resolve));
 
-		// Yield microtasks so the logs RPC response is processed by exitNotice and reaches the gate check
-		await Promise.resolve();
-		await Promise.resolve();
-
-		// No notice should be delivered because the successful stop's pause gate is still active!
+		// No notice should be delivered because the successful stop's pause gate is still active: the watch job is still running.
+		expect(manager.getRunningJobs()).toHaveLength(1);
 		expect(delivered).toEqual([]);
 
 		// Now let the successful stop complete
