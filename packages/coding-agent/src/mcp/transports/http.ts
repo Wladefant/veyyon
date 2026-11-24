@@ -477,7 +477,7 @@ export class HttpTransport implements MCPTransport {
 					}
 				}
 				if (response.ok && response.headers.get("Content-Type")?.includes("application/json")) {
-					const raw: unknown = await untilAborted(signal, response.json());
+					const raw: unknown = await untilAborted(signal, () => response.json());
 					// A matching id alone does not establish a valid JSON-RPC 2.0
 					// acknowledgement; reject malformed envelopes before accepting.
 					if (!isStreamMessage(raw) || "method" in raw || raw.id !== id) {
@@ -623,7 +623,7 @@ export class HttpTransport implements MCPTransport {
 			if (contentType.includes("text/event-stream")) {
 				return await this.#parseSSEResponse<T>(response, id, method, operation, timeout);
 			}
-			const raw: unknown = await untilAborted(operation.signal, response.json());
+			const raw: unknown = await untilAborted(operation.signal, () => response.json());
 			if (!isStreamMessage(raw) || "method" in raw || raw.id !== id) {
 				throw new Error("MCP HTTP server returned an invalid JSON-RPC response envelope");
 			}

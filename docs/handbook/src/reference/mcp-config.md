@@ -301,6 +301,9 @@ editor configs Veyyon still reads are named by file in `/mcp list`.
 
 Use this when the MCP server requires explicit OAuth client settings.
 
+Set `scopes` to a space-separated list to override the scopes discovered by
+`/mcp reauth`. Veyyon uses the same scopes for client registration and authorization.
+
 `prompt` controls the OAuth `prompt` parameter sent with the authorization request. By default the parameter is omitted, matching the reference MCP SDK, except when the granted scopes include `offline_access`: OIDC Core requires `prompt=consent` to issue refresh-token access, so Veyyon sends `consent` for those requests. Without a consent prompt, a provider with an active browser session silently re-approves the same account, making it impossible to switch accounts or workspaces when reauthorizing (e.g. to use a different Linear workspace per Veyyon profile). Set it to `""` to omit the parameter for providers that reject it, or to another value the provider accepts (e.g. `"select_account"`).
 
 Slack is the clearest current example. Slack's MCP server is hosted at `https://mcp.slack.com/mcp`, uses Streamable HTTP, and requires confidential OAuth with your Slack app's client credentials.

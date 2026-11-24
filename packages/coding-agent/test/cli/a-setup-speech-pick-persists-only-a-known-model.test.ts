@@ -2,9 +2,8 @@
  * WHY: `veyyon setup speech` on a TTY offers a model picker for the speech-to-text model and the
  * local text-to-speech model before it installs either. The two pickers were two copies of one
  * sequence — offer, persist a known key, leave an unknown one alone, report a cancel — and now
- * share `pickSpeechModel`. This suite drives `runSetupCommand({ component: "speech" })` with the
- * picker and the cache probes stubbed at their module boundaries and pins, through the settings
- * store, what each answer from the picker leaves behind:
+ * share `pickSpeechModel`. This suite drives `runSetupCommand({ component: "speech" })` with
+ * a recorder and cached models. It stubs the picker and checks what each answer leaves in settings:
  *
  * - a known key is written and flushed;
  * - an unknown key (a picker row the registry no longer has) leaves the setting as it was;
@@ -14,11 +13,12 @@
  * path, which never opens a picker.
  */
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { runSetupCommand } from "../../src/cli/setup-cli";
 import * as picker from "../../src/cli/setup-model-picker";
 import { resetSettingsForTest, Settings, settings } from "../../src/config/settings";
 import * as sttDownloader from "../../src/speech/stt/downloader";
+import * as recorder from "../../src/speech/stt/recorder";
 import * as ttsDownloader from "../../src/speech/tts/downloader";
 import { initTheme } from "../../src/theme/theme";
 
@@ -46,11 +46,13 @@ describe("a setup speech pick persists only a known model", () => {
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		spyOn(process.stdout, "write").mockReturnValue(true);
 		spyOn(console, "log").mockImplementation(() => {});
+		spyOn(recorder, "detectRecorder").mockReturnValue({ tool: "sox", bin: "sox" });
 		spyOn(sttDownloader, "isSttModelCached").mockResolvedValue(true);
 		spyOn(ttsDownloader, "isTtsModelCached").mockResolvedValue(true);
 	});
 
 	afterEach(() => {
+		mock.restore();
 		restoreProperty(process.stdout, "isTTY", stdoutIsTty);
 		resetSettingsForTest();
 	});

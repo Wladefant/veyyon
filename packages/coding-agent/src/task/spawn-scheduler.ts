@@ -159,6 +159,7 @@ function mergeInlinePayloads(
 	const usageTotals = emptyUsage();
 	let hasUsage = false;
 	let cancelledBeforeStart = 0;
+	let hasError = false;
 	let projectAgentsDir: string | null = null;
 	for (let position = 0; position < spawns.length; position++) {
 		const payload = payloads[position];
@@ -169,10 +170,15 @@ function mergeInlinePayloads(
 			continue;
 		}
 		projectAgentsDir ??= payload.details?.projectAgentsDir ?? null;
+		const spawnResults = payload.details?.results;
+		// The batch summary classifies child outcomes, including cancellation. A refusal
+		// has no child results to classify, so preserve its error flag separately.
+		if (payload.isError === true && !spawnResults?.length) hasError = true;
 		const text = payload.content.find(part => part.type === "text")?.text;
 		if (text) contentParts.push(text);
-		hasUsage =
-			appendSpawnResults(results, usageTotals, outputPaths, payload.details?.results ?? [], index) || hasUsage;
+		if (spawnResults) {
+			hasUsage = appendSpawnResults(results, usageTotals, outputPaths, spawnResults, index) || hasUsage;
+		}
 	}
 	return {
 		contentParts,
@@ -180,7 +186,7 @@ function mergeInlinePayloads(
 		usage: hasUsage ? usageTotals : undefined,
 		outputPaths: outputPaths.length > 0 ? outputPaths : undefined,
 		projectAgentsDir,
-		hasError: payloads.some(payload => payload?.isError === true),
+		hasError,
 		cancelledBeforeStart,
 	};
 }

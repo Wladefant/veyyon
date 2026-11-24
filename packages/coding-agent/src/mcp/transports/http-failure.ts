@@ -89,8 +89,15 @@ export function mcpHttpFailureMessage(url: string, status: number, body: string,
 	return truncate(message, MAX_MESSAGE_LENGTH);
 }
 
-/** The response headers that carry a server's auth challenge, echoed in a failure. */
-const AUTH_CHALLENGE_HEADERS = ["WWW-Authenticate", "Mcp-Auth-Server"] as const;
+export class MCPHttpFailure extends Error {
+	constructor(
+		message: string,
+		readonly wwwAuthenticate: string | null,
+		readonly mcpAuthServer: string | null,
+	) {
+		super(message);
+	}
+}
 
 /**
  * The error for a non-OK MCP HTTP response: {@link mcpHttpFailureMessage} of its status, its body and
@@ -98,10 +105,14 @@ const AUTH_CHALLENGE_HEADERS = ["WWW-Authenticate", "Mcp-Auth-Server"] as const;
  */
 export async function mcpHttpFailure(url: string, response: Response): Promise<Error> {
 	const body = await response.text();
+	const wwwAuthenticate = response.headers.get("WWW-Authenticate");
+	const mcpAuthServer = response.headers.get("Mcp-Auth-Server");
 	const hints: string[] = [];
-	for (const name of AUTH_CHALLENGE_HEADERS) {
-		const value = response.headers.get(name);
-		if (value) hints.push(`${name}: ${value}`);
-	}
-	return new Error(mcpHttpFailureMessage(url, response.status, body, hints.length > 0 ? hints.join("; ") : undefined));
+	if (wwwAuthenticate) hints.push(`WWW-Authenticate: ${wwwAuthenticate}`);
+	if (mcpAuthServer) hints.push(`Mcp-Auth-Server: ${mcpAuthServer}`);
+	return new MCPHttpFailure(
+		mcpHttpFailureMessage(url, response.status, body, hints.length > 0 ? hints.join("; ") : undefined),
+		wwwAuthenticate,
+		mcpAuthServer,
+	);
 }

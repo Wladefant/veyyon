@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Stop MCP HTTP responses from starting a JSON body read after cancellation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Reject invalid browser app routes before launch, cache IRC schemas across launches, and repair tool and trust regression coverage ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep the default and allowed agent types in the shorter task prompt ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Return promptly when a Python eval cell does not acknowledge cancellation. Report that the cell may still be running without stopping the kernel ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
