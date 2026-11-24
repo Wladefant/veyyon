@@ -8,6 +8,7 @@
 import * as AIError from "@veyyon/ai/error";
 import type { FetchImpl } from "@veyyon/ai/types";
 import { errorMessage, logger, trimTrailingSlashes } from "@veyyon/utils";
+import { MCPHttpFailure } from "./transports/http-failure";
 
 export interface OAuthEndpoints {
 	authorizationUrl: string;
@@ -50,11 +51,14 @@ export interface AuthDetectionResult {
 }
 
 export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): string | undefined {
-	const match = error.message.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i);
-	if (!match?.[1]) return undefined;
+	const value =
+		error instanceof MCPHttpFailure
+			? error.mcpAuthServer
+			: error.message.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i)?.[1];
+	if (!value) return undefined;
 
 	try {
-		return new URL(match[1], serverUrl).toString();
+		return new URL(value, serverUrl).toString();
 	} catch {
 		// The server sent an `Mcp-Auth-Server` value that is not a URL, so there is no auth server to
 		// point at. Discovery continues with its well-known probes and reports if none of them work.
@@ -62,33 +66,73 @@ export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): strin
 	}
 }
 
-/**
- * Pull the `scope`/`scopes` parameter out of a `WWW-Authenticate` challenge
- * embedded in the error message. RFC 6750 lets servers advertise the missing
- * scopes when they reject a bearer token with `insufficient_scope`, and RFC
- * 8414-adjacent MCP gateways sometimes list the required scopes there rather
- * than in `scopes_supported`. Returns the raw space-separated value, or
- * `undefined` when the challenge does not carry one.
- */
-export function extractOAuthChallengeScopes(error: Error): string | undefined {
-	// Transport errors append the headers after the body. Some errors start
-	// directly with the challenge and append a JSON body instead.
-	const challenge =
-		error.message.match(
-			/ \[WWW-Authenticate:[ \t]*((?:[^"[\]\r\n]|"(?:[^"\\\r\n]|\\.)*")*)\](?:\. Fix: [^\r\n]*)?$/i,
-		)?.[1] ??
-		error.message.match(
-			/^(?:HTTP \d{3}:[ \t]*)?(?:WWW-Authenticate:[ \t]*)?Bearer\b((?:[ \t,]+[a-zA-Z_][a-zA-Z0-9_-]*[ \t]*=[ \t]*"(?:[^"\\\r\n]|\\.)*")*)/i,
-		)?.[1];
-	if (!challenge) return undefined;
-	const entries = challenge.matchAll(/(?:^|[ \t,])([a-zA-Z_][a-zA-Z0-9_-]*)[ \t]*=[ \t]*"((?:[^"\\\r\n]|\\.)*)"/g);
-	for (const [, rawKey, value] of entries) {
-		const key = rawKey.toLowerCase();
-		if ((key === "scope" || key === "scopes") && value.trim() !== "") {
-			return value;
+function leadingAuthChallenge(message: string): string | undefined {
+	// Some callers pass a standalone challenge with an optional HTTP prefix.
+	const prefix =
+		/^(?:(?:HTTP )?(?:401|403)(?: Unauthorized| Forbidden)?:[ \t]*)?(?:WWW-Authenticate:[ \t]*|(?=Bearer(?:[ \t,]|$)))/i.exec(
+			message,
+		);
+	return prefix ? message.slice(prefix[0].length) : undefined;
+}
+
+function readBearerParams(error: Error): ReadonlyMap<string, string> {
+	const header = error instanceof MCPHttpFailure ? error.wwwAuthenticate : leadingAuthChallenge(error.message);
+	const params = new Map<string, string>();
+	if (!header) return params;
+
+	// RFC 9110 sections 5.6 and 11: consume tokens at the current position.
+	// After a comma, a token without '=' starts a new challenge.
+	const scheme = /[!#$%&'*+\-.^_`|~0-9A-Za-z]+(?=[ \t,]|$)/y;
+	const param =
+		/([!#$%&'*+\-.^_`|~0-9A-Za-z]+)[ \t]*=[ \t]*(?:"((?:[^"\\\r\n]|\\[^\r\n])*)"|([!#$%&'*+\-.^_`|~0-9A-Za-z]+))(?=[ \t,;]|$)/y;
+	const token68 = /[a-zA-Z0-9\-._~+/]+=*(?=[ \t,]|$)/y;
+	const separator = /[ \t,]*/y;
+	let pos = 0;
+	while (pos < header.length) {
+		separator.lastIndex = pos;
+		separator.exec(header);
+		pos = separator.lastIndex;
+		scheme.lastIndex = pos;
+		const challenge = scheme.exec(header);
+		if (!challenge) break;
+		const isBearer = challenge[0].toLowerCase() === "bearer";
+		pos = scheme.lastIndex;
+		let first = true;
+		while (pos < header.length) {
+			separator.lastIndex = pos;
+			const gap = separator.exec(header)?.[0] ?? "";
+			pos = separator.lastIndex;
+			if (!gap) return params;
+
+			param.lastIndex = pos;
+			const entry = param.exec(header);
+			if (entry) {
+				if (isBearer) {
+					const key = entry[1].toLowerCase();
+					const value = entry[2]?.replace(/\\([^\r\n])/g, "$1") ?? entry[3];
+					if (value.trim() && !params.has(key)) params.set(key, value);
+				}
+				pos = param.lastIndex;
+				first = false;
+			} else if (gap.includes(",")) {
+				break;
+			} else {
+				token68.lastIndex = pos;
+				if (!first || !token68.test(header)) return params;
+				separator.lastIndex = token68.lastIndex;
+				if (!separator.exec(header)?.[0].includes(",")) return params;
+				pos = separator.lastIndex;
+				break;
+			}
 		}
 	}
-	return undefined;
+	return params;
+}
+
+/** Read the OAuth scope requested by a Bearer challenge, not the response body. */
+export function extractOAuthChallengeScopes(error: Error): string | undefined {
+	const params = readBearerParams(error);
+	return params.get("scope") ?? params.get("scopes");
 }
 
 /**
@@ -96,6 +140,10 @@ export function extractOAuthChallengeScopes(error: Error): string | undefined {
  * Looks for WWW-Authenticate header format or JSON error bodies.
  */
 export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
+	return readOAuthEndpoints(error, readBearerParams(error));
+}
+
+function readOAuthEndpoints(error: Error, challengeValues: ReadonlyMap<string, string>): OAuthEndpoints | null {
 	const errorMsg = error.message;
 
 	const readEndpointsFromObject = (obj: Record<string, unknown>): OAuthEndpoints | null => {
@@ -191,54 +239,30 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 		// Not JSON, continue with other detection methods
 	}
 
-	const challengeEntries = Array.from(errorMsg.matchAll(/([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]+)"/g));
-	if (challengeEntries.length > 0) {
-		const challengeValues = new Map<string, string>();
-		for (const [, rawKey, value] of challengeEntries) {
-			challengeValues.set(rawKey.toLowerCase(), value);
-		}
-
-		const authorizationUrl =
-			challengeValues.get("authorization_uri") ||
-			challengeValues.get("authorization_url") ||
-			challengeValues.get("authorization_endpoint") ||
-			challengeValues.get("authorize_url") ||
-			challengeValues.get("realm");
-		const tokenUrl =
-			challengeValues.get("token_url") || challengeValues.get("token_uri") || challengeValues.get("token_endpoint");
-		const resource = challengeValues.get("resource") || challengeValues.get("resource_uri");
-
-		if (authorizationUrl && tokenUrl) {
-			const scope = mergeRequestedScopes(
-				normalizeOAuthScopes(challengeValues.get("scope")) ?? normalizeOAuthScopes(challengeValues.get("scopes")),
-				scopeFromAuthUrl(authorizationUrl),
-			);
-			return {
-				authorizationUrl,
-				tokenUrl,
-				registrationUrl:
-					challengeValues.get("registration_endpoint") ||
-					challengeValues.get("registration_url") ||
-					challengeValues.get("registration_uri"),
-				clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
-				scopes: scope,
-				explicitScopes: scope !== undefined,
-				resource,
-			};
-		}
-	}
-
-	// Try to extract from WWW-Authenticate header format
-	// Example: Bearer realm="https://auth.example.com/oauth/authorize" token_url="https://auth.example.com/oauth/token"
-	const wwwAuthMatch = errorMsg.match(/realm="([^"]+)".*token_url="([^"]+)"/);
-	if (wwwAuthMatch) {
-		const scope = scopeFromAuthUrl(wwwAuthMatch[1]);
+	const authorizationUrl =
+		challengeValues.get("authorization_uri") ||
+		challengeValues.get("authorization_url") ||
+		challengeValues.get("authorization_endpoint") ||
+		challengeValues.get("authorize_url") ||
+		challengeValues.get("realm");
+	const tokenUrl =
+		challengeValues.get("token_url") || challengeValues.get("token_uri") || challengeValues.get("token_endpoint");
+	if (authorizationUrl && tokenUrl) {
+		const scope = mergeRequestedScopes(
+			challengeValues.get("scope") ?? challengeValues.get("scopes"),
+			scopeFromAuthUrl(authorizationUrl),
+		);
 		return {
-			authorizationUrl: wwwAuthMatch[1],
-			tokenUrl: wwwAuthMatch[2],
-			clientId: clientIdFromAuthUrl(wwwAuthMatch[1]),
+			authorizationUrl,
+			tokenUrl,
+			registrationUrl:
+				challengeValues.get("registration_endpoint") ||
+				challengeValues.get("registration_url") ||
+				challengeValues.get("registration_uri"),
+			clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
 			scopes: scope,
 			explicitScopes: scope !== undefined,
+			resource: challengeValues.get("resource") || challengeValues.get("resource_uri"),
 		};
 	}
 
@@ -256,13 +280,10 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 	}
 
 	const authServerUrl = extractMcpAuthServerUrl(error, serverUrl);
-	// Extract resource_metadata URL from challenge entries in error message
-	const resourceMetaMatch = error.message.match(/resource_metadata\s*=\s*"([^"]+)"/i);
-	const resourceMetadataUrl = resourceMetaMatch?.[1];
-
-	// Try to extract OAuth endpoints
-	const oauth = extractOAuthEndpoints(error);
-	const challengeScopes = extractOAuthChallengeScopes(error);
+	const challengeValues = readBearerParams(error);
+	const resourceMetadataUrl = challengeValues.get("resource_metadata");
+	const oauth = readOAuthEndpoints(error, challengeValues);
+	const challengeScopes = challengeValues.get("scope") ?? challengeValues.get("scopes");
 
 	if (oauth) {
 		const mergedScopes = oauth.explicitScopes
