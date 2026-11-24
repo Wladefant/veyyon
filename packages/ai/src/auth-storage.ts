@@ -36,7 +36,7 @@ import {
 } from "./auth-credential-rows";
 import type { ApiKeyResolver } from "./auth-retry";
 import { CredentialBlocks, DEFAULT_CREDENTIAL_BACKOFF_MS } from "./auth-storage/credential-blocks";
-import { CredentialRouting } from "./auth-storage/credential-routing";
+import { CredentialRouting, type RoutedCredential } from "./auth-storage/credential-routing";
 import type {
 	ApiKeySelection,
 	AuthApiKeyOptions,
@@ -410,8 +410,7 @@ export class AuthStorage {
 				},
 				storedProviders: () => this.#data.keys(),
 				runtimeApiKey: provider => this.#runtimeOverrides.get(provider),
-				routedCredentialIndex: (provider, sessionId) =>
-					this.#routing.getSessionCredential(provider, sessionId)?.index,
+				routedCredentialIndex: (provider, sessionId) => this.#routedCredential(provider, sessionId)?.index,
 				activeOAuthCredential: (provider, sessionId) => this.#resolveActiveOAuthCredential(provider, sessionId),
 				refreshOAuthCredential: (provider, credential, credentialId, signal) =>
 					this.#refresher.refreshOAuthCredential(provider, credential, credentialId, signal),
@@ -885,14 +884,24 @@ export class AuthStorage {
 		return this.#routing.getSelectedCredential(provider)?.credentialId;
 	}
 
+	#codexSelectionIsPreference(provider: string, type: AuthCredential["type"]): boolean {
+		return provider === "openai-codex" && type === "oauth" && this.isLoadBalancingEnabled();
+	}
+
+	/** A balanced Codex turn can use a sibling without changing the provider preference. */
+	#routedCredential(provider: string, sessionId: string | undefined): RoutedCredential | undefined {
+		const served = this.#codexSelectionIsPreference(provider, "oauth")
+			? this.#routing.getStickySessionCredential(provider, sessionId)
+			: undefined;
+		return served ?? this.#routing.getSessionCredential(provider, sessionId);
+	}
+
 	/**
 	 * Index of the account explicitly chosen for this provider, when it is of `type`.
 	 *
-	 * A session pin outranks the global selection: it is the more recent statement of the same kind
-	 * of thing. Both outrank everything automatic, whatever `accounts.loadBalancing` says — the
-	 * setting governs what the product does on its own initiative, never what a caller is
-	 * allowed to ask for. Sticky routing is deliberately NOT a choice: it records which account
-	 * happened to serve last, which is the product's doing and not a statement by anybody.
+	 * Session pins outrank the provider selection. With Codex OAuth load balancing on, the
+	 * provider selection is a preference: it leads only while eligible and does not bypass quota.
+	 * Sticky routing is not a choice. It records which account served last.
 	 *
 	 * A pin naming another credential type answers `undefined` rather than deferring to the global
 	 * selection, because the pin is the operative choice and the type asked about simply is not it.
@@ -908,7 +917,9 @@ export class AuthStorage {
 		type: AuthCredential["type"],
 	): number | undefined {
 		const pinned = this.#routing.getSessionCredentialPin(provider, sessionId);
-		const chosen = pinned ?? this.#routing.getSelectedCredential(provider);
+		const chosen =
+			pinned ??
+			(this.#codexSelectionIsPreference(provider, type) ? undefined : this.#routing.getSelectedCredential(provider));
 		if (chosen?.type !== type) return undefined;
 		const credentialId = this.#getStoredCredentials(provider)[chosen.index]?.id;
 		if (credentialId !== undefined && this.#authDeadCredentials.has(credentialId)) return undefined;
@@ -931,6 +942,17 @@ export class AuthStorage {
 	 */
 	#homeIndex(provider: string, sessionId: string | undefined, type: AuthCredential["type"]): number | undefined {
 		const chosen = this.#explicitChoiceIndex(provider, sessionId, type);
+		if (chosen === undefined && this.#codexSelectionIsPreference(provider, type)) {
+			const preferred = this.#routing.getSessionCredential(provider, sessionId);
+			const entry = preferred && this.#getStoredCredentials(provider)[preferred.index];
+			if (
+				preferred?.type === type &&
+				entry &&
+				!this.#authDeadCredentials.has(entry.id) &&
+				this.#credentialUsableNow(provider, entry, preferred.index)
+			)
+				return preferred.index;
+		}
 		if (chosen !== undefined || this.isLoadBalancingEnabled()) return chosen;
 		const sticky = this.#routing.getStickySessionCredential(provider, sessionId);
 		if (sticky?.type !== type) return undefined;
@@ -989,7 +1011,8 @@ export class AuthStorage {
 		const stored = this.#getStoredCredentials(provider);
 		if (stored.length === 0) return undefined;
 		const routing: SessionCredentialRouting = { provider };
-		const pin = this.#routing.getSessionCredentialPin(provider, sessionId);
+		const sessionPin = this.#routing.getSessionCredentialPin(provider, sessionId);
+		const pin = sessionPin ?? this.#routing.getSelectedCredential(provider);
 		// The LAST-USED record, never `getSessionCredential`: that one answers with the pin,
 		// so asking it here made `activeCredentialId` a copy of `selectedCredentialId` and the
 		// divergence this method exists to report could never be observed.
@@ -1006,14 +1029,9 @@ export class AuthStorage {
 				pin.index,
 			);
 			if (blockedUntil !== undefined) routing.selectedBlockedUntilMs = blockedUntil;
-			// A hold no longer moves traffic off an explicitly chosen account, so a held pin IS what
-			// serves next and says so as an observation, with its deadline alongside. The one exception
-			// is a pin whose grant failed authentication: `#explicitChoiceIndex` drops that one, because
-			// the provider has already refused it, and the cascade below reports the substitute as the
-			// prediction it is.
-			const choiceStillLeads =
-				this.#explicitChoiceIndex(provider, sessionId, stored[pin.index]!.credential.type) === pin.index;
-			if (choiceStillLeads) {
+			const soft = sessionPin === undefined && this.#codexSelectionIsPreference(provider, pin.type);
+			if (!this.#authDeadCredentials.has(pin.credentialId) && (!soft || blockedUntil === undefined)) {
+				if (soft && sticky?.index !== pin.index) routing.activeIsPrediction = true;
 				routing.activeCredentialId = pin.credentialId;
 				return routing;
 			}
@@ -2071,7 +2089,7 @@ export class AuthStorage {
 		if (this.hasApiKeyOverride(provider)) return undefined;
 
 		// Prefer the session-sticky credential when available.
-		const sessionPref = this.#routing.getSessionCredential(provider, sessionId);
+		const sessionPref = this.#routedCredential(provider, sessionId);
 		// If the session has been routed to a stored API key, do not inject OAuth account_uuid.
 		if (sessionPref !== undefined && sessionPref.type !== "oauth") return undefined;
 
@@ -2415,7 +2433,7 @@ export class AuthStorage {
 			}
 		}
 		if (explicit) return undefined;
-		const sessionCredential = this.#routing.getSessionCredential(provider, sessionId);
+		const sessionCredential = this.#routedCredential(provider, sessionId);
 		return sessionCredential ? { ...sessionCredential, explicit: false } : undefined;
 	}
 
@@ -2777,8 +2795,7 @@ export class AuthStorage {
 			!this.#blocks.isCredentialBlocked(provider, providerKey, sessionPreferredIndex, blockScope);
 		// The explicitly chosen account outranks predictions, but not a confirmed Antigravity refusal:
 		// ranking may reorder around it, a hold may not displace it, and the strict pass may not skip
-		// it. `sessionPreferredIndex` is not the same thing — it also carries sticky routing, which is
-		// a record of what served last rather than anything anybody asked for.
+		// it. `sessionPreferredIndex` can also refer to a soft provider preference or sticky routing.
 		let chosenIndex = this.#explicitChoiceIndex(provider, sessionId, "oauth");
 		if (provider === "google-antigravity" && movementAllowed && chosenIndex !== undefined) {
 			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
@@ -2915,8 +2932,14 @@ export class AuthStorage {
 		// the session-preferred credential (or the first candidate when no
 		// session preference exists yet) even if its cached token still looks
 		// valid — a peer/broker may have rotated it out from under us.
+		const retrySticky =
+			options?.forceRefresh && chosenIndex === undefined && this.#codexSelectionIsPreference(provider, "oauth")
+				? this.#routing.getStickySessionCredential(provider, sessionId)
+				: undefined;
 		const forceRefreshIndex = options?.forceRefresh
-			? (sessionPreferredIndex ?? candidates[0]?.selection.index)
+			? ((retrySticky?.type === "oauth" ? retrySticky.index : undefined) ??
+				sessionPreferredIndex ??
+				candidates[0]?.selection.index)
 			: undefined;
 		// A definitive dead-grant verdict from the preflight below, carried to the
 		// attempt loop so the same dead token is not sent a second time. Keyed by
@@ -4082,7 +4105,7 @@ export class AuthStorage {
 				!this.#blocks.isCredentialBlocked(provider, providerKey, index),
 		);
 		const target = this.#getStoredCredentials(provider)[sessionCredential.index];
-		const sticky = this.#routing.getSessionCredential(provider, sessionId);
+		const sticky = this.#routedCredential(provider, sessionId);
 		if (
 			!sessionCredential.explicit ||
 			(sticky?.type === sessionCredential.type && sticky.index === sessionCredential.index)

@@ -288,6 +288,52 @@ describe("an account choice outlives the session that made it", () => {
 		expect(reopenedGlobal.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
 	});
 
+	test("a balanced Codex provider selection leads when usable without bypassing a quota block", async () => {
+		if (!store || !authStorage) throw new Error("test setup failed");
+		const provider = "openai-codex";
+		await authStorage.set(provider, [
+			oauthRow("fallback", "access-fallback"),
+			oauthRow("preferred", "access-preferred"),
+			oauthRow("disabled", "access-disabled"),
+		]);
+		const [fallback, preferred, disabled] = authStorage.listStoredCredentials(provider);
+		store.deleteAuthCredential(disabled!.id, "disabled for test");
+		expect(authStorage.selectProviderCredential(provider, preferred!.id)).toBe(true);
+
+		store.close();
+		store = await SqliteAuthCredentialStore.open(dbPath);
+		const balanced = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: () => undefined,
+			rankingStrategyResolver: () => undefined,
+		});
+		await balanced.reload();
+
+		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-preferred");
+		expect(await balanced.getApiKey(provider)).toBe("access-preferred");
+		expect(await balanced.peekApiKey(provider)).toBe("access-preferred");
+		expect(balanced.pinSessionCredential(provider, "fallback-pinned-session", fallback!.id)).toBe(true);
+		expect(await balanced.getApiKey(provider, "fallback-pinned-session")).toBe("access-fallback");
+		expect(
+			(await balanced.markUsageLimitReached(provider, SESSION_ID, { credentialId: preferred!.id })).switched,
+		).toBe(true);
+		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-fallback");
+		expect(await balanced.getApiKey(provider, OTHER_SESSION_ID)).toBe("access-fallback");
+		expect(await balanced.getApiKey(provider)).toBe("access-fallback");
+		expect(await balanced.peekApiKey(provider)).toBe("access-fallback");
+		expect(balanced.getOAuthAccountIdentity(provider, SESSION_ID)?.accountId).toBe("account-fallback");
+		expect(balanced.sessionCredentialRouting(provider, SESSION_ID)).toMatchObject({
+			selectedCredentialId: preferred!.id,
+			activeCredentialId: fallback!.id,
+		});
+		expect(store.listAuthCredentials(provider).map(row => row.id)).toEqual([fallback!.id, preferred!.id]);
+
+		expect(balanced.pinSessionCredential(provider, OTHER_SESSION_ID, preferred!.id)).toBe(true);
+		expect(await balanced.getApiKey(provider, OTHER_SESSION_ID)).toBe("access-preferred");
+		balanced.clearCredentialBlocks(provider, preferred!.id);
+		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-preferred");
+	});
+
 	/**
 	 * Clearing must be as durable as choosing, and must be scoped to the one provider. Several
 	 * providers serve one session at once (main model, agent roles, web search), so clearing
