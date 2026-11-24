@@ -6,10 +6,12 @@
 
 ### Fixed
 
+- Preserve a draft session when reloading its planned transcript path before the first write ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
 - Publish queued sibling launch grants in one durable root journal replacement instead of copying the transcript for each child ([#1232](https://github.com/Wladefant/veyyon/issues/1232)).
 - Let sibling native transcripts open while another transcript's owner record is still syncing ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 - Use the shared session filename rule when publishing a staged journal ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep compacted tool results on disk when their codec has no migration to run ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ### Added
 

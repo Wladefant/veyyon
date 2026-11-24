@@ -755,7 +755,7 @@ export class BashTool
 			saveArtifact:
 				"artifactError" in result && result.artifactError
 					? undefined
-					: full => saveBashOriginalArtifact(this.session, full),
+					: full => result.artifactId ?? saveBashOriginalArtifact(this.session, full),
 		});
 
 		const resultBuilder = toolResult(details).text(withNotices(cappedBody));
@@ -883,6 +883,7 @@ export class BashTool
 			},
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
+				endsOnItsOwn: options.timeoutSec !== undefined,
 				onProgress: async (text, details) => {
 					latestText = text;
 					if (!forwardUpdates) return;
