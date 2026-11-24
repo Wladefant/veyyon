@@ -25,13 +25,16 @@ describe.skipIf(process.platform !== "win32")("Windows security-preserving file 
 	});
 
 	function icacls(file: string, ...args: string[]): string {
-		const exe = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
-		const result = spawnSync(exe, [path.basename(file), ...args], {
-			cwd: path.dirname(file),
-			encoding: "utf8",
-			timeout: 10_000,
-			windowsHide: true,
-		});
+		const result = spawnSync(
+			path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"),
+			[path.basename(file), ...args],
+			{
+				cwd: path.dirname(file),
+				encoding: "utf8",
+				timeout: 10_000,
+				windowsHide: true,
+			},
+		);
 		if (result.error) throw result.error;
 		if (result.status !== 0) throw new Error(`icacls ${args.join(" ")} failed: ${result.stdout}${result.stderr}`);
 		return result.stdout;

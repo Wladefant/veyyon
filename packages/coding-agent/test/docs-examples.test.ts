@@ -392,11 +392,12 @@ describe("docs examples — documented env vars are consumed in source", () => {
 		const suffixes = new Set<string>();
 		/** Where a TypeScript member keeps the files that may read an env var. */
 		const typeScriptPatterns = ["src/**/*.{ts,tsx}", "scripts/**/*.ts", "test/**/*.{ts,tsx}", "native/**/*.js"];
-		/** Directories that hold source but declare no manifest, so no member names them. */
+		/** Source outside the member patterns: directories with no manifest of their own, and example extensions that load at runtime. */
 		const looseRoots: Array<[string, string]> = [
 			["scripts", "**/*.{ts,sh,ps1}"],
 			["apps/site", "**/*.{mjs,sh,ps1}"],
 			["clients/python", "**/*.{py,sh,yml,yaml}"],
+			["packages/coding-agent/examples", "**/*.{ts,js}"],
 		];
 
 		const scans: Array<[string, string]> = [];

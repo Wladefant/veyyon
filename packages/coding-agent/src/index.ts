@@ -118,6 +118,7 @@ export * from "./session/factory-prompt";
 export * from "./session/factory-tools";
 export * from "./session/messages";
 export * from "./session/nudges";
+export { buildMCPPromptCommands, type ReactiveMCPInputs, wireReactiveMCPManager } from "./session/reactive-mcp";
 export * from "./session/rewind-checkpoint";
 export * from "./session/session-dump-format";
 export * from "./session/streaming-output";

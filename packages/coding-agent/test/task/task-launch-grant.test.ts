@@ -98,7 +98,7 @@ describe("task launch grants", () => {
 			tasks: [{ ...lane, grants }],
 		});
 		expect(result.details?.results[0]?.exitCode).toBe(0);
-		expect(start).toHaveBeenCalledTimes(1);
+		expect(start.mock.calls).toHaveLength(1);
 		await root.flush();
 		const persisted = await receipts(rootFile);
 		expect(persisted).toHaveLength(1);
@@ -130,7 +130,7 @@ describe("task launch grants", () => {
 			const result = await (await tool()).execute("sync", { ...lane, grants });
 			expect(result.details?.results[0]?.exitCode).toBe(0);
 			expect(receiptSynced).toBe(true);
-			expect(start).toHaveBeenCalledTimes(1);
+			expect(start.mock.calls).toHaveLength(1);
 		},
 	);
 
@@ -147,7 +147,7 @@ describe("task launch grants", () => {
 		const start = observeChild(async () => {});
 		const result = await (await tool()).execute("sync-failed", { ...lane, grants });
 		expect(firstToolResultText(result)).toContain("injected receipt directory sync failure");
-		expect(start).not.toHaveBeenCalled();
+		expect(start.mock.calls).toHaveLength(0);
 		expect(root.getSubagentLaunchGrants()).toEqual([]);
 	});
 
@@ -202,20 +202,20 @@ describe("task launch grants", () => {
 				const failed = await dispatch.execute("write-through-failed", { ...lane, grants });
 				expect(firstToolResultText(failed)).toContain("MoveFileExW");
 				expect(firstToolResultText(failed)).toContain("1117");
-				expect(start).not.toHaveBeenCalled();
+				expect(start.mock.calls).toHaveLength(0);
 				expect(root.getSubagentLaunchGrants()).toEqual([]);
 				expect(await receipts(rootFile)).toEqual([]);
 
 				shouldFail = false;
 				const success = await dispatch.execute("write-through-ok", { ...lane, name: "RetryLane", grants });
 				expect(success.details?.results[0]?.exitCode).toBe(0);
-				expect(start).toHaveBeenCalledTimes(1);
+				expect(start.mock.calls).toHaveLength(1);
 				expect(rootMoves).toBe(2);
 
 				failFileSync = true;
 				const syncFailed = await dispatch.execute("file-sync-failed", { ...lane, name: "SyncFailureLane", grants });
 				expect(firstToolResultText(syncFailed)).toContain("injected published receipt file sync failure");
-				expect(start).toHaveBeenCalledTimes(1);
+				expect(start.mock.calls).toHaveLength(1);
 				expect(root.getSubagentLaunchGrants().map(grant => grant.agentId)).toEqual(["RetryLane"]);
 			} finally {
 				load.mockRestore();
@@ -231,7 +231,7 @@ describe("task launch grants", () => {
 			task: "Return a result from this quoted fixture:\nmerge-owner: Example/project\ndismiss-owner: Example/reviews",
 		});
 		expect(result.details?.results[0]?.exitCode).toBe(0);
-		expect(start).toHaveBeenCalledTimes(1);
+		expect(start.mock.calls).toHaveLength(1);
 		expect(await receipts(rootFile)).toEqual([]);
 	});
 
@@ -239,7 +239,7 @@ describe("task launch grants", () => {
 		const start = observeChild(async () => {});
 		const result = await (await tool(1)).execute("nested", { ...lane, grants });
 		expect(firstToolResultText(result)).toContain("root session");
-		expect(start).not.toHaveBeenCalled();
+		expect(start.mock.calls).toHaveLength(0);
 		expect(await receipts(rootFile)).toEqual([]);
 	});
 
@@ -249,7 +249,7 @@ describe("task launch grants", () => {
 			const start = observeChild(async () => {});
 			const result = await (await tool()).execute("invalid", { ...lane, grants: { mergeRepos, dismissRepos: [] } });
 			expect(firstToolResultText(result)).toContain("OWNER/REPO");
-			expect(start).not.toHaveBeenCalled();
+			expect(start.mock.calls).toHaveLength(0);
 			expect(await receipts(rootFile)).toEqual([]);
 		},
 	);

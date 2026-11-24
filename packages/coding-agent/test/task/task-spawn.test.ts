@@ -132,7 +132,7 @@ describe("task spawn routing", () => {
 		expect(result.isError).toBe(true);
 		expect(result.details?.async).toBeUndefined();
 		expect(firstToolResultText(result)).toContain("native run binding rejected");
-		expect(run).not.toHaveBeenCalled();
+		expect(run.mock.calls).toHaveLength(0);
 	});
 
 	/**
@@ -192,7 +192,7 @@ describe("task spawn routing", () => {
 		expect(firstToolResultText(result)).toContain(
 			'Agent "reviewer" is disabled (agent.agents.reviewer.enabled is false)',
 		);
-		expect(runSpy).not.toHaveBeenCalled();
+		expect(runSpy.mock.calls).toHaveLength(0);
 	});
 
 	it("spawns an enabled agent named directly", async () => {

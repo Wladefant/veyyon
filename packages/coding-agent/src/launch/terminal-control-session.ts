@@ -1,23 +1,23 @@
-import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { logTelegramDeliveryTrace } from "@veyyon/utils";
-import type { TerminalSecretRequest } from "../../launch/terminal-control";
-import {
-	serveTerminalControl,
-	type TerminalDeliveryOptions,
-	TerminalNotReadyError,
-} from "../../launch/terminal-control";
-import type { SecretIntakeResult } from "../../secrets/intake-broker";
+import type { InteractiveMode } from "../modes/terminal/interactive-mode";
+import type { SecretIntakeResult } from "../secrets/intake-broker";
 import {
 	getSessionSecretIntake,
 	getSessionSecretIntakeContext,
 	registerSessionSecretIntakeActor,
-} from "../../secrets/intake-session";
-import { parseSecretSubmission } from "../../secrets/intake-wire";
-import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
-import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
-import { TOOL } from "../../tools/core/builtin-names";
-import type { InteractiveMode } from "./interactive-mode";
+} from "../secrets/intake-session";
+import { parseSecretSubmission } from "../secrets/intake-wire";
+import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../session/operator-answer-inbox";
+import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
+import { TOOL } from "../tools/core/builtin-names";
+import {
+	serveTerminalControl,
+	type TerminalDeliveryOptions,
+	TerminalNotReadyError,
+	type TerminalSecretRequest,
+} from "./terminal-control";
 
 export interface TerminalTurnProvenance {
 	hasOperatorMessage: boolean;
@@ -99,7 +99,7 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			entry.type === "message" &&
 			(entry.message.role === "assistant" ||
 				(entry.message.role === "toolResult" && entry.message.toolName === TOOL.yield && !entry.message.isError))
-				? readColdEntry(entry) ?? entry
+				? (readColdEntry(entry) ?? entry)
 				: entry;
 		const turn = projector.observe(readable);
 		if (readable.type !== "message" || readable.message.role !== "assistant") return [];

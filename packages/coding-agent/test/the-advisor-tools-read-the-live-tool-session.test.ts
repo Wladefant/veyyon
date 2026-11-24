@@ -35,8 +35,17 @@ import { TempDir } from "@veyyon/utils";
  * The fields the advisor replaces. Every other field reads the primary's. `getLiveMessages` is
  * cleared because the advisor runs its own conversation: a read the advisor makes must not be
  * refused against output that only the primary's context holds.
+ * Launch grants are root-only. The advisor must not inherit the root's journal writer.
  */
-const ADVISOR_OVERRIDES = ["getAgentId", "getLiveMessages", "getOwningAgentSession", "getSessionId", "hasEditTool", "requireYieldTool"];
+const ADVISOR_OVERRIDES = [
+	"getAgentId",
+	"getLiveMessages",
+	"getOwningAgentSession",
+	"getSessionId",
+	"hasEditTool",
+	"recordSubagentLaunchGrant",
+	"requireYieldTool",
+] as const satisfies readonly (keyof ToolSession)[];
 
 interface Launched {
 	result: CreateAgentSessionResult;
@@ -154,6 +163,8 @@ describe("the advisor's tool session", () => {
 		expect(primary.getSessionId?.()).toBe(result.session.sessionManager.getSessionId());
 		expect(primary.getOwningAgentSession?.()).toBe(result.session);
 		expect(advisor.getOwningAgentSession?.()).toBeUndefined();
+		expect(primary.recordSubagentLaunchGrant).toBeFunction();
+		expect(advisor.recordSubagentLaunchGrant).toBeUndefined();
 		expect(advisor.hasEditTool).toBe(true);
 		expect(advisor.requireYieldTool).toBe(false);
 	});

@@ -6,11 +6,11 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as utils from "@veyyon/utils";
 import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import * as utils from "@veyyon/utils";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
-import { startTerminalControl } from "../src/modes/terminal/terminal-control";
+import { startTerminalControl } from "../src/launch/terminal-control-session";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -143,6 +143,7 @@ test("idleExit refuses queued work and reserves delivery before flushing the acc
 		{ shutdown: () => (exited = true) },
 	);
 	const pending = await rpc(owner, "deliver", { text: "working", mode: "auto", ack: true, messageId: "work-1" });
+	expect(pending.response.result).toMatchObject({ accepted: true, messageId: "work-1", state: "pending" });
 	const ping = (await rpc(owner, "ping")).response.result;
 	expect(ping.capabilities).toContain("deliver-ack");
 	expect(ping.capabilities).toContain("idle-exit");
@@ -212,7 +213,6 @@ test("a prompt racing idleExit is delivered or refused, never acknowledged and l
 		expect(exited).toBe(false);
 	}
 });
-
 
 test("an acked delivery is answered within 1 s while the terminal is stuck, then runs once, in order", async () => {
 	const gate = Promise.withResolvers<void>();
@@ -384,14 +384,25 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		id: "cold-tool-result",
 		parentId: null,
 		timestamp: "2026-01-01T00:00:00.000Z",
-		message: { role: "toolResult", toolCallId: "tool-1", toolName: "inspect", details: { output: "z".repeat(16_384) } },
+		message: {
+			role: "toolResult",
+			toolCallId: "tool-1",
+			toolName: "inspect",
+			details: { output: "z".repeat(16_384) },
+		},
 	});
 	const yieldLine = JSON.stringify({
 		type: "message",
 		id: "cold-yield-result",
 		parentId: null,
 		timestamp: "2026-01-01T00:00:00.000Z",
-		message: { role: "toolResult", toolCallId: "yield-1", toolName: "yield", isError: false, details: { output: "q".repeat(16_384) } },
+		message: {
+			role: "toolResult",
+			toolCallId: "yield-1",
+			toolName: "yield",
+			isError: false,
+			details: { output: "q".repeat(16_384) },
+		},
 	});
 	const line = JSON.stringify({
 		type: "message",
@@ -440,7 +451,13 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		},
 		close: () => {},
 	};
-	expect(payloads.pin(reader.identity, () => reader, text => JSON.parse(text) as SessionEntry)).toBe(true);
+	expect(
+		payloads.pin(
+			reader.identity,
+			() => reader,
+			text => JSON.parse(text) as SessionEntry,
+		),
+	).toBe(true);
 	const userEntry = JSON.parse(userLine) as SessionMessageEntry;
 	const toolResultEntry = JSON.parse(toolResultLine) as SessionMessageEntry;
 	const entry = JSON.parse(line) as SessionMessageEntry;
@@ -489,11 +506,27 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	cleanup.push(await startTerminalControl(mockMode as never));
 	const owner = await readOwner(root);
 	const response = await rpc(owner, "subscribe");
-	expect(response.events.filter(event => event.kind === "history").flatMap(event => event.entries)
-		.map(({ entryId, text, turn }) => ({ entryId, text, turn }))).toEqual([
-		{ entryId: warmEntry.id, text: "Warm historical answer", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
-		{ entryId: entry.id, text: "Visible historical answer", turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true } },
-		{ entryId: "cold-after-yield", text: "After successful yield", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
+	expect(
+		response.events
+			.filter(event => event.kind === "history")
+			.flatMap(event => event.entries)
+			.map(({ entryId, text, turn }) => ({ entryId, text, turn })),
+	).toEqual([
+		{
+			entryId: warmEntry.id,
+			text: "Warm historical answer",
+			turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true },
+		},
+		{
+			entryId: entry.id,
+			text: "Visible historical answer",
+			turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true },
+		},
+		{
+			entryId: "cold-after-yield",
+			text: "After successful yield",
+			turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true },
+		},
 	]);
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
@@ -506,7 +539,6 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	expect(reads.get(assistantOffset) ?? 0).toBe(1);
 	expect(reads.get(yieldOffset) ?? 0).toBe(1);
 	expect(reads.get(postYieldOffset) ?? 0).toBe(1);
-
 });
 
 const settle = async () => {

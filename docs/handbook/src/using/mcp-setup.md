@@ -28,7 +28,7 @@ to `mcp.json` for you.
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/santhreal/veyyon/main/packages/coding-agent/src/config/mcp-schema.json",
+  "$schema": "https://raw.githubusercontent.com/Wladefant/veyyon/main/packages/coding-agent/src/config/mcp-schema.json",
   "mcpServers": {
     "sqlite": {
       "type": "stdio",

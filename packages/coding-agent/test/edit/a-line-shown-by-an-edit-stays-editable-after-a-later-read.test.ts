@@ -1,22 +1,8 @@
 /**
- * WHY: an edit recorded the edited text as a snapshot version with no displayed
- * lines. The first ranged read under the new tag then recorded only its own
- * range, and an edit on a line read before the edit, a line the edit wrote or a
- * line the edit result showed was refused as "never displayed".
- *
- * This drives the production read and edit tools: a ranged read, an edit with
- * one hunk keyword of the patch language, a ranged read of other lines under the
- * edited tag, then one edit that rewrites every line shown so far. The keywords
- * are read from `@veyyon/hashline/format` at run time, so a new keyword fails
- * the sweep until it has a hunk here. A last case changes the file outside the
- * session between the first read and the edit, which recovery applies onto the
- * changed file: the read's lines stay editable, the changed line does not. The
- * patcher-level cases (clipped lines, versions without a record, preview rows
- * that do not match) are in
- * `plugins/hashline/test/a-line-displayed-before-an-edit-stays-displayed-under-its-tag.test.ts`.
- *
- * Not caught: an edit result cut by the tool-result byte cap, whose preview
- * rows would be marked displayed although they never reached the model.
+ * A later ranged read must not erase the coordinates the edit preview displayed
+ * under the new tag. Coordinates from the old tag are not carried forward.
+ * Run the real read and edit paths for every hunk keyword, including a recovered
+ * edit. An unseen coordinate must still be refused.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -113,18 +99,6 @@ function shownRows(text: string, lines: readonly string[]): number[] {
 	return shown;
 }
 
-/** Post-edit positions of the first read's lines whose text occurs once in both versions. */
-function firstReadLines(lines: readonly string[]): number[] {
-	const positions: number[] = [];
-	for (let line = FIRST_READ.start; line <= FIRST_READ.end; line++) {
-		const text = SOURCE[line - 1];
-		if (SOURCE.filter(other => other === text).length !== 1) continue;
-		const at = lines.indexOf(text);
-		if (at !== -1 && lines.lastIndexOf(text) === at) positions.push(at + 1);
-	}
-	return positions;
-}
-
 function swaps(lines: readonly number[], fileLines: readonly string[]): string {
 	return [...lines]
 		.sort((x, y) => x - y)
@@ -153,7 +127,7 @@ describe("a line shown by an edit stays editable after a later read", () => {
 	});
 
 	for (const [keyword, hunk] of Object.entries(HUNKS)) {
-		it(`keeps every line shown so far editable after ${keyword}`, async () => {
+		it(`keeps every line shown under the current tag editable after ${keyword}`, async () => {
 			const source = path.join(tmpDir, "source.ts");
 			const first = await new ReadTool(session).execute("r1", {
 				path: `${source}:${FIRST_READ.start}-${FIRST_READ.end}`,
@@ -173,7 +147,7 @@ describe("a line shown by an edit stays editable after a later read", () => {
 			});
 			expect(tagFromOutput(toolResultText(later), name)).toBe(editedTag);
 
-			const shown = new Set([...shownRows(edited, lines), ...firstReadLines(lines)]);
+			const shown = new Set(shownRows(edited, lines));
 			for (let line = LATER_READ.start; line <= LATER_READ.end; line++) shown.add(line);
 			expect(shown.size).toBeGreaterThan(LATER_READ.end - LATER_READ.start + 1);
 
@@ -192,7 +166,7 @@ describe("a line shown by an edit stays editable after a later read", () => {
 		});
 	}
 
-	it("keeps the read's lines editable, and not a line changed outside the session, after a recovered edit", async () => {
+	it("keeps the preview's lines editable, but not a line changed outside the session", async () => {
 		const source = path.join(tmpDir, "source.ts");
 		const first = await new ReadTool(session).execute("r1", {
 			path: `${source}:${FIRST_READ.start}-${FIRST_READ.end}`,
@@ -211,7 +185,7 @@ describe("a line shown by an edit stays editable after a later read", () => {
 		});
 		expect(tagFromOutput(toolResultText(later), "source.ts")).toBe(editedTag);
 
-		const shown = new Set([...shownRows(edited, lines), ...firstReadLines(lines)]);
+		const shown = new Set(shownRows(edited, lines));
 		for (let line = LATER_READ.start; line <= LATER_READ.end; line++) shown.add(line);
 		const changed = lines.indexOf("const v20 = 200;") + 1;
 		expect(shown.has(changed)).toBe(false);

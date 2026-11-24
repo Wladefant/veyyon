@@ -1495,7 +1495,7 @@ describe("commitToBranch preserves agent commits", () => {
 		const result = await commitToBranch(isolation, baseline, "nocommit", undefined, aiMessage);
 
 		expect(result?.branchName).toBe("veyyon/task/nocommit");
-		expect(aiMessage).toHaveBeenCalledTimes(1);
+		expect(aiMessage.mock.calls).toHaveLength(1);
 
 		const branchSubject = await gitr(parent, ["log", "-1", "--pretty=%s", result!.branchName!]);
 		expect(branchSubject).toBe("feat: add alpha");

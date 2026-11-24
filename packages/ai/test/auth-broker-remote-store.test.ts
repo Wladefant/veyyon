@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import * as logger from "@veyyon/utils/logger";
 import { AuthStorage, REMOTE_REFRESH_SENTINEL, SqliteAuthCredentialStore } from "@veyyon/ai";
 import {
 	AuthBrokerClient,
@@ -12,6 +11,7 @@ import {
 	type SnapshotResponse,
 	startAuthBroker,
 } from "@veyyon/ai/auth-broker";
+import * as logger from "@veyyon/utils/logger";
 import { removeWithRetries } from "../../utils/src/temp";
 
 const ANTHROPIC_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"] as const;
@@ -83,8 +83,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
-
-
 	test("countdown-only SSE churn cannot conceal an independently revoked broker credential", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
@@ -94,7 +92,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const initial: SnapshotResponse = {
 			...canonical.snapshot,
 			refresher: {
-				enabled: true, intervalMs: 1_000, skewMs: 100, nextSweepInMs: 900,
+				enabled: true,
+				intervalMs: 1_000,
+				skewMs: 100,
+				nextSweepInMs: 900,
 			},
 			credentials: canonical.snapshot.credentials.map(entry => ({ ...entry, rotatesInMs: 900 })),
 		};
@@ -111,17 +112,23 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				const refresher = { ...initial.refresher, nextSweepInMs: countdown };
 				const entry = { ...initial.credentials[0]!, rotatesInMs: countdown };
 				yield {
-					kind: "snapshot" as const, ...initial,
-					refresher, credentials: [{ ...entry }],
+					kind: "snapshot" as const,
+					...initial,
+					refresher,
+					credentials: [{ ...entry }],
 				};
 				yield {
-					kind: "entry" as const, entry,
-					generation: initial.generation, serverNowMs: initial.serverNowMs,
+					kind: "entry" as const,
+					entry,
+					generation: initial.generation,
+					serverNowMs: initial.serverNowMs,
 					refresher,
 				};
 				yield {
-					kind: "removed" as const, id: revokedId + 1_000_000,
-					generation: initial.generation, serverNowMs: initial.serverNowMs,
+					kind: "removed" as const,
+					id: revokedId + 1_000_000,
+					generation: initial.generation,
+					serverNowMs: initial.serverNowMs,
 					refresher,
 				};
 				await Bun.sleep(5);
@@ -131,11 +138,15 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			client,
 			initialSnapshot: initial,
 			snapshotStreamVerifyIntervalMs: 40,
-			onSnapshot: () => { acceptedSnapshots += 1; },
+			onSnapshot: () => {
+				acceptedSnapshots += 1;
+			},
 		});
 		await connected.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([revokedId]);
-		expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke behind countdown-only frames")).toBe(true);
+		expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke behind countdown-only frames")).toBe(
+			true,
+		);
 		// The worker must autonomously make an unconditional canonical GET.
 		// Counting accepted callbacks also catches false countdown-only progress.
 		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
@@ -154,7 +165,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const changed: SnapshotResponse = {
 			...initial.snapshot,
 			refresher: {
-				enabled: true, intervalMs: 1_000, skewMs: 250, nextSweepInMs: 750,
+				enabled: true,
+				intervalMs: 1_000,
+				skewMs: 250,
+				nextSweepInMs: 750,
 			},
 			credentials: initial.snapshot.credentials.map(entry => ({ ...entry, rotatesInMs: 750 })),
 		};
@@ -190,7 +204,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			client,
 			initialSnapshot: initial.snapshot,
 			snapshotStreamVerifyIntervalMs: 150,
-			onSnapshot: () => { fullSnapshotCallbacks += 1; },
+			onSnapshot: () => {
+				fullSnapshotCallbacks += 1;
+			},
 		});
 		await firstEof.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([revokedId]);
@@ -215,10 +231,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
 		const changed = {
 			...initial.snapshot,
-			credentials: [{
-				...original,
-				credential: { ...original.credential, access: "access-new-same-generation" },
-			}],
+			credentials: [
+				{
+					...original,
+					credential: { ...original.credential, access: "access-new-same-generation" },
+				},
+			],
 		};
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			// Even though the generation did not advance, the new broker row is
@@ -233,7 +251,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
 		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
-			type: "oauth", access: "access-new-same-generation", refresh: REMOTE_REFRESH_SENTINEL,
+			type: "oauth",
+			access: "access-new-same-generation",
+			refresh: REMOTE_REFRESH_SENTINEL,
 		});
 	});
 
@@ -251,9 +271,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await Bun.sleep(5);
 			completedStreams += 1;
 			if (completedStreams === 1) firstEof.resolve();
+			yield* [];
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 25,
 		});
 		await firstEof.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
@@ -282,9 +305,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			streamConnected.resolve();
 			await untilAborted(opts.signal);
+			yield* [];
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 25,
 		});
 		await streamConnected.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
@@ -322,7 +348,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 						event.kind === "entry" &&
 						event.entry.credential.type === "oauth" &&
 						event.entry.credential.access === "access-after-reconnect"
-					) resumedEntryFrameSeen = true;
+					)
+						resumedEntryFrameSeen = true;
 					yield event;
 				}
 				return;
@@ -345,7 +372,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 25,
 		});
 		await streamConnected.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
@@ -371,17 +400,20 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		// oracle: observe the genuine reconnected SSE snapshot and entry frame.
 		await waitUntil(() => connections >= 2 && realReconnectedSnapshotSeen);
 		storage!.upsertCredential("anthropic", mintOAuthCredential("after-reconnect", Date.now() + 120_000));
-		await waitUntil(() =>
-			resumedEntryFrameSeen &&
-			remote!.snapshot.credentials.some(entry =>
-				entry.credential.type === "oauth" && entry.credential.access === "access-after-reconnect",
-			),
+		await waitUntil(
+			() =>
+				resumedEntryFrameSeen &&
+				remote!.snapshot.credentials.some(
+					entry => entry.credential.type === "oauth" && entry.credential.access === "access-after-reconnect",
+				),
 		);
-		const resumed = remote.snapshot.credentials.find(entry =>
-			entry.credential.type === "oauth" && entry.credential.access === "access-after-reconnect",
+		const resumed = remote.snapshot.credentials.find(
+			entry => entry.credential.type === "oauth" && entry.credential.access === "access-after-reconnect",
 		);
 		expect(resumed?.credential).toMatchObject({
-			type: "oauth", access: "access-after-reconnect", refresh: REMOTE_REFRESH_SENTINEL,
+			type: "oauth",
+			access: "access-after-reconnect",
+			refresh: REMOTE_REFRESH_SENTINEL,
 		});
 		expect(remote.snapshot.credentials.some(entry => entry.id === id)).toBe(false);
 	});
@@ -409,7 +441,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			connected.resolve();
 			yield {
-				kind: "entry" as const, entry: additional,
+				kind: "entry" as const,
+				entry: additional,
 				generation: initial.snapshot.generation,
 				serverNowMs: initial.snapshot.serverNowMs,
 				refresher: initial.snapshot.refresher,
@@ -419,13 +452,15 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			while (!opts.signal?.aborted) {
 				replayedFrames += 1;
 				yield {
-					kind: "entry" as const, entry: original,
+					kind: "entry" as const,
+					entry: original,
 					generation: initial.snapshot.generation,
 					serverNowMs: initial.snapshot.serverNowMs,
 					refresher: initial.snapshot.refresher,
 				};
 				yield {
-					kind: "removed" as const, id: additional.id + 1,
+					kind: "removed" as const,
+					id: additional.id + 1,
 					generation: initial.snapshot.generation,
 					serverNowMs: initial.snapshot.serverNowMs,
 					refresher: initial.snapshot.refresher,
@@ -434,7 +469,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 150,
 			onSnapshot: () => {
 				fullSnapshotsObserved += 1;
 			},
@@ -453,8 +490,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
 		expect(canonical.snapshot.credentials).toEqual([]);
 	});
-
-
 
 	test("pending local safety blocks do not make unchanged SSE replays fresh", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
@@ -475,8 +510,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				// Neither replay includes the speculative local block. Both are
 				// unchanged broker state, even while the POST is held in flight.
 				yield {
-					kind: "entry" as const, generation: initial.snapshot.generation,
-					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					kind: "entry" as const,
+					generation: initial.snapshot.generation,
+					serverNowMs: initial.snapshot.serverNowMs,
+					refresher: initial.snapshot.refresher,
 					entry: oldEntry,
 				};
 				yield { kind: "snapshot" as const, ...initial.snapshot };
@@ -491,13 +528,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			return pendingReply.promise;
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 150,
 		});
 		await connected.promise;
 		const blockedUntilMs = Date.now() + 120_000;
 		remote.upsertCredentialBlock({
-			credentialId: blockedId, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs, updatedAtMs: Date.now(),
+			credentialId: blockedId,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await pendingStarted.promise;
 		try {
@@ -519,7 +561,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			pendingReply.resolve({ ok: false });
 		}
 	});
-
 
 	test("permuted no-progress full SSE snapshots cannot postpone broker revocation", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
@@ -551,13 +592,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 150,
 		});
 		await connected.promise;
 		await waitUntil(() => replayed >= 10);
-		expect(remote.snapshot.credentials.map(entry => entry.id).sort()).toEqual(
-			[revokedId, survivorId].sort(),
-		);
+		expect(remote.snapshot.credentials.map(entry => entry.id).sort()).toEqual([revokedId, survivorId].sort());
 		expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke during permuted SSE")).toBe(true);
 		// No manual refresh or new SSE generation is sent: only the production
 		// canonical watchdog GET can see the broker's deletion.
@@ -584,7 +625,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await untilAborted(opts.signal);
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 25,
 		});
 		await streamReady.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
@@ -611,7 +654,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await untilAborted(opts.signal);
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 25,
 		});
 		await streamReady.promise;
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
@@ -640,10 +685,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (first.status !== 200) throw new Error("expected broker snapshot");
 		const id = first.snapshot.credentials[0]!.id;
 		const blockedUntilA = Date.now() + 120_000;
-		expect(await peer.upsertCredentialBlock(id, {
-			providerKey: "anthropic", blockScope: "scope-A",
-			blockedUntilMs: blockedUntilA, updatedAtMs: Date.now(),
-		})).toEqual({ ok: true });
+		expect(
+			await peer.upsertCredentialBlock(id, {
+				providerKey: "anthropic",
+				blockScope: "scope-A",
+				blockedUntilMs: blockedUntilA,
+				updatedAtMs: Date.now(),
+			}),
+		).toEqual({ ok: true });
 		const initial = await client.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected seeded broker snapshot");
 		const streamReady = Promise.withResolvers<void>();
@@ -664,14 +713,20 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			return realFetch(opts);
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 25,
+			client,
+			initialSnapshot: initial.snapshot,
+			snapshotStreamVerifyIntervalMs: 25,
 		});
 		await streamReady.promise;
 		const blockedUntilB = blockedUntilA + 60_000;
-		expect(await peer.upsertCredentialBlock(id, {
-			providerKey: "anthropic", blockScope: "scope-B",
-			blockedUntilMs: blockedUntilB, updatedAtMs: Date.now(),
-		})).toEqual({ ok: true });
+		expect(
+			await peer.upsertCredentialBlock(id, {
+				providerKey: "anthropic",
+				blockScope: "scope-B",
+				blockedUntilMs: blockedUntilB,
+				updatedAtMs: Date.now(),
+			}),
+		).toEqual({ ok: true });
 		await firstVerifyFailed.promise;
 		// Failed reconciliation cannot optimistically lift an existing block.
 		expect(remote.getCredentialBlock(id, "anthropic", "scope-A")).toBe(blockedUntilA);
@@ -729,7 +784,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before });
 		await connected.promise;
 		spyOn(client, "fetchSnapshot").mockResolvedValueOnce({
-			status: 200, snapshot: restarted, generation: 0,
+			status: 200,
+			snapshot: restarted,
+			generation: 0,
 		});
 		await remote.refreshSnapshot();
 		expect(remote.snapshot.generation).toBe(0);
@@ -818,7 +875,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(remote.snapshot.credentials).toHaveLength(0);
 		});
 	}
-
 
 	// A successful local broker disable is a state change even before another
 	// snapshot or SSE event arrives. A pre-disable GET must not undo it.
@@ -1008,7 +1064,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const id = initial.snapshot.credentials[0]!.id;
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot, streamSnapshots: false });
 
-		const disabled = remote.tryDisableAuthCredentialIfMatches(id, "synthetic-old-serialized-grant", "synthetic refresh failure");
+		const disabled = remote.tryDisableAuthCredentialIfMatches(
+			id,
+			"synthetic-old-serialized-grant",
+			"synthetic refresh failure",
+		);
 		expect(disabled).toBe(false);
 		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
 		const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
@@ -1073,17 +1133,20 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (initial.status !== 200) throw new Error("expected broker snapshot");
 			const id = initial.snapshot.credentials[0]!.id;
 			remote = new RemoteAuthCredentialStore({
-				client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+				client,
+				initialSnapshot: initial.snapshot,
+				streamSnapshots: false,
 			});
 			spyOn(client, "disableCredential").mockResolvedValue({ ok: false });
 
-			const attempt = operation === "single"
-				? remote.deleteAuthCredentialRemote(id, "synthetic disable")
-				: operation === "logout"
-					? remote.deleteAuthCredentialsRemote("anthropic", "synthetic logout")
-					: remote.replaceAuthCredentialsRemote("anthropic", [
-							mintOAuthCredential("replacement", Date.now() + 120_000),
-						]);
+			const attempt =
+				operation === "single"
+					? remote.deleteAuthCredentialRemote(id, "synthetic disable")
+					: operation === "logout"
+						? remote.deleteAuthCredentialsRemote("anthropic", "synthetic logout")
+						: remote.replaceAuthCredentialsRemote("anthropic", [
+								mintOAuthCredential("replacement", Date.now() + 120_000),
+							]);
 			await expect(attempt).rejects.toThrow(/broker refused credential disable/i);
 
 			// Check both local and authoritative state: a replacement must not be
@@ -1096,7 +1159,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
-
 	// The initial provider-wide list may become stale while a disable is in flight.
 	// A late acknowledgment for its old grant must not evict a refreshed same-ID
 	// grant or allow an unsafe replacement upload.
@@ -1107,7 +1169,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (initial.status !== 200) throw new Error("expected broker snapshot");
 			const id = initial.snapshot.credentials[0]!.id;
 			remote = new RemoteAuthCredentialStore({
-				client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+				client,
+				initialSnapshot: initial.snapshot,
+				streamSnapshots: false,
 			});
 			const acknowledgement = Promise.withResolvers<{ ok: boolean }>();
 			const disableStarted = Promise.withResolvers<void>();
@@ -1131,26 +1195,29 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				return realFetch(options);
 			});
 
-			const pending = operation === "logout"
-				? remote.deleteAuthCredentialsRemote("anthropic", "synthetic provider logout")
-				: remote.replaceAuthCredentialsRemote("anthropic", [
-						mintOAuthCredential("replacement", Date.now() + 120_000),
-					]);
+			const pending =
+				operation === "logout"
+					? remote.deleteAuthCredentialsRemote("anthropic", "synthetic provider logout")
+					: remote.replaceAuthCredentialsRemote("anthropic", [
+							mintOAuthCredential("replacement", Date.now() + 120_000),
+						]);
 			await disableStarted.promise;
 			store!.updateAuthCredential(id, mintOAuthCredential("new", Date.now() + 120_000));
 			await storage!.reload();
 			await remote.refreshSnapshot();
 			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
-				access: "access-new", refresh: REMOTE_REFRESH_SENTINEL,
+				access: "access-new",
+				refresh: REMOTE_REFRESH_SENTINEL,
 			});
 			holdReconciliation = true;
 			try {
 				acknowledgement.resolve({ ok: true });
 				await expect(pending).rejects.toThrow(/disable superseded by newer state/i);
-				expect(upload).not.toHaveBeenCalled();
+				expect(upload.mock.calls).toHaveLength(0);
 				expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
 				expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
-					access: "access-new", refresh: REMOTE_REFRESH_SENTINEL,
+					access: "access-new",
+					refresh: REMOTE_REFRESH_SENTINEL,
 				});
 				const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
 				if (authoritative.status !== 200) throw new Error("expected broker snapshot");
@@ -1204,7 +1271,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			initialSnapshot: initial.snapshot,
 			streamSnapshots: false,
 			snapshotStreamVerifyIntervalMs: 350,
-			onSnapshot: () => { appliedSnapshots += 1; },
+			onSnapshot: () => {
+				appliedSnapshots += 1;
+			},
 		});
 		await firstConditional.promise;
 		expect(conditionalRequests).toBeGreaterThan(0);
@@ -1227,9 +1296,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			refresher: { ...initial.snapshot.refresher, skewMs: initial.snapshot.refresher.skewMs + 1 },
 			credentials: initial.snapshot.credentials.map(entry => ({
 				...entry,
-				credential: entry.credential.type === "oauth"
-					? { ...entry.credential, access: "synthetic-accepted-access-change" }
-					: entry.credential,
+				credential:
+					entry.credential.type === "oauth"
+						? { ...entry.credential, access: "synthetic-accepted-access-change" }
+						: entry.credential,
 			})),
 		};
 		let conditionalRequests = 0;
@@ -1250,7 +1320,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		await waitUntil(() => remote!.snapshot.refresher.skewMs === changed.refresher.skewMs);
 		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
-			access: "synthetic-accepted-access-change", refresh: REMOTE_REFRESH_SENTINEL,
+			access: "synthetic-accepted-access-change",
+			refresh: REMOTE_REFRESH_SENTINEL,
 		});
 		expect(conditionalRequests).toBeGreaterThan(0);
 		expect(canonicalRequests).toBe(0);
@@ -1398,7 +1469,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
-
 	test("rejects broker upload replies for another provider or with unredacted OAuth refresh", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
@@ -1419,14 +1489,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			{ label: "foreign provider", entries: [{ ...entry, provider: "openai-codex" }] },
 			{
 				label: "unredacted refresh",
-				entries: [{
-					...entry,
-					// This malformed wire fixture deliberately violates the remote credential type.
-					credential: {
-						...entry.credential,
-						refresh: "synthetic-unredacted-refresh",
-					} as unknown as SnapshotResponse["credentials"][number]["credential"],
-				}],
+				entries: [
+					{
+						...entry,
+						// This malformed wire fixture deliberately violates the remote credential type.
+						credential: {
+							...entry.credential,
+							refresh: "synthetic-unredacted-refresh",
+						} as unknown as SnapshotResponse["credentials"][number]["credential"],
+					},
+				],
 			},
 			{
 				label: "valid entry followed by foreign provider",
@@ -1483,15 +1555,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				return response;
 			});
 			const replacement = mintOAuthCredential("delayed-upload", Date.now() + 120_000);
-			const pending = operation === "upsert"
-				? remote.upsertAuthCredentialRemote("anthropic", replacement)
-				: remote.replaceAuthCredentialsRemote("anthropic", [replacement]);
+			const pending =
+				operation === "upsert"
+					? remote.upsertAuthCredentialRemote("anthropic", replacement)
+					: remote.replaceAuthCredentialsRemote("anthropic", [replacement]);
 			await uploadCommitted.promise;
 			try {
 				const afterWrite = await peer.fetchSnapshot();
 				if (afterWrite.status !== 200) throw new Error("expected post-upload broker snapshot");
-				const uploaded = afterWrite.snapshot.credentials.find(entry =>
-					entry.credential.type === "oauth" && entry.credential.access === "access-delayed-upload",
+				const uploaded = afterWrite.snapshot.credentials.find(
+					entry => entry.credential.type === "oauth" && entry.credential.access === "access-delayed-upload",
 				);
 				expect(uploaded).toBeDefined();
 				await peer.disableCredential(uploaded!.id, "synthetic revocation before delayed reply");
@@ -1523,12 +1596,15 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			mintOAuthCredential("b", Date.now() + 120_000),
 		);
 		expect(delivered.map(row => row.provider)).toEqual(["anthropic", "anthropic"]);
-		expect(delivered.map(row => row.credential.type === "oauth" ? row.credential.access : null).sort())
-			.toEqual(["access-a", "access-b"]);
-		expect(delivered.map(row => row.credential.type === "oauth" ? row.credential.refresh : null))
-			.toEqual([REMOTE_REFRESH_SENTINEL, REMOTE_REFRESH_SENTINEL]);
+		expect(delivered.map(row => (row.credential.type === "oauth" ? row.credential.access : null)).sort()).toEqual([
+			"access-a",
+			"access-b",
+		]);
+		expect(delivered.map(row => (row.credential.type === "oauth" ? row.credential.refresh : null))).toEqual([
+			REMOTE_REFRESH_SENTINEL,
+			REMOTE_REFRESH_SENTINEL,
+		]);
 	});
-
 
 	for (const failedUpsert of ["negative acknowledgment", "rejected transport"] as const) {
 		test(`reconciles a speculative credential block after ${failedUpsert} even while streaming`, async () => {
@@ -1560,8 +1636,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			});
 			const blockedUntilMs = Date.now() + 120_000;
 			remote.upsertCredentialBlock({
-				credentialId: id, providerKey: "anthropic", blockScope: "credential",
-				blockedUntilMs, updatedAtMs: Date.now(),
+				credentialId: id,
+				providerKey: "anthropic",
+				blockScope: "credential",
+				blockedUntilMs,
+				updatedAtMs: Date.now(),
 			});
 			await waitUntil(() => postAttempts === 1);
 			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
@@ -1570,9 +1649,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				else pendingResponse.reject(new Error("synthetic broker POST unavailable"));
 				// A failed write emits no stream event; a full broker read must retire
 				// the speculative block instead of keeping a phantom restriction.
-				await waitUntil(() =>
-					fullSnapshotReads === 1 &&
-					remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
+				await waitUntil(
+					() => fullSnapshotReads === 1 && remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
 				);
 				expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "credential")).toBeUndefined();
 				expect(remote.listCredentialBlocks([id])).toEqual([]);
@@ -1584,9 +1662,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 	}
-
-
-
 
 	for (const incoming of ["SSE", "GET"] as const) {
 		test(`keeps a pending broker block across an older peer ${incoming} snapshot until reconciliation`, async () => {
@@ -1604,8 +1679,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				const entry = next.credentials.find(candidate => candidate.id === id);
 				if (!entry) throw new Error("expected updated peer credential");
 				yield {
-					kind: "entry" as const, generation: next.generation, serverNowMs: next.serverNowMs,
-					refresher: next.refresher, entry,
+					kind: "entry" as const,
+					generation: next.generation,
+					serverNowMs: next.serverNowMs,
+					refresher: next.refresher,
+					entry,
 				};
 				await untilAborted(opts.signal);
 			});
@@ -1632,16 +1710,21 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			const olderUntilMs = Date.now() + 60_000;
 			const newerUntilMs = olderUntilMs + 60_000;
 			remote.upsertCredentialBlock({
-				credentialId: id, providerKey: "anthropic", blockScope: "credential",
-				blockedUntilMs: newerUntilMs, updatedAtMs: Date.now(),
+				credentialId: id,
+				providerKey: "anthropic",
+				blockScope: "credential",
+				blockedUntilMs: newerUntilMs,
+				updatedAtMs: Date.now(),
 			});
 			await pendingStarted.promise;
 			try {
 				// A peer commits an older block while our later, longer block is
 				// speculative. Both events are legitimate broker responses.
 				const olderAck = await peer.upsertCredentialBlock(id, {
-					providerKey: "anthropic", blockScope: "credential",
-					blockedUntilMs: olderUntilMs, updatedAtMs: Date.now(),
+					providerKey: "anthropic",
+					blockScope: "credential",
+					blockedUntilMs: olderUntilMs,
+					updatedAtMs: Date.now(),
 				});
 				expect(olderAck).toEqual({ ok: true });
 				const olderSnapshot = await peer.fetchSnapshot();
@@ -1658,10 +1741,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				await pendingCommitted.promise;
 				const finalBroker = await peer.fetchSnapshot();
 				if (finalBroker.status !== 200) throw new Error("expected final broker snapshot");
-				await waitUntil(() =>
-					fullReads >= (incoming === "SSE" ? 1 : 2) &&
-					remote!.snapshot.generation === finalBroker.snapshot.generation &&
-					remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs,
+				await waitUntil(
+					() =>
+						fullReads >= (incoming === "SSE" ? 1 : 2) &&
+						remote!.snapshot.generation === finalBroker.snapshot.generation &&
+						remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs,
 				);
 				expect(finalBroker.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
 					{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs },
@@ -1675,7 +1759,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 	}
-
 
 	// Both source paths must combine locally pending safety with a distinct
 	// broker-authoritative peer scope, rather than replacing either list.
@@ -1697,8 +1780,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 						const entry = next.credentials.find(candidate => candidate.id === id);
 						if (!entry) throw new Error("missing synthetic peer entry");
 						yield {
-							kind: "entry" as const, generation: next.generation, serverNowMs: next.serverNowMs,
-							refresher: next.refresher, entry,
+							kind: "entry" as const,
+							generation: next.generation,
+							serverNowMs: next.serverNowMs,
+							refresher: next.refresher,
+							entry,
 						};
 					}
 					await untilAborted(opts.signal);
@@ -1718,9 +1804,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					expect(body.blockScope).toBe("scope-A");
 					pendingStarted.resolve();
 					await releasePending.promise;
-					const response = outcome === "accepted"
-						? await realUpsert(credentialId, body)
-						: { ok: false };
+					const response = outcome === "accepted" ? await realUpsert(credentialId, body) : { ok: false };
 					pendingSettled.resolve();
 					return response;
 				});
@@ -1729,14 +1813,19 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				const localUntilMs = Date.now() + 90_000;
 				const peerUntilMs = localUntilMs + 60_000;
 				remote.upsertCredentialBlock({
-					credentialId: id, providerKey: "anthropic", blockScope: "scope-A",
-					blockedUntilMs: localUntilMs, updatedAtMs: Date.now(),
+					credentialId: id,
+					providerKey: "anthropic",
+					blockScope: "scope-A",
+					blockedUntilMs: localUntilMs,
+					updatedAtMs: Date.now(),
 				});
 				await pendingStarted.promise;
 				try {
 					const peerAck = await peer.upsertCredentialBlock(id, {
-						providerKey: "anthropic", blockScope: "scope-B",
-						blockedUntilMs: peerUntilMs, updatedAtMs: Date.now(),
+						providerKey: "anthropic",
+						blockScope: "scope-B",
+						blockedUntilMs: peerUntilMs,
+						updatedAtMs: Date.now(),
 					});
 					expect(peerAck).toEqual({ ok: true });
 					const peerSnapshot = await peer.fetchSnapshot();
@@ -1754,18 +1843,27 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					expect(remote.listCredentialBlocks([id])).toHaveLength(2);
 					releasePending.resolve();
 					await pendingSettled.promise;
-					await waitUntil(() =>
-						fullReads >= (incoming === "SSE" ? 1 : 2) &&
-						remote!.getCredentialBlock(id, "anthropic", "scope-B") === peerUntilMs &&
-						remote!.getCredentialBlock(id, "anthropic", "scope-A") ===
-							(outcome === "accepted" ? localUntilMs : undefined),
+					await waitUntil(
+						() =>
+							fullReads >= (incoming === "SSE" ? 1 : 2) &&
+							remote!.getCredentialBlock(id, "anthropic", "scope-B") === peerUntilMs &&
+							remote!.getCredentialBlock(id, "anthropic", "scope-A") ===
+								(outcome === "accepted" ? localUntilMs : undefined),
 					);
 					const authoritative = await peer.fetchSnapshot();
 					if (authoritative.status !== 200) throw new Error("expected authoritative broker state");
-					const scopes = authoritative.snapshot.credentials
-						.find(entry => entry.id === id)?.blocks?.map(block => block.blockScope).sort() ?? [];
+					const scopes =
+						authoritative.snapshot.credentials
+							.find(entry => entry.id === id)
+							?.blocks?.map(block => block.blockScope)
+							.sort() ?? [];
 					expect(scopes).toEqual(outcome === "accepted" ? ["scope-A", "scope-B"] : ["scope-B"]);
-					expect(remote.listCredentialBlocks([id]).map(block => block.blockScope).sort()).toEqual(scopes);
+					expect(
+						remote
+							.listCredentialBlocks([id])
+							.map(block => block.blockScope)
+							.sort(),
+					).toEqual(scopes);
 				} finally {
 					releasePending.resolve();
 					peerFrame.resolve(initial.snapshot);
@@ -1819,8 +1917,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
 		await streamReady.promise;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(blockedUntilMs);
 		try {
@@ -1838,12 +1939,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// The old GET is now obsolete because an unrelated SSE entry changed
 			// the global revision. A fresh GET must still reconcile A's failed POST.
 			releaseFirstRead.resolve();
-			await waitUntil(() =>
-				fullReads === 2 &&
-				remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
+			await waitUntil(
+				() => fullReads === 2 && remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
 			);
-			expect(remote.snapshot.credentials.map(entry => entry.id).sort((a, b) => a - b))
-				.toEqual([id, otherId].sort((a, b) => a - b));
+			expect(remote.snapshot.credentials.map(entry => entry.id).sort((a, b) => a - b)).toEqual(
+				[id, otherId].sort((a, b) => a - b),
+			);
 			expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "credential")).toBeUndefined();
 			const authoritative = await peer.fetchSnapshot();
 			if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
@@ -1901,16 +2002,22 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const firstUntilMs = Date.now() + 90_000;
 		const secondUntilMs = firstUntilMs + 60_000;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "scope-A",
-			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "scope-A",
+			blockedUntilMs: firstUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		try {
 			await firstReadReady.promise;
 			// The failed A POST left its reconciliation GET unresolved. B now
 			// commits to the real SQLite broker while A's GET is still in flight.
 			remote.upsertCredentialBlock({
-				credentialId: id, providerKey: "anthropic", blockScope: "scope-B",
-				blockedUntilMs: secondUntilMs, updatedAtMs: Date.now(),
+				credentialId: id,
+				providerKey: "anthropic",
+				blockScope: "scope-B",
+				blockedUntilMs: secondUntilMs,
+				updatedAtMs: Date.now(),
 			});
 			await newerCommitted.promise;
 			await Bun.sleep(1); // let the store settle B's returned acknowledgment
@@ -1923,10 +2030,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// A's GET now fails. Its in-flight flag must not discard the retry
 			// requested by B's settlement while the previous read was pending.
 			releaseFirstRead.resolve();
-			await waitUntil(() =>
-				fullReads === 2 &&
-				remote!.getCredentialBlock(id, "anthropic", "scope-A") === undefined &&
-				remote!.getCredentialBlock(id, "anthropic", "scope-B") === secondUntilMs,
+			await waitUntil(
+				() =>
+					fullReads === 2 &&
+					remote!.getCredentialBlock(id, "anthropic", "scope-A") === undefined &&
+					remote!.getCredentialBlock(id, "anthropic", "scope-B") === secondUntilMs,
 			);
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
 				{ credentialId: id, providerKey: "anthropic", blockScope: "scope-B", blockedUntilMs: secondUntilMs },
@@ -1973,18 +2081,26 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			return ack;
 		});
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+			client,
+			initialSnapshot: initial.snapshot,
+			streamSnapshots: false,
 		});
 		const olderUntilMs = Date.now() + 90_000;
 		const newerUntilMs = olderUntilMs + 60_000;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: olderUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: olderUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await olderCommitted.promise;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: newerUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: newerUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
 		try {
@@ -1999,8 +2115,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await waitUntil(() => fullReads === 1);
 			const brokerNow = await peer.fetchSnapshot();
 			if (brokerNow.status !== 200) throw new Error("expected final broker snapshot");
-			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks)
-				.toMatchObject([{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs }]);
+			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs },
+			]);
 			expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
 		} finally {
 			olderRelease.resolve();
@@ -2048,12 +2165,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const firstUntilMs = Date.now() + 90_000;
 		const newerUntilMs = firstUntilMs + 60_000;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: firstUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: newerUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: newerUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await newerStarted.promise;
 		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(newerUntilMs);
@@ -2068,17 +2191,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await newerCommitted.promise;
 			const brokerNow = await peer.fetchSnapshot();
 			if (brokerNow.status !== 200) throw new Error("expected authoritative broker snapshot");
-			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks)
-				.toMatchObject([{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs }]);
-			await waitUntil(() => fullReads >= 1 && remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs);
+			expect(brokerNow.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
+				{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs },
+			]);
+			await waitUntil(
+				() => fullReads >= 1 && remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs,
+			);
 			expect(fullReads).toBe(1);
 		} finally {
 			olderReply.resolve({ ok: false });
 			newerRelease.resolve();
 		}
 	});
-
-
 
 	test("reconciles a failed longer same-scope block after a shorter newer block commits with stalled SSE", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
@@ -2126,12 +2250,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const shorterUntilMs = Date.now() + 5 * 60_000;
 		const longerUntilMs = shorterUntilMs + 55 * 60_000;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: longerUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: longerUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: shorterUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: shorterUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await newerStarted.promise;
 		expect(remote.getCredentialBlock(id, "anthropic", "credential")).toBe(longerUntilMs);
@@ -2151,9 +2281,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			]);
 			// The newer confirmed 5-minute restriction, not A's rejected 60-minute
 			// speculative projection, must become the exact local deadline.
-			await waitUntil(() =>
-				fullReads >= 1 &&
-				remote!.getCredentialBlock(id, "anthropic", "credential") === shorterUntilMs,
+			await waitUntil(
+				() => fullReads >= 1 && remote!.getCredentialBlock(id, "anthropic", "credential") === shorterUntilMs,
 			);
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
 				{ credentialId: id, providerKey: "anthropic", blockScope: "credential", blockedUntilMs: shorterUntilMs },
@@ -2214,12 +2343,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const firstUntilMs = Date.now() + 90_000;
 		const secondUntilMs = firstUntilMs + 60_000;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "scope-A",
-			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "scope-A",
+			blockedUntilMs: firstUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "scope-B",
-			blockedUntilMs: secondUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "scope-B",
+			blockedUntilMs: secondUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await newerStarted.promise;
 		expect(remote.getCredentialBlock(id, "anthropic", "scope-A")).toBe(firstUntilMs);
@@ -2240,10 +2375,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			]);
 			// The apparently healthy but stalled SSE stream cannot strand a
 			// phantom scope-A block simply because scope B committed afterward.
-			await waitUntil(() =>
-				fullReads >= 1 &&
-				remote!.getCredentialBlock(id, "anthropic", "scope-A") === undefined &&
-				remote!.getCredentialBlock(id, "anthropic", "scope-B") === secondUntilMs,
+			await waitUntil(
+				() =>
+					fullReads >= 1 &&
+					remote!.getCredentialBlock(id, "anthropic", "scope-A") === undefined &&
+					remote!.getCredentialBlock(id, "anthropic", "scope-B") === secondUntilMs,
 			);
 			expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "scope-A")).toBeUndefined();
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
@@ -2255,19 +2391,17 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
-
-
 	test("does not reconcile a failed credential across another credential's pending block", async () => {
 		storage!.upsertCredential("anthropic", mintOAuthCredential("peer", Date.now() + 120_000));
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await peer.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
-		const first = initial.snapshot.credentials.find(entry =>
-			entry.credential.type === "oauth" && entry.credential.access === "access-a",
+		const first = initial.snapshot.credentials.find(
+			entry => entry.credential.type === "oauth" && entry.credential.access === "access-a",
 		);
-		const second = initial.snapshot.credentials.find(entry =>
-			entry.credential.type === "oauth" && entry.credential.access === "access-peer",
+		const second = initial.snapshot.credentials.find(
+			entry => entry.credential.type === "oauth" && entry.credential.access === "access-peer",
 		);
 		if (!first || !second) throw new Error("expected two independent synthetic credentials");
 		const streamReady = Promise.withResolvers<void>();
@@ -2307,13 +2441,19 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const firstUntilMs = Date.now() + 90_000;
 		const secondUntilMs = firstUntilMs + 60_000;
 		remote.upsertCredentialBlock({
-			credentialId: second.id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: secondUntilMs, updatedAtMs: Date.now(),
+			credentialId: second.id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: secondUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await peerPostStarted.promise;
 		remote.upsertCredentialBlock({
-			credentialId: first.id, providerKey: "anthropic", blockScope: "credential",
-			blockedUntilMs: firstUntilMs, updatedAtMs: Date.now(),
+			credentialId: first.id,
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs: firstUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		try {
 			await waitUntil(() => failureHandled);
@@ -2321,10 +2461,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(remote.getCredentialBlock(second.id, "anthropic", "credential")).toBe(secondUntilMs);
 			releasePeerPost.resolve();
 			await peerPostCommitted.promise;
-			await waitUntil(() =>
-				fullReads >= 1 &&
-				remote!.getCredentialBlock(first.id, "anthropic", "credential") === undefined &&
-				remote!.getCredentialBlock(second.id, "anthropic", "credential") === secondUntilMs,
+			await waitUntil(
+				() =>
+					fullReads >= 1 &&
+					remote!.getCredentialBlock(first.id, "anthropic", "credential") === undefined &&
+					remote!.getCredentialBlock(second.id, "anthropic", "credential") === secondUntilMs,
 			);
 			const authoritative = await peer.fetchSnapshot();
 			if (authoritative.status !== 200) throw new Error("expected final broker snapshot");
@@ -2333,7 +2474,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				{ providerKey: "anthropic", blockScope: "credential", blockedUntilMs: secondUntilMs },
 			]);
 			expect(remote.listCredentialBlocks([first.id, second.id])).toMatchObject([
-				{ credentialId: second.id, providerKey: "anthropic", blockScope: "credential", blockedUntilMs: secondUntilMs },
+				{
+					credentialId: second.id,
+					providerKey: "anthropic",
+					blockScope: "credential",
+					blockedUntilMs: secondUntilMs,
+				},
 			]);
 		} finally {
 			releasePeerPost.resolve();
@@ -2382,8 +2528,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		await streamReady.promise;
 		const blockedUntilMs = Date.now() + 120_000;
 		remote.upsertCredentialBlock({
-			credentialId: id, providerKey: "anthropic", blockScope: "scope-pending",
-			blockedUntilMs, updatedAtMs: Date.now(),
+			credentialId: id,
+			providerKey: "anthropic",
+			blockScope: "scope-pending",
+			blockedUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		await upsertStarted.promise;
 		expect(remote.getCredentialBlock(id, "anthropic", "scope-pending")).toBe(blockedUntilMs);
@@ -2404,9 +2553,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			]);
 			// The local state must converge to the post-DELETE broker truth;
 			// successful delete-all cannot evict a later-committed block.
-			await waitUntil(() =>
-				fullReads >= 1 &&
-				remote!.getCredentialBlock(id, "anthropic", "scope-pending") === blockedUntilMs,
+			await waitUntil(
+				() => fullReads >= 1 && remote!.getCredentialBlock(id, "anthropic", "scope-pending") === blockedUntilMs,
 			);
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
 				{ credentialId: id, providerKey: "anthropic", blockScope: "scope-pending", blockedUntilMs },
@@ -2416,7 +2564,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
-
 	test("retains a newer committed broker block after an older DELETE acknowledgement arrives last", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
@@ -2425,8 +2572,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const id = initial.snapshot.credentials[0]!.id;
 		const oldUntilMs = Date.now() + 90_000;
 		const seededAck = await peer.upsertCredentialBlock(id, {
-			providerKey: "anthropic", blockScope: "old-scope",
-			blockedUntilMs: oldUntilMs, updatedAtMs: Date.now(),
+			providerKey: "anthropic",
+			blockScope: "old-scope",
+			blockedUntilMs: oldUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		expect(seededAck).toEqual({ ok: true });
 		const seeded = await peer.fetchSnapshot();
@@ -2480,8 +2629,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// locally before the earlier DELETE response is delivered.
 			const newUntilMs = Date.now() + 180_000;
 			remote.upsertCredentialBlock({
-				credentialId: id, providerKey: "anthropic", blockScope: "new-scope",
-				blockedUntilMs: newUntilMs, updatedAtMs: Date.now(),
+				credentialId: id,
+				providerKey: "anthropic",
+				blockScope: "new-scope",
+				blockedUntilMs: newUntilMs,
+				updatedAtMs: Date.now(),
 			});
 			await postCommitted.promise;
 			await scheduler.wait(0);
@@ -2494,9 +2646,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			]);
 
 			releaseDeleteReply.resolve();
-			await waitUntil(() =>
-				canonicalReads === 1 &&
-				remote!.getCredentialBlock(id, "anthropic", "new-scope") === newUntilMs
+			await waitUntil(
+				() => canonicalReads === 1 && remote!.getCredentialBlock(id, "anthropic", "new-scope") === newUntilMs,
 			);
 			expect(remote.getCredentialBlock(id, "anthropic", "old-scope")).toBeUndefined();
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
@@ -2507,7 +2658,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
-
 	test("keeps a peer-committed block safe while the older DELETE acknowledgement reconciles", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
@@ -2515,10 +2665,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const oldUntilMs = Date.now() + 90_000;
-		expect(await peer.upsertCredentialBlock(id, {
-			providerKey: "anthropic", blockScope: "old-scope",
-			blockedUntilMs: oldUntilMs, updatedAtMs: Date.now(),
-		})).toEqual({ ok: true });
+		expect(
+			await peer.upsertCredentialBlock(id, {
+				providerKey: "anthropic",
+				blockScope: "old-scope",
+				blockedUntilMs: oldUntilMs,
+				updatedAtMs: Date.now(),
+			}),
+		).toEqual({ ok: true });
 		const seeded = await peer.fetchSnapshot();
 		if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
 
@@ -2559,10 +2713,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (afterDelete.status !== 200) throw new Error("expected deleted broker blocks");
 			expect(afterDelete.snapshot.credentials.find(entry => entry.id === id)?.blocks ?? []).toEqual([]);
 			const peerUntilMs = Date.now() + 180_000;
-			expect(await peer.upsertCredentialBlock(id, {
-				providerKey: "anthropic", blockScope: "peer-scope",
-				blockedUntilMs: peerUntilMs, updatedAtMs: Date.now(),
-			})).toEqual({ ok: true });
+			expect(
+				await peer.upsertCredentialBlock(id, {
+					providerKey: "anthropic",
+					blockScope: "peer-scope",
+					blockedUntilMs: peerUntilMs,
+					updatedAtMs: Date.now(),
+				}),
+			).toEqual({ ok: true });
 			const authoritative = await peer.fetchSnapshot();
 			if (authoritative.status !== 200) throw new Error("expected broker scope after peer POST");
 			expect(authoritative.snapshot.credentials.find(entry => entry.id === id)?.blocks).toMatchObject([
@@ -2577,9 +2735,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// for the canonical broker read that establishes the peer's scope.
 			expect(remote.getCredentialBlock(id, "anthropic", "old-scope")).toBe(oldUntilMs);
 			releaseCanonicalRead.resolve();
-			await waitUntil(() =>
-				remote!.getCredentialBlock(id, "anthropic", "peer-scope") === peerUntilMs &&
-				remote!.getCredentialBlock(id, "anthropic", "old-scope") === undefined
+			await waitUntil(
+				() =>
+					remote!.getCredentialBlock(id, "anthropic", "peer-scope") === peerUntilMs &&
+					remote!.getCredentialBlock(id, "anthropic", "old-scope") === undefined,
 			);
 			expect(canonicalReads).toBe(1);
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
@@ -2599,7 +2758,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const id = initial.snapshot.credentials[0]!.id;
 		const blockedUntilMs = Date.now() + 120_000;
 		const blockAck = await peer.upsertCredentialBlock(id, {
-			providerKey: "anthropic", blockScope: "credential", blockedUntilMs, updatedAtMs: Date.now(),
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		expect(blockAck).toEqual({ ok: true });
 		const seeded = await peer.fetchSnapshot();
@@ -2638,9 +2800,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const authoritative = await peer.fetchSnapshot();
 		if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
 		expect(authoritative.snapshot.credentials[0]?.blocks ?? []).toEqual([]);
-		await waitUntil(() =>
-			explicitSnapshotReads === 1 &&
-			remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
+		await waitUntil(
+			() => explicitSnapshotReads === 1 && remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
 		);
 		expect(remote.listCredentialBlocks([id])).toEqual([]);
 		expect(remote.getCredentialBlockReconcileAfter(id, "anthropic", "credential")).toBeUndefined();
@@ -2653,15 +2814,24 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const id = initial.snapshot.credentials[0]!.id;
 		const blockedUntilMs = Date.now() + 120_000;
 		await client.upsertCredentialBlock(id, {
-			providerKey: "anthropic", blockScope: "credential", blockedUntilMs, updatedAtMs: Date.now(),
+			providerKey: "anthropic",
+			blockScope: "credential",
+			blockedUntilMs,
+			updatedAtMs: Date.now(),
 		});
 		const seeded = await client.fetchSnapshot();
 		if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
-		expect(seeded.snapshot.credentials[0]?.blocks).toMatchObject([{
-			providerKey: "anthropic", blockScope: "credential", blockedUntilMs,
-		}]);
+		expect(seeded.snapshot.credentials[0]?.blocks).toMatchObject([
+			{
+				providerKey: "anthropic",
+				blockScope: "credential",
+				blockedUntilMs,
+			},
+		]);
 		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: seeded.snapshot, streamSnapshots: false,
+			client,
+			initialSnapshot: seeded.snapshot,
+			streamSnapshots: false,
 		});
 		// The synchronous store method reports asynchronous broker failures by
 		// warning. Wait for that actual failure-handling boundary, not elapsed
@@ -2694,9 +2864,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 		const authoritative = await new AuthBrokerClient({ url: handle!.url, token }).fetchSnapshot();
 		if (authoritative.status !== 200) throw new Error("expected authoritative broker snapshot");
-		expect(authoritative.snapshot.credentials[0]?.blocks).toMatchObject([{
-			providerKey: "anthropic", blockScope: "credential", blockedUntilMs,
-		}]);
+		expect(authoritative.snapshot.credentials[0]?.blocks).toMatchObject([
+			{
+				providerKey: "anthropic",
+				blockScope: "credential",
+				blockedUntilMs,
+			},
+		]);
 	});
 
 	for (const concurrentBlock of [false, true] as const) {
@@ -2713,7 +2887,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				const blockedUntilMs = Date.now() + 120_000;
 				const newerUntilMs = blockedUntilMs + 60_000;
 				await client.upsertCredentialBlock(id, {
-					providerKey: "anthropic", blockScope: "credential", blockedUntilMs, updatedAtMs: Date.now(),
+					providerKey: "anthropic",
+					blockScope: "credential",
+					blockedUntilMs,
+					updatedAtMs: Date.now(),
 				});
 				const seeded = await client.fetchSnapshot();
 				if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
@@ -2727,7 +2904,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					return actualFetch(opts);
 				});
 				remote = new RemoteAuthCredentialStore({
-					client, initialSnapshot: seeded.snapshot, streamSnapshots: false,
+					client,
+					initialSnapshot: seeded.snapshot,
+					streamSnapshots: false,
 				});
 				const actualDelete = client.deleteCredentialBlocks.bind(client);
 				const brokerCommitted = Promise.withResolvers<void>();
@@ -2749,7 +2928,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					expect(afterDelete.snapshot.credentials[0]?.blocks ?? []).toEqual([]);
 					if (concurrentBlock) {
 						await peer.upsertCredentialBlock(id, {
-							providerKey: "anthropic", blockScope: "credential", blockedUntilMs: newerUntilMs,
+							providerKey: "anthropic",
+							blockScope: "credential",
+							blockedUntilMs: newerUntilMs,
 							updatedAtMs: Date.now(),
 						});
 						await remote.refreshSnapshot();
@@ -2877,9 +3058,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				release = resolve;
 			});
 			spyOn(client, "refreshCredential").mockImplementation(async () => delayedReply);
-			const pending = route === "oauth"
-				? remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000))
-				: remote.markCredentialSuspect(entry.id);
+			const pending =
+				route === "oauth"
+					? remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000))
+					: remote.markCredentialSuspect(entry.id);
 			expect(storage!.disableCredentialById(entry.id, "synthetic revocation")).toBe(true);
 			await remote.refreshSnapshot();
 			expect(remote.snapshot.credentials).toHaveLength(0);
@@ -3011,7 +3193,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
 				if (opts?.waitMs === undefined) {
 					if (reconciledState === "revoked") {
-						expect(storage!.disableCredentialById(entry.id, "synthetic revocation during reconciliation")).toBe(true);
+						expect(storage!.disableCredentialById(entry.id, "synthetic revocation during reconciliation")).toBe(
+							true,
+						);
 					} else {
 						store!.updateAuthCredential(entry.id, mintOAuthCredential("new", Date.now() + 120_000));
 						await storage!.reload();
@@ -3020,8 +3204,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				return actualFetch(opts);
 			});
 			await expect(
-					remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000)),
-				).rejects.toThrow(reconciledState === "revoked" ? /unknown or mismatched/i : /superseded/i);
+				remote.refreshOAuthCredential("anthropic", entry.id, mintOAuthCredential("a", Date.now() + 60_000)),
+			).rejects.toThrow(reconciledState === "revoked" ? /unknown or mismatched/i : /superseded/i);
 			if (reconciledState === "revoked") {
 				expect(remote.snapshot.credentials).toEqual([]);
 			} else {
@@ -3033,5 +3217,4 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			}
 		});
 	}
-
 });

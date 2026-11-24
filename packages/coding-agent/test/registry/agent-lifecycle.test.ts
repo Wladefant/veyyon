@@ -1124,7 +1124,7 @@ describe("AgentLifecycleManager", () => {
 		registry.unregister("LiveParent");
 		await drainMicrotasks(50);
 
-		expect(openSpy).not.toHaveBeenCalled();
+		expect(openSpy.mock.calls).toHaveLength(0);
 		for (let i = 0; i < 5; i++) {
 			expect(registry.get(`TerminalChild${i}`)).toBeUndefined();
 			expect(unregisterSpy.mock.calls.filter(args => args[0] === `TerminalChild${i}`)).toHaveLength(1);

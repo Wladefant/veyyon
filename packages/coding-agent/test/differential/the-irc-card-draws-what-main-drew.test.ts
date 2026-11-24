@@ -115,7 +115,20 @@ describe("irc tool differential", () => {
 		args?: IrcViewArgs,
 		width = WIDTH,
 	): string[] {
-		return renderCompLines(ircOracle.ircToolRenderer.renderResult(value, options, theme, args), width);
+		// The frozen renderer predates the roster's "peer ·" label. Give it the
+		// new copy before layout so the comparison still tests narrow columns.
+		const details = value.details;
+		const comparable =
+			details?.op === "list" && details.peers
+				? {
+						...value,
+						details: {
+							...details,
+							peers: details.peers.map(peer => ({ ...peer, kind: `peer · ${peer.kind}` })),
+						},
+					}
+				: value;
+		return renderCompLines(ircOracle.ircToolRenderer.renderResult(comparable, options, theme, args), width);
 	}
 
 	function message(overrides: Partial<IrcMessage> = {}): IrcMessage {
@@ -391,6 +404,7 @@ describe("irc tool differential", () => {
 		expect(drawn).toContain("bus landed.");
 		const roster = stripVTControlCharacters(viewLines(peers, COLLAPSED, { op: "list" }, 200).join("\n"));
 		expect(roster).toContain(`${theme.status.running} running`);
+		expect(roster).toContain("peer · sub");
 		expect(roster).toContain("auditing the token refresh path");
 		// The tool's own emblem and the outcome the card reports are pinned on the VIEW rather than on
 		// its bytes: the terminal draws `tool.irc` as an empty run in a build without the glyph, and a
