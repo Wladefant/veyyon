@@ -118,6 +118,7 @@ const TRANSITIONS: Record<string, Transition> = {
 			const ctx = {
 				session,
 				sessionManager: session.sessionManager,
+				settings: session.settings,
 				showError: (message: string) => errors.push(message),
 				showWarning: (message: string) => errors.push(message),
 				updateEditorBorderColor: () => {},
