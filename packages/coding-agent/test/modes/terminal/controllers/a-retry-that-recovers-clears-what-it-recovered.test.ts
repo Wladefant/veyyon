@@ -31,8 +31,8 @@ import { TurnRecovery } from "@veyyon/coding-agent/modes/terminal/controllers/tu
 import { SessionProjectionEngine } from "@veyyon/coding-agent/presentation/session-projection-engine";
 import { compactionActionLabel } from "@veyyon/coding-agent/presentation/summary-builder";
 import { toAssistantMessageView } from "@veyyon/coding-agent/presentation/transcript-builder";
-import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { Container, type Loader } from "@veyyon/tui";
 

@@ -140,7 +140,10 @@ describe("spawn quota fallback", () => {
 		}
 	});
 
-	it.each([{ tail: [] }, { tail: ["unavailable/full-model"] }])("keeps a resolved explicit list closed when no tail resolves (%j)", async ({ tail }) => {
+	it.each([
+		{ tail: [] },
+		{ tail: ["unavailable/full-model"] },
+	])("keeps a resolved explicit list closed when no tail resolves (%j)", async ({ tail }) => {
 		const { runtime, session, settings, events } = fixture(false, true);
 		try {
 			const selection = await StartupModelSelection.begin({
@@ -162,7 +165,10 @@ describe("spawn quota fallback", () => {
 		}
 	});
 
-	it.each([false, true])("keeps an empty or missing explicit chain closed before global Flash (missing=%s)", async missing => {
+	it.each([
+		false,
+		true,
+	])("keeps an empty or missing explicit chain closed before global Flash (missing=%s)", async missing => {
 		const { runtime, session, settings, events } = fixture(true, true);
 		settings.override("retry.fallbackChains", {
 			...(missing ? {} : { [selectors[0]]: [] }),

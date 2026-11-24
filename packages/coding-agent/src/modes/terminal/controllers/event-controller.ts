@@ -359,9 +359,11 @@ export class EventController {
 	 * against a half-built ledger, and the rebuild would seal the card that event opened as history.
 	 */
 	deferEventsUntil(replay: Promise<void>): void {
-		const guarded = replay.catch(() => undefined).finally(() => {
-			if (this.#transcriptReplay === guarded) this.#transcriptReplay = undefined;
-		});
+		const guarded = replay
+			.catch(() => undefined)
+			.finally(() => {
+				if (this.#transcriptReplay === guarded) this.#transcriptReplay = undefined;
+			});
 		this.#transcriptReplay = guarded;
 	}
 
