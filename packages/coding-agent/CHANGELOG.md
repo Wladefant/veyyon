@@ -7,6 +7,7 @@
 - Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Stop MCP HTTP responses from starting a JSON body read after cancellation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore idle queue delivery, bounded `/btw` promotion, terminal error records, raw SSE capture access, and TTSR rules from approved plugins. Let print mode exit past untimed bash jobs and log failed extension aborts in spawned agents ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep MCP authentication refresh within the request deadline ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
@@ -15,6 +16,7 @@
 - Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ## [1.12.3] - 2026-11-21
 

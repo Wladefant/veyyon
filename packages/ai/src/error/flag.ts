@@ -34,8 +34,9 @@ export const Flag = {
 	 * on a Free plan with `ERROR_RATE_LIMITED_CHANGEABLE`. Always set beside {@link Flag.UsageLimit},
 	 * because the account cannot serve the request, but no quota window restores it, so the credential
 	 * layer moves the request to an account that can serve the model instead of waiting.
+	 * Like {@link Flag.PeerUnreachable}, this bit is above any unclassified HTTP status.
 	 */
-	ModelNotInPlan: 0x0000_2000,
+	ModelNotInPlan: 0x0000_0400,
 	/**
 	 * The peer named a transport failure a replay reproduces: an HTTP/2 code from
 	 * `NON_RETRYABLE_HTTP2_ERROR_CODES` (`NGHTTP2_CANCEL` — our own abort — `FLOW_CONTROL_ERROR`,

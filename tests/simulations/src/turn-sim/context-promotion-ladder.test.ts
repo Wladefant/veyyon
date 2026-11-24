@@ -237,7 +237,9 @@ async function overflow(promotion: boolean): Promise<Run> {
 		turn.text(`answer ${turn.call}`);
 		turn.finish();
 	});
-	await sim.session.prompt("first");
+	// The scripted overflow must have enough earlier history to summarize, but
+	// not enough to trigger proactive compaction before the provider refuses.
+	await sim.session.prompt(`First request with background:\n${"red blue green yellow ".repeat(800)}`);
 	await sim.session.prompt("second");
 	return report(sim, served);
 }
@@ -315,7 +317,7 @@ describe("a session that runs out of room climbs to a larger model before it sum
 	it("compacts a provider overflow in place when promotion is off", async () => {
 		const run = await overflow(false);
 
-		expect(run.served).toEqual(["1:primary", "2:primary"]);
+		expect(run.served).toEqual(["1:primary", "2:primary", "3:primary:summary", "4:primary"]);
 		expect(run.compactions).toBe(1);
 		expect(run.changes).toEqual(["primary@default"]);
 		expect(run.modelNow).toBe(PRIMARY);
