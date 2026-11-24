@@ -10,6 +10,7 @@ import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, Model, ServiceTierByFamily, ToolChoice } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
+import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import {
@@ -2324,7 +2325,7 @@ async function initializeChildExtensions(
 			getModel: () => session.model,
 			isIdle: () => !session.isStreaming,
 			obfuscateProviderText: text => session.obfuscateProviderText(text),
-			abort: () => session.abort({ reason: USER_INTERRUPT_LABEL }),
+			abort: () => abortDetached(session, "spawned extension", USER_INTERRUPT_LABEL),
 			hasPendingMessages: () => session.queuedMessageCount > 0,
 			shutdown: () => {},
 			getContextUsage: () => session.getContextUsage(),

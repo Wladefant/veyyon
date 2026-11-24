@@ -20,6 +20,7 @@ import type { AssistantMessage, Model, ServiceTier, SimpleStreamOptions } from "
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { BranchSummaryEntry } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { missingCredentialsMessage } from "../../config/missing-credentials";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -179,7 +180,7 @@ export class SessionBranch {
 
 	/**
 	 * Branch at the live leaf and append a `/btw` question with its answer to the new branch.
-	 * Refuses while a shell or eval run, compaction, handoff or retry is in progress.
+	 * Refuses while a turn, shell or eval run, compaction, handoff or retry is in progress.
 	 */
 	async branchFromBtw(
 		question: string,
@@ -211,18 +212,20 @@ export class SessionBranch {
 			return { cancelled: true, sessionFile: previousSessionFile };
 		}
 
-		await this.#host.cancelPostPromptTasks();
-		// A hook or a post-prompt task can start work while the awaits above run.
+		// The branch hook may have let a queued turn start. Do not cancel that turn to promote the aside.
+		this.#assertIdleForBtw();
+		await withTimeout(
+			this.#host.cancelPostPromptTasks(),
+			5_000,
+			"Timed out draining post-prompt tasks before /btw branch",
+		);
+		// The transcript may have changed while post-prompt tasks settled.
 		if (!authorized()) {
 			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 		this.#assertIdleForBtw();
 		this.#host.clearNextTurnMessages();
 		session.agent.replaceQueues([], []);
-		if (session.isStreaming) {
-			await session.abort({ goalReason: "internal", reason: "branching /btw" });
-			session.agent.replaceQueues([], []);
-		}
 		await session.sessionManager.flush();
 		this.#host.cancelOwnAsyncJobs();
 
@@ -450,6 +453,7 @@ export class SessionBranch {
 	#assertIdleForBtw(): void {
 		const session = this.#session;
 		if (
+			session.isStreaming ||
 			session.isBashRunning ||
 			session.isEvalRunning ||
 			session.isCompacting ||

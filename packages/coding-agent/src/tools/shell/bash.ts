@@ -883,6 +883,7 @@ export class BashTool
 			},
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
+				endsOnItsOwn: options.timeoutSec !== undefined,
 				onProgress: async (text, details) => {
 					latestText = text;
 					if (!forwardUpdates) return;

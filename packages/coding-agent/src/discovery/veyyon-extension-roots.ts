@@ -111,6 +111,8 @@ export interface ListVeyyonExtensionRootsOptions {
 	 * {@link getAgentDir}, the process-active profile.
 	 */
 	agentDir?: string;
+	/** Keep enabled Veyyon packages that are also marketplace installs for capabilities Claude does not load. */
+	includeMarketplace?: boolean;
 }
 
 /**
@@ -123,7 +125,7 @@ export interface ListVeyyonExtensionRootsOptions {
  * 2. The `extensions` setting (config.yml), read from the settings store
  * 3. Enabled npm/link plugins installed under `<plugins>/node_modules/` (for
  *    `veyyon install <pkg>` / `veyyon plugin install` / `veyyon plugin link`). Marketplace
- *    installs are loaded by the `claude-plugins` provider and are excluded here.
+ *    installs are normally loaded by the `claude-plugins` provider and excluded here.
  * Only entries that resolve to a directory on disk are returned; file
  * entrypoints contribute zero sub-discovery surface and are filtered out.
  * Installed-plugin enumeration failures (missing lockfile, unreadable
@@ -147,7 +149,7 @@ export async function listVeyyonExtensionRoots(
 ): Promise<VeyyonExtensionRoot[]> {
 	const agentDir = options.agentDir ?? getAgentDir();
 	const userExtensions = settingsExtensions();
-	const installedPlugins = await listInstalledPluginRoots(ctx, pluginsRootFor(agentDir));
+	const installedPlugins = await listInstalledPluginRoots(ctx, pluginsRootFor(agentDir), options.includeMarketplace);
 
 	const candidates: InjectedRoot[] = [
 		...injectedCliRoots,
@@ -194,7 +196,11 @@ async function realpathOrResolved(p: string): Promise<string> {
 	}
 }
 
-async function listInstalledPluginRoots(ctx: LoadContext, pluginsRoot: string | undefined): Promise<InjectedRoot[]> {
+async function listInstalledPluginRoots(
+	ctx: LoadContext,
+	pluginsRoot: string | undefined,
+	includeMarketplace = false,
+): Promise<InjectedRoot[]> {
 	try {
 		const [plugins, marketplaceRoots] = await Promise.all([
 			getEnabledPlugins(ctx.cwd, { home: ctx.home, pluginsRoot, agentDir: ctx.agentDir }),
@@ -202,7 +208,7 @@ async function listInstalledPluginRoots(ctx: LoadContext, pluginsRoot: string | 
 			// marketplace installs, or a package the named profile installed by hand
 			// gets dropped because the ACTIVE profile happens to have it from a
 			// marketplace, and vice versa.
-			listClaudePluginRoots(ctx.home, ctx.cwd, pluginsRoot, ctx.agentDir),
+			includeMarketplace ? { roots: [] } : listClaudePluginRoots(ctx.home, ctx.cwd, pluginsRoot, ctx.agentDir),
 		]);
 		const marketplaceRealpaths = new Set(
 			await Promise.all(marketplaceRoots.roots.map(root => realpathOrResolved(root.path))),

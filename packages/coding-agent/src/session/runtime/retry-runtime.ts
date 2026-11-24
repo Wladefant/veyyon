@@ -420,6 +420,7 @@ export class RetryRuntime {
 		// The provider's own words are the only record of why the request failed; the session file holds
 		// them, and without this line the log held only the classification.
 		if (msg.stopReason === "error") {
+			if (!isProviderRefusalMessage(msg)) await this.#host.persistLifecycleErrorMessage(msg);
 			logger.warn("Provider error ended the turn", {
 				provider: msg.provider,
 				model: msg.model,
