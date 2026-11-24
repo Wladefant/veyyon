@@ -11,6 +11,8 @@
 # 7. Missing-leaf scratch ancestor junction rejection (F3).
 # 8. Private scratch DACL blocks inherited public ACEs (F4).
 # 9. Directory-boundary path remapping does not mangle sibling prefixes (F10).
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-sandbox/leak-proof.ps1   (Windows host with the AppContainer runner; exits 1 when any proof fails, 0 when all pass)
+#
 # ---------------------------------------------------------------------------
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

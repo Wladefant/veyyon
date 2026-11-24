@@ -20,11 +20,11 @@ import type { HookCommandContext } from "../../src/extensibility/custom-commands
 import type { MCPManager } from "../../src/mcp";
 import {
 	applyMCPEnvironment,
-	buildMCPPromptCommands,
 	collectPendingMCPToolNames,
 	createPendingMCPTool,
 	MAX_MCP_INSTRUCTIONS_LENGTH,
 } from "../../src/session/factory-mcp";
+import { buildMCPPromptCommands } from "../../src/session/reactive-mcp";
 
 describe("a pending MCP tool refuses until its server connects", () => {
 	it("answers as an error naming the server that is still connecting", async () => {
@@ -132,7 +132,6 @@ describe("a pending MCP tool refuses until its server connects", () => {
 	it("adopts a discovered Exa key only when the environment has none", () => {
 		// `setProfileEnv` also records the key in `VEYYON_DOTENV_ORIGIN`, which every later spawn in
 		// this process inherits, so both variables go back as they were.
-		const restored = ["EXA_API_KEY", "VEYYON_DOTENV_ORIGIN"].map(key => [key, Bun.env[key]] as const);
 		const exaKey = (): string | undefined => Bun.env.EXA_API_KEY;
 		const previous = exaKey();
 		// Adopting a key records it in `VEYYON_DOTENV_ORIGIN`; restoring the key alone leaves that record behind.

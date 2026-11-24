@@ -75,17 +75,17 @@ describe("run monitor idle-wait hints", () => {
 		harness.emit(toolStart("job", { op: "poll" }));
 		vi.advanceTimersByTime(300_000);
 		await flushMicrotasks();
-		expect(harness.emitNotice).not.toHaveBeenCalled();
+		expect(harness.emitNotice.mock.calls).toHaveLength(0);
 		vi.advanceTimersByTime(1);
 		await flushMicrotasks();
-		expect(harness.emitNotice).toHaveBeenCalledTimes(1);
-		expect(harness.emitNotice).toHaveBeenCalledWith(
+		expect(harness.emitNotice.mock.calls).toHaveLength(1);
+		expect(harness.emitNotice.mock.calls).toContainEqual([
 			"warning",
 			"This wait has taken more than five minutes. If the wait can be delegated, hand it to a task/Luna child to poll while you continue useful work. Do not cancel the wait or make an extra request.",
 			"lane-wait",
-		);
-		expect(harness.sendUserMessage).not.toHaveBeenCalled();
-		expect(harness.abort).not.toHaveBeenCalled();
+		]);
+		expect(harness.sendUserMessage.mock.calls).toHaveLength(0);
+		expect(harness.abort.mock.calls).toHaveLength(0);
 		expect(harness.monitor.abortSignal.aborted).toBe(false);
 		// A real tool call remains in flight through the notice and completes by its own event.
 		const toolCompletion = new Promise<string>(resolve => {
@@ -98,9 +98,9 @@ describe("run monitor idle-wait hints", () => {
 		});
 		harness.emit({ type: "tool_execution_end", toolName: "job", toolCallId: "wait-1" } as AgentSessionEvent);
 		expect(await toolCompletion).toBe("tool completed");
-		expect(harness.emitNotice).toHaveBeenCalledTimes(1);
-		expect(harness.sendUserMessage).not.toHaveBeenCalled();
-		expect(harness.abort).not.toHaveBeenCalled();
+		expect(harness.emitNotice.mock.calls).toHaveLength(1);
+		expect(harness.sendUserMessage.mock.calls).toHaveLength(0);
+		expect(harness.abort.mock.calls).toHaveLength(0);
 		harness.monitor.finish();
 	});
 
@@ -113,7 +113,7 @@ describe("run monitor idle-wait hints", () => {
 			vi.advanceTimersByTime(300_001);
 			await flushMicrotasks();
 			await flushMicrotasks();
-			expect(harness.emitNotice).toHaveBeenCalledTimes(1);
+			expect(harness.emitNotice.mock.calls).toHaveLength(1);
 			harness.monitor.finish();
 		},
 	);
@@ -138,7 +138,7 @@ describe("run monitor idle-wait hints", () => {
 		vi.advanceTimersByTime(300_001);
 		await flushMicrotasks();
 		await flushMicrotasks();
-		expect(harness.emitNotice).toHaveBeenCalledTimes(shouldHint ? 1 : 0);
+		expect(harness.emitNotice.mock.calls).toHaveLength(shouldHint ? 1 : 0);
 		harness.monitor.finish();
 	});
 
@@ -150,7 +150,7 @@ describe("run monitor idle-wait hints", () => {
 			harness.emit(toolStart("job", { op: "poll" }));
 			vi.advanceTimersByTime(300_001);
 			await flushMicrotasks();
-			expect(harness.emitNotice).not.toHaveBeenCalled();
+			expect(harness.emitNotice.mock.calls).toHaveLength(0);
 			harness.monitor.finish();
 		},
 	);
@@ -165,16 +165,16 @@ describe("run monitor idle-wait hints", () => {
 		vi.advanceTimersByTime(100_001);
 		await flushMicrotasks();
 		await flushMicrotasks();
-		expect(harness.emitNotice).toHaveBeenCalledTimes(1);
+		expect(harness.emitNotice.mock.calls).toHaveLength(1);
 		harness.emit({ type: "tool_execution_end", toolName: "irc", toolCallId: "second" } as AgentSessionEvent);
 		vi.advanceTimersByTime(199_999);
 		await flushMicrotasks();
 		await flushMicrotasks();
-		expect(harness.emitNotice).toHaveBeenCalledTimes(1);
+		expect(harness.emitNotice.mock.calls).toHaveLength(1);
 		vi.advanceTimersByTime(1);
 		await flushMicrotasks();
 		await flushMicrotasks();
-		expect(harness.emitNotice).toHaveBeenCalledTimes(1);
+		expect(harness.emitNotice.mock.calls).toHaveLength(1);
 		harness.monitor.finish();
 	});
 
@@ -185,30 +185,34 @@ describe("run monitor idle-wait hints", () => {
 		finishing.monitor.finish();
 		vi.advanceTimersByTime(300_001);
 		await flushMicrotasks();
-		expect(finishing.emitNotice).not.toHaveBeenCalled();
+		expect(finishing.emitNotice.mock.calls).toHaveLength(0);
 
 		const detached = createMonitor("gpt-6.1-sol");
 		detached.emit(toolStart("job", { op: "poll" }));
 		detached.detach();
 		vi.advanceTimersByTime(300_001);
 		await flushMicrotasks();
-		expect(detached.emitNotice).not.toHaveBeenCalled();
+		expect(detached.emitNotice.mock.calls).toHaveLength(0);
 
 		const replaced = createMonitor("gpt-6.1-sol");
 		replaced.emit(toolStart("job", { op: "poll" }));
-		const replacement = { emitNotice: vi.fn(), sendUserMessage: vi.fn(async () => {}) } as unknown as AgentSession;
+		const replacementNotice = vi.fn();
+		const replacement = {
+			emitNotice: replacementNotice,
+			sendUserMessage: vi.fn(async () => {}),
+		} as unknown as AgentSession;
 		replaced.monitor.setActiveSession(replacement);
 		vi.advanceTimersByTime(300_001);
 		await flushMicrotasks();
-		expect(replaced.emitNotice).not.toHaveBeenCalled();
-		expect(replacement.emitNotice).not.toHaveBeenCalled();
+		expect(replaced.emitNotice.mock.calls).toHaveLength(0);
+		expect(replacementNotice.mock.calls).toHaveLength(0);
 		detached.monitor.finish();
 		const aborted = createMonitor("gpt-6.1-sol");
 		aborted.emit(toolStart("job", { poll: ["job-1"] }));
 		aborted.monitor.requestAbort("signal");
 		vi.advanceTimersByTime(300_001);
 		await flushMicrotasks();
-		expect(aborted.emitNotice).not.toHaveBeenCalled();
+		expect(aborted.emitNotice.mock.calls).toHaveLength(0);
 		aborted.monitor.finish();
 		replaced.monitor.finish();
 	});

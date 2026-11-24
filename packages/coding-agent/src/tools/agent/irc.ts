@@ -12,8 +12,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { parametersWireSchema } from "@veyyon/ai/utils/schema/wire";
-import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, formatDuration, prompt, toError } from "@veyyon/utils";
 import {
 	type BuildIdentity,
 	formatBuildIdentity,
@@ -26,8 +26,8 @@ import {
 	listLiveSessionOwners,
 	SESSION_NOTICE_CAPABILITY,
 	SessionNoticeCapabilityError,
-	sendSessionNotice,
 	type SessionNoticeOwner,
+	sendSessionNotice,
 } from "../../launch/session-notices";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
@@ -54,7 +54,7 @@ const DEFAULT_IRC_NOTICE_RUNTIME: IrcNoticeRuntime = {
 	listLiveSessionOwners,
 };
 
-const ircSchema = lazy(() =>
+const ircSchema = toolSchema("irc", () =>
 	type({
 		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
 		"to?": type("string").describe(
@@ -131,7 +131,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		return ircSchema.value;
 	}
 	get wireParameters(): Record<string, unknown> {
-		return parametersWireSchema(ircSchema.value);
+		return ircSchema.wire;
 	}
 	readonly strict = true;
 	// Keep fire-and-forget delivery results out of the IRC wait interrupt path.
@@ -630,9 +630,12 @@ function executeList(
 		lines.push("", "Other live sessions (notice capability shown; not in-process lanes):");
 		for (const owner of sessionPeers) {
 			// The roster must not advertise a legacy live owner as a supported notice destination.
-			const noticeSupport = owner.capabilities === undefined
-				? "unverified"
-				: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY) ? "supported" : "unsupported";
+			const noticeSupport =
+				owner.capabilities === undefined
+					? "unverified"
+					: owner.capabilities.includes(SESSION_NOTICE_CAPABILITY)
+						? "supported"
+						: "unsupported";
 			lines.push(
 				`- session:${owner.sessionId} [live; project ${formatSessionNoticeOwnerDisplay(owner.project ?? "unknown")}; cwd ${formatSessionNoticeOwnerDisplay(owner.cwd ?? "unknown")}; notices ${noticeSupport}]`,
 			);

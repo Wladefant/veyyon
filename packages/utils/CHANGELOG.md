@@ -8,6 +8,10 @@
 
 - Allow async file locks to prepare the owner record before entering a caller's publication guard ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 
+### Fixed
+
+- Apply the destination's Windows DACL when creating an opt-in atomic write stage and refuse to overwrite a file that appears during a create ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
+
 ## [1.12.1] - 2026-11-20
 
 ### Added

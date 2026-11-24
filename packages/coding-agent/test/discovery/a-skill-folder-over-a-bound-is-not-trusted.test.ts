@@ -9,6 +9,7 @@
  *
  * A refused scan must reach operators: project skill loading logs a warning, and `veyyon trust`
  * lists the candidate as unreadable even though the bounded scanner returns `null`.
+ * The bounded scan is config/bounded-folder-hash (`scanBoundedFolder`), which describeProjectSkill in config/project-skill-trust calls.
  *
  * Gaps: the suite does not test CLI argument parsing or the slash-command registry.
  * It does not measure scan cost or detect same-size edits during a read.
@@ -23,7 +24,9 @@ import { logger } from "@veyyon/utils";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirFactory();
-afterEach(() => { mockOpen?.mockRestore(); });
+afterEach(() => {
+	mockOpen?.mockRestore();
+});
 let mockOpen: { mockRestore(): void } | undefined;
 
 interface Fixture {
@@ -85,7 +88,7 @@ describe("a skill folder over a bound is not trusted", () => {
 			const message = `project-skills: ${relativePath} was not loaded because the skill folder is unsafe or unreadable.`;
 
 			expect(result.warnings).toContain(message);
-			expect(warning).toHaveBeenCalledWith(message, { path: skillPath, relativePath });
+			expect(warning.mock.calls).toContainEqual([message, { path: skillPath, relativePath }]);
 			expect(listed.unreadable).toContain(skillPath);
 		} finally {
 			warning.mockRestore();
@@ -154,7 +157,10 @@ describe("a skill folder over a bound is not trusted", () => {
 		});
 	}
 
-	for (const [change, content] of [["shrinks", ""], ["grows", "longer content"]] as const) {
+	for (const [change, content] of [
+		["shrinks", ""],
+		["grows", "longer content"],
+	] as const) {
 		test(`a file that ${change} after scanning refuses the folder`, async () => {
 			const fixture = await makeFixture();
 			const target = path.join(fixture.skillDir, "asset.txt");

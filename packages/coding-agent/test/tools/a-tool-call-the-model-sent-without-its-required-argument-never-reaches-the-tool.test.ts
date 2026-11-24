@@ -65,6 +65,7 @@ import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { ArgotSession } from "argot";
 import { identityConverter } from "../../../agent/test/helpers";
+import { constructToolForSchemaSweep } from "../helpers/every-tool";
 import { makeToolSession } from "../helpers/tool-session";
 
 // Every tool in the registry is constructed once and driven through a full loop
@@ -106,9 +107,13 @@ function refusingClone(real: ToolUnderTest): AgentTool {
 /** The argument names a tool's own schema declares mandatory. */
 function requiredArguments(tool: ToolUnderTest): string[] {
 	const schema = toolWireSchema(tool);
-	const required = schema.required;
-	if (!Array.isArray(required)) return [];
-	return required.filter((key): key is string => typeof key === "string" && key !== INTENT_FIELD);
+	const names = (value: unknown): string[] =>
+		Array.isArray(value) ? value.filter((key): key is string => typeof key === "string" && key !== INTENT_FIELD) : [];
+	const required = names(schema.required);
+	if (required.length > 0 || !Array.isArray(schema.anyOf) || schema.anyOf.length === 0) return required;
+	return schema.anyOf
+		.map(branch => names(branch?.required))
+		.reduce((common, branch) => common.filter(key => branch.includes(key)));
 }
 
 /**
@@ -242,7 +247,7 @@ describe("a tool call the model sent without its required argument", () => {
 		for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
 			let real: AgentTool | null = null;
 			try {
-				real = await factory(session);
+				real = await constructToolForSchemaSweep(name, factory, session);
 			} catch {
 				unconstructable.push(name);
 				continue;

@@ -27,7 +27,7 @@ import type { WireSchemaSweepReport } from "../fixtures/builtin-tool-wire-schema
 const FIXTURE = path.join(import.meta.dirname, "../fixtures/builtin-tool-wire-schemas.ts");
 
 /** Tools that compute their wire form from `parameters` on every launch. */
-const COMPUTED_EACH_LAUNCH = ["report_tool_issue", "yield"];
+const COMPUTED_EACH_LAUNCH = ["report_tool_issue", "secret_request", "yield"];
 
 let home = "";
 

@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { $which, APP_NAME, BUILD_TAG, VERSION } from "@veyyon/utils";
+import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 
-const execFileAsync = promisify(execFile);
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const BUILD_SHA_PATTERN = /\bbuild SHA\s+([0-9a-f]{40})\b/i;
 const VERSION_PATTERN = /(?:^|\/|\s)(\d+\.\d+\.\d+)(?=\s|$|\()/;
@@ -49,11 +48,15 @@ export async function readInstalledBuildIdentity(): Promise<BuildIdentity | null
 	const executable = process.env.VEYYON_COMPILED === "true" ? process.execPath : $which(APP_NAME);
 	if (!executable) return null;
 	try {
-		const { stdout } = await execFileAsync(executable, ["--version"], {
-			encoding: "utf8",
-			timeout: INSTALLED_VERSION_TIMEOUT_MS,
-			maxBuffer: 4096,
-			windowsHide: true,
+		const stdout = await new Promise<string>((resolve, reject) => {
+			const child = execFile(
+				executable,
+				["--version"],
+				{ encoding: "utf8", timeout: INSTALLED_VERSION_TIMEOUT_MS, maxBuffer: 4096, windowsHide: true },
+				(error, out) => (error ? reject(error) : resolve(out)),
+			);
+			// Reached from the irc agent tool, so the probe joins the session tree's budget.
+			if (child.pid !== undefined) adoptIntoPrimarySessionCpuBudget(child.pid);
 		});
 		return parseBuildIdentity(stdout);
 	} catch {

@@ -262,7 +262,7 @@ it("logs why a start exits when the lease lock is contended", async () => {
 	try {
 		const result = await withFileLock(leasePath, () => acquireBrokerLease(dir));
 		expect(result).toBeNull();
-		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls).toHaveLength(1);
 		const [message, context] = warn.mock.calls[0] as [string, { leasePath: string }];
 		expect(message).toContain("contended");
 		expect(context.leasePath).toBe(leasePath);

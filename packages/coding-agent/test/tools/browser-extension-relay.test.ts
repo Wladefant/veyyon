@@ -4,11 +4,13 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
+import { writeExtensionToken } from "@veyyon/coding-agent/tools/web/browser/extension-policy";
 import {
 	buildConnectUrl,
 	ExtensionRelay,
 	type NavigationAudit,
 } from "@veyyon/coding-agent/tools/web/browser/extension-relay";
+import { EXTENSION_SETUP_HINT, openExtensionSession } from "@veyyon/coding-agent/tools/web/browser/extension-session";
 import { logger, setAgentDir } from "@veyyon/utils";
 
 const EXTENSION_TOKEN = "extension-token-SECRET-0123456789";
@@ -1155,9 +1157,13 @@ describe("secrets stay out of logs", () => {
 				const rejected = await cdp.send(hostileMethod);
 				expect(rejected.error?.code).toBe(-32601);
 				await cdp.send("Target.createTarget", { url: "about:blank" });
-				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				const sessionId = String(
+					cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+				);
 				ext.failNext("Runtime.evaluate");
-				expect((await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error).toBeDefined();
+				expect(
+					(await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error,
+				).toBeDefined();
 				const joined = lines.join("\n");
 				expect(joined).toContain('"port":');
 				expect(joined).toContain('"cdpMethod":"Runtime.evaluate"');
@@ -1207,7 +1213,9 @@ describe("secrets stay out of logs", () => {
 				await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 				await cdp.send("Target.createTarget", { url: "about:blank" });
 				await until(() => cdp.events.some(event => event.method === "Target.attachedToTarget"), "session attach");
-				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				const sessionId = String(
+					cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+				);
 				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
 				const method = `Runtime.${token}`;
 				const release = ext.delayNext(method);
@@ -1228,5 +1236,40 @@ describe("secrets stay out of logs", () => {
 				timers?.mockRestore();
 			}
 		});
+	});
+});
+
+describe("openExtensionSession", () => {
+	test("refuses before starting a relay when no token is stored", async () => {
+		await expect(openExtensionSession({ kind: "extension" })).rejects.toThrow(EXTENSION_SETUP_HINT);
+	});
+
+	test("gives Chrome a connect URL with the stored token and the relay the extension dials", async () => {
+		writeExtensionToken(undefined, EXTENSION_TOKEN);
+		let connectUrl = "";
+		const session = await openExtensionSession(
+			{ kind: "extension" },
+			{
+				timeoutMs: 2000,
+				launchConnect: async url => {
+					connectUrl = url;
+					const ext = await FakeExtension.connect(new URL(url).searchParams.get("mcpRelayUrl") ?? "");
+					ext.emit("chrome.tabs.onCreated", [{ id: 42, url }]);
+				},
+			},
+		);
+		relay = session;
+		const sent = new URL(connectUrl);
+		expect(sent.searchParams.get("token")).toBe(EXTENSION_TOKEN);
+		expect(sent.searchParams.get("mcpRelayUrl")).toBe(session.extensionUrl);
+		expect(session.extensionConnected).toBe(true);
+		expect(session.tabCount).toBe(1);
+	});
+
+	test("a connect page that never reaches the relay fails at the timeout", async () => {
+		writeExtensionToken(undefined, EXTENSION_TOKEN);
+		await expect(
+			openExtensionSession({ kind: "extension" }, { timeoutMs: 20, launchConnect: async () => {} }),
+		).rejects.toThrow("Could not connect to the Chrome extension");
 	});
 });
