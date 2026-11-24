@@ -2115,9 +2115,9 @@ describe("openai-codex streaming", () => {
 	it("keeps an active tool response alive past the setup deadline and clears its timers", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
-		resetCodexAccessProgramListings();
 		vi.useFakeTimers();
 		const baselineTimers = vi.getTimerCount();
+		const watchdog = new AbortController();
 		const encoder = new TextEncoder();
 		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 		const writer = writable.getWriter();
@@ -2155,7 +2155,7 @@ describe("openai-codex streaming", () => {
 			expect(
 				await Promise.race([
 					Promise.all([feed, progressObserved]).then(() => "progress"),
-					scheduler.wait(500).then(() => "pending"),
+					scheduler.wait(500, { signal: watchdog.signal }).then(() => "pending"),
 				]),
 			).toBe("progress");
 			// A healthy stream still has an idle deadline, not a setup deadline.
@@ -2181,7 +2181,7 @@ describe("openai-codex streaming", () => {
 			})();
 			const settled = await Promise.race([
 				Promise.all([stream.result(), consumed, finish]).then(([result]) => result),
-				scheduler.wait(500).then(() => "pending" as const),
+				scheduler.wait(500, { signal: watchdog.signal }).then(() => "pending" as const),
 			]);
 			if (settled === "pending") throw new Error("Active tool response did not finish");
 			expect(settled.stopReason).toBe("toolUse");
@@ -2189,11 +2189,12 @@ describe("openai-codex streaming", () => {
 				expect.objectContaining({ type: "toolCall", name: "read_file", arguments: { path: "README.md" } }),
 			);
 			expect(requestSignal?.aborted).toBe(false);
+			watchdog.abort();
 			expect(vi.getTimerCount()).toBe(baselineTimers);
 		} finally {
-			await writer.abort().catch(() => {});
-			resetCodexAccessProgramListings();
+			watchdog.abort();
 			vi.useRealTimers();
+			await writer.abort().catch(() => {});
 			await tempDir.remove();
 		}
 	});

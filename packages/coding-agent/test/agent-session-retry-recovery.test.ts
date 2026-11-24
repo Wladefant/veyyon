@@ -32,6 +32,7 @@ import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { requireBundledModel } from "../../agent/test/helpers";
 import { createCodexTestToken } from "../../ai/test/helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 
@@ -117,16 +118,25 @@ function successfulAssistantEntry(sessionManager: SessionManager, text: string):
 	return found;
 }
 
-/**
- * Yield in real time until `predicate` holds. Fake timers do not move `node:timers/promises`, so this
- * is how a fake-timer test waits for the session to reach a state without advancing the clock.
- */
-async function waitUntil(predicate: () => boolean, attempts = 500): Promise<void> {
-	for (let attempt = 0; attempt < attempts; attempt++) {
-		if (predicate()) return;
-		await scheduler.wait(1);
-	}
-	throw new Error("Timed out waiting for the retry state under test");
+/** Hold only the setup deadline so retry scheduling and session cleanup can run on their own clocks. */
+function captureSetupDeadline(delayMs: number) {
+	const schedule = globalThis.setTimeout;
+	let expire: (() => void) | undefined;
+	const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+		callback: (...args: unknown[]) => void,
+		delay?: number,
+		...args: unknown[]
+	) => {
+		if (delay === delayMs) expire = () => callback(...args);
+		return schedule(callback, delay === delayMs ? 300_000 : delay, ...args);
+	}) as typeof setTimeout);
+	return {
+		expire() {
+			if (!expire) throw new Error("Expected the provider setup deadline to be armed");
+			expire();
+		},
+		restore: () => timer.mockRestore(),
+	};
 }
 
 interface RetryFixture {
@@ -252,8 +262,15 @@ describe("AgentSession retry recovery", () => {
 							...options,
 							apiKey: token,
 							preferWebsockets: false,
-							streamFirstEventTimeoutMs: 10,
-							fetch: fetchAttempt,
+							streamFirstEventTimeoutMs: 137,
+							fetch: input => {
+								const url = new URL(
+									typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+								);
+								return url.pathname.endsWith("/codex/models")
+									? Promise.resolve(Response.json({ models: [] }))
+									: fetchAttempt();
+							},
 							onPayload: () => {
 								markStarted();
 								return blocked;
@@ -288,15 +305,18 @@ describe("AgentSession retry recovery", () => {
 			modelRegistry,
 		});
 		sessions.push(unrelated);
-		vi.useFakeTimers();
+		const deadline = captureSetupDeadline(137);
 		try {
 			const pending = session.prompt("Record once and report the result");
 			expect(await Promise.race([started.then(() => true), scheduler.wait(1500).then(() => false)])).toBe(true);
 			expect(session.heartbeatPhase).toBe("provider");
 			await unrelated.prompt("Answer independently");
 			expect(unrelated.messages.at(-1)).toMatchObject({ stopReason: "stop" });
-			vi.advanceTimersByTime(10);
-			const outcome = await Promise.race([pending.then(() => "settled"), scheduler.wait(500).then(() => "pending")]);
+			deadline.expire();
+			const outcome = await Promise.race([
+				pending.then(() => "settled"),
+				scheduler.wait(1_500).then(() => "pending"),
+			]);
 			expect(outcome).toBe("settled");
 			expect(retryEnds).toEqual([true]);
 			expect(execute).toHaveBeenCalledTimes(1);
@@ -306,7 +326,7 @@ describe("AgentSession retry recovery", () => {
 			);
 		} finally {
 			release();
-			vi.useRealTimers();
+			deadline.restore();
 		}
 	});
 
@@ -321,6 +341,7 @@ describe("AgentSession retry recovery", () => {
 		// The Codex credential is still being resolved when the fallback is chosen. It stays pending
 		// until the test releases it, so only the setup deadline can settle the turn.
 		const credentialHold = Promise.withResolvers<string>();
+		const credentialStarted = Promise.withResolvers<void>();
 		let codexCredentialRequests = 0;
 		const codexStreams = vi.fn();
 		const mock = createMockModel({
@@ -330,6 +351,7 @@ describe("AgentSession retry recovery", () => {
 			getApiKey: model => {
 				if (model.provider !== "openai-codex") return "test-key";
 				codexCredentialRequests += 1;
+				credentialStarted.resolve();
 				return credentialHold.promise;
 			},
 			initialState: { model: primary, systemPrompt: ["Test"], tools: [] },
@@ -362,19 +384,28 @@ describe("AgentSession retry recovery", () => {
 			if (event.type === "auto_retry_end") retryEnds.push(event);
 			if (event.type === "retry_fallback_applied") appliedFallbacks.push(event.to);
 		});
-		vi.useFakeTimers();
+		const deadline = captureSetupDeadline(139);
 		try {
-			const pending = session.prompt("Answer once the fallback can serve it");
-			await waitUntil(() => codexCredentialRequests === 1);
-			// One millisecond short of the setup deadline the stalled credential still holds the turn.
-			vi.advanceTimersByTime(299_999);
-			expect(await Promise.race([pending.then(() => "settled"), scheduler.wait(50).then(() => "pending")])).toBe(
-				"pending",
-			);
-			expect(codexStreams).not.toHaveBeenCalled();
-			vi.advanceTimersByTime(1);
-			const outcome = await Promise.race([pending.then(() => "settled"), scheduler.wait(500).then(() => "pending")]);
-			expect(outcome).toBe("settled");
+			await withEnv({ VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS: "139" }, async () => {
+				const pending = session.prompt("Answer once the fallback can serve it");
+				await Promise.race([
+					credentialStarted.promise,
+					pending.then(() => {
+						throw new Error("Turn ended before reaching the Codex credential");
+					}),
+					scheduler.wait(1_500).then(() => {
+						throw new Error("Codex credential lookup did not start");
+					}),
+				]);
+				expect(codexStreams).not.toHaveBeenCalled();
+				deadline.expire();
+				const outcome = await Promise.race([
+					pending.then(() => "settled"),
+					scheduler.wait(1_000).then(() => "pending"),
+				]);
+				expect(outcome).toBe("settled");
+			});
+			expect(codexCredentialRequests).toBe(1);
 			expect(codexStreams).not.toHaveBeenCalled();
 			expect(mock.calls).toHaveLength(2);
 			expect(retryEnds).toEqual([expect.objectContaining({ success: true })]);
@@ -386,16 +417,14 @@ describe("AgentSession retry recovery", () => {
 
 			// A late answer from the abandoned credential must not start a Codex turn or a second recovery.
 			credentialHold.resolve(token);
-			await scheduler.wait(10);
-			vi.advanceTimersByTime(1_000);
-			await scheduler.wait(10);
+			await new Promise<void>(resolve => setImmediate(resolve));
 			expect(codexStreams).not.toHaveBeenCalled();
 			expect(mock.calls).toHaveLength(2);
 			expect(retryEnds).toHaveLength(1);
 			expect(assistantEntries(sessionManager)).toHaveLength(settledEntries);
 		} finally {
 			credentialHold.resolve(token);
-			vi.useRealTimers();
+			deadline.restore();
 		}
 	});
 
