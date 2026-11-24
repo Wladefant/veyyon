@@ -274,9 +274,9 @@ export abstract class OAuthCallbackFlow {
 	 * Create HTTP server for OAuth callback.
 	 */
 	#createServer(port: number, expectedState: string): Bun.Server<unknown> {
-		const hostname = this.callbackHostname === DEFAULT_HOSTNAME ? undefined : this.callbackHostname;
+		const hostname = this.callbackHostname === DEFAULT_HOSTNAME ? "127.0.0.1" : this.callbackHostname;
 		return Bun.serve({
-			...(hostname === undefined ? {} : { hostname }),
+			hostname,
 			port,
 			reusePort: false,
 			fetch: req => this.#handleCallback(req, expectedState),
@@ -331,10 +331,11 @@ export abstract class OAuthCallbackFlow {
 		// Signal to waitForCallback - capture refs before they could be cleared
 		const resolve = this.#callbackResolve;
 		const reject = this.#callbackReject;
+		// Only a callback carrying this login's state may settle it; any other request is unauthenticated.
 		queueMicrotask(() => {
 			if (resultState.ok) {
 				resolve?.({ code: resultState.code, state: resultState.state });
-			} else {
+			} else if (!expectedState || state === expectedState) {
 				reject?.(resultState.error ?? "Unknown error");
 			}
 		});
