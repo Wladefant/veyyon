@@ -12,7 +12,8 @@ import { type } from "@veyyon/ai/utils/schema/arktype";
 import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { BARE_LITERAL_VALUE_RE, formatHashlineHeader } from "@veyyon/hashline";
 import {
-	atomicWriteFileWith,
+	atomicWriteFile,
+	atomicWriteFilePreservingMode,
 	BINARY_SNIFF_BYTES,
 	errorMessage,
 	isEnoent,
@@ -44,7 +45,7 @@ import {
 	archiveFormatFromPath,
 	parseArchivePathCandidates,
 	readArchiveEntries,
-	writeArchive,
+	serializeArchive,
 } from "../../utils/zip";
 import { routeWriteThroughBridge } from "../core/acp-bridge";
 import { truncateForPrompt } from "../core/approval";
@@ -629,11 +630,16 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 		}
 		entries.set(resolvedArchivePath.archiveSubPath, content);
 
-		// Whole-archive rewrite: writeArchive streams into a temp file that
-		// atomicWriteFileWith renames over the original only on success, so a
+		// Whole-archive rewrite: serializeArchive frames the archive bytes in memory,
+		// then the atomic write commits over the original only on success, so a
 		// crash/disk-full mid-write can't destroy the existing archive.
 		try {
-			await atomicWriteFileWith(finalPath, tmpPath => writeArchive(tmpPath, format, entries));
+			const bytes = await serializeArchive(format, entries);
+			if (process.platform === "win32") {
+				await atomicWriteFilePreservingMode(finalPath, bytes, { preserveWindowsDacl: true, defaultMode: 0o600 });
+			} else {
+				await atomicWriteFile(finalPath, bytes);
+			}
 		} catch (error) {
 			throw toolFailure(error);
 		}
@@ -1043,9 +1049,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			// operator greps for a filename that does not exist. No-op for a new
 			// file (nothing is stored yet) and on a case-sensitive filesystem.
 			const reportedPath = overwritingExistingFile ? resolveStoredPathCase(absolutePath) : absolutePath;
-			const existingConventions = existing?.isFile()
-				? await detectExistingTextConventions(absolutePath)
-				: undefined;
+			const existingConventions = existing?.isFile() ? await detectExistingTextConventions(absolutePath) : undefined;
 			const { text: writeContent, applied: appliedConventions } = applyExistingTextConventions(
 				content,
 				existingConventions,
@@ -1118,7 +1122,8 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			routedThroughBridge && (appliedConventions.crlf || appliedConventions.bom)
 				? await fs.readFile(absolutePath, "utf8").catch(() => undefined)
 				: content;
-		const note = conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
+		const note =
+			conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
 		const writeLine = note
 			? `Successfully wrote ${writeBytes} bytes to ${displayPath}\n${note}`
 			: `Successfully wrote ${writeBytes} bytes to ${displayPath}`;
