@@ -629,11 +629,11 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 		}
 		entries.set(resolvedArchivePath.archiveSubPath, content);
 
-		// Whole-archive rewrite: writeArchive streams into a temp file that
-		// atomicWriteFileWith renames over the original only on success, so a
-		// crash/disk-full mid-write can't destroy the existing archive.
+		// Stream into a temp file so a failed archive write cannot truncate the original.
 		try {
-			await atomicWriteFileWith(finalPath, tmpPath => writeArchive(tmpPath, format, entries));
+			await atomicWriteFileWith(finalPath, tmpPath => writeArchive(tmpPath, format, entries), {
+				preserveWindowsDacl: true,
+			});
 		} catch (error) {
 			throw toolFailure(error);
 		}
@@ -1043,9 +1043,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			// operator greps for a filename that does not exist. No-op for a new
 			// file (nothing is stored yet) and on a case-sensitive filesystem.
 			const reportedPath = overwritingExistingFile ? resolveStoredPathCase(absolutePath) : absolutePath;
-			const existingConventions = existing?.isFile()
-				? await detectExistingTextConventions(absolutePath)
-				: undefined;
+			const existingConventions = existing?.isFile() ? await detectExistingTextConventions(absolutePath) : undefined;
 			const { text: writeContent, applied: appliedConventions } = applyExistingTextConventions(
 				content,
 				existingConventions,
@@ -1118,7 +1116,8 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			routedThroughBridge && (appliedConventions.crlf || appliedConventions.bom)
 				? await fs.readFile(absolutePath, "utf8").catch(() => undefined)
 				: content;
-		const note = conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
+		const note =
+			conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
 		const writeLine = note
 			? `Successfully wrote ${writeBytes} bytes to ${displayPath}\n${note}`
 			: `Successfully wrote ${writeBytes} bytes to ${displayPath}`;

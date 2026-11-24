@@ -28,6 +28,13 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
+import {
+	closeWindowsStageDirectory,
+	protectWindowsWriteStage,
+	publishWindowsWriteStage,
+	reserveProtectedWindowsStage,
+	WindowsReplaceRecoveryError,
+} from "./windows-file-replace";
 
 export interface AtomicWriteOptions {
 	/**
@@ -447,19 +454,15 @@ export async function atomicWriteFile(
 	data: string | NodeJS.ArrayBufferView,
 	options: AtomicWriteOptions = {},
 ): Promise<void> {
-	const { mode = 0o600, fsync = true, requireAtomicReplace = false, retryRename = false } = options;
-	await atomicWriteBytes(filePath, data, mode, fsync, false, requireAtomicReplace, retryRename);
+	await atomicWriteBytes(filePath, data, options);
 }
 
 async function atomicWriteBytes(
 	filePath: string,
 	data: string | NodeJS.ArrayBufferView,
-	mode: number,
-	fsync: boolean,
-	preserveModeExactly: boolean,
-	requireAtomicReplace = false,
-	retryRename = false,
+	options: AtomicWriteInternalOptions & { preserveModeExactly?: boolean },
 ): Promise<void> {
+	const { mode = 0o600, fsync = true, preserveModeExactly = false } = options;
 	await atomicWriteFileWithImpl(
 		filePath,
 		{
@@ -470,7 +473,7 @@ async function atomicWriteBytes(
 				if (fsync) await handle.sync();
 			},
 		},
-		{ fsync, mode, requireAtomicReplace, retryRename },
+		options,
 	);
 }
 
@@ -493,9 +496,15 @@ async function atomicWriteBytes(
 export async function atomicWriteFilePreservingMode(
 	filePath: string,
 	data: string | NodeJS.ArrayBufferView,
-	options: { fsync?: boolean; defaultMode?: number; requireAtomicReplace?: boolean } = {},
+	options: {
+		fsync?: boolean;
+		defaultMode?: number;
+		requireAtomicReplace?: boolean;
+		/** Use the Windows security-preserving replacement path. See {@link atomicWriteFileWith}. */
+		preserveWindowsDacl?: boolean;
+	} = {},
 ): Promise<void> {
-	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false } = options;
+	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false, preserveWindowsDacl = false } = options;
 	let mode = defaultMode;
 	let existed = true;
 	try {
@@ -504,7 +513,13 @@ export async function atomicWriteFilePreservingMode(
 		if (!isEnoent(error)) throw error;
 		existed = false;
 	}
-	await atomicWriteBytes(filePath, data, mode, fsync, existed, requireAtomicReplace);
+	await atomicWriteBytes(filePath, data, {
+		mode,
+		fsync,
+		preserveModeExactly: existed,
+		requireAtomicReplace,
+		preserveWindowsDacl,
+	});
 }
 
 /**
@@ -549,6 +564,12 @@ export async function atomicWriteFileWith(
 		 * because it already fsyncs its own write handle (the Windows-correct way).
 		 */
 		fsyncTempFile?: boolean;
+		/**
+		 * Preserve the destination DACL and Windows replacement attributes. Refuse publication if the
+		 * staged security cannot match the destination. Windows can report a partial replacement;
+		 * if the original cannot be restored, the error names the retained recovery paths.
+		 */
+		preserveWindowsDacl?: boolean;
 	} = {},
 ): Promise<void> {
 	await atomicWriteFileWithImpl(filePath, { kind: "path", write }, options);
@@ -560,6 +581,7 @@ type AtomicTempWriter =
 
 interface AtomicWriteInternalOptions extends AtomicWriteOptions {
 	fsyncTempFile?: boolean;
+	preserveWindowsDacl?: boolean;
 }
 
 async function atomicWriteFileWithImpl(
@@ -573,20 +595,34 @@ async function atomicWriteFileWithImpl(
 		mode = 0o600,
 		requireAtomicReplace = false,
 		retryRename = false,
+		preserveWindowsDacl = false,
 	} = options;
 	const { target, viaSymlink } = await resolveWriteTarget(filePath);
 	const dir = path.dirname(target);
 	if (!viaSymlink) await fsp.mkdir(dir, { recursive: true });
+	const preserveDacl = process.platform === "win32" && preserveWindowsDacl;
 
-	const { handle, tmpPath } = await reserveTempFile(dir, path.basename(target), mode, target);
+	const privateStage = preserveDacl ? reserveProtectedWindowsStage(target) : undefined;
+	let tmpPath: string | undefined;
 	try {
+		const { handle, tmpPath: stagedPath } = await reserveTempFile(
+			privateStage?.path ?? dir,
+			path.basename(target),
+			mode,
+			target,
+		);
+		tmpPath = stagedPath;
 		if (writer.kind === "handle") {
 			await closingAfter(
-				() => writer.write(handle),
+				async () => {
+					if (preserveDacl) protectWindowsWriteStage(target, stagedPath, privateStage !== undefined);
+					await writer.write(handle);
+				},
 				() => handle.close(),
 			);
 		} else {
 			await handle.close();
+			if (preserveDacl) protectWindowsWriteStage(target, stagedPath, privateStage !== undefined);
 			await fillTempFromPath(writer.write, tmpPath, mode, fsync && fsyncTempFile);
 		}
 
@@ -595,12 +631,17 @@ async function atomicWriteFileWithImpl(
 		// swapped staging entry.
 		assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
 		await assertReplaceableTarget(target);
-		await renameTempOverTarget(tmpPath, target, requireAtomicReplace, retryRename);
+		if (preserveDacl) publishWindowsWriteStage(target, tmpPath, privateStage);
+		else await renameTempOverTarget(tmpPath, target, requireAtomicReplace, retryRename);
 		pendingTemps.delete(tmpPath);
 	} catch (error) {
+		if (tmpPath === undefined) throw error;
 		pendingTemps.delete(tmpPath);
+		if (error instanceof WindowsReplaceRecoveryError) throw error;
 		await fsp.rm(tmpPath, { force: true, recursive: true }).catch(() => {});
 		throw withTargetInMessage(error, target, tmpPath);
+	} finally {
+		if (privateStage) closeWindowsStageDirectory(privateStage);
 	}
 	if (fsync) await fsyncDirEntry(dir);
 }

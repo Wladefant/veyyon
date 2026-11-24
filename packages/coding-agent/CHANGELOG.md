@@ -6,6 +6,8 @@
 
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Preserve a Windows file's DACL when WriteTool replaces its contents ([#1157](https://github.com/Wladefant/veyyon/issues/1157)).
+
 ## [1.12.3] - 2026-11-21
 
 ### Added
