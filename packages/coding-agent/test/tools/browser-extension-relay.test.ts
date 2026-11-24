@@ -1253,7 +1253,8 @@ describe("openExtensionSession", () => {
 				timeoutMs: 2000,
 				launchConnect: async url => {
 					connectUrl = url;
-					await FakeExtension.connect(new URL(url).searchParams.get("mcpRelayUrl") ?? "");
+					const ext = await FakeExtension.connect(new URL(url).searchParams.get("mcpRelayUrl") ?? "");
+					ext.emit("chrome.tabs.onCreated", [{ id: 42, url }]);
 				},
 			},
 		);
@@ -1262,6 +1263,7 @@ describe("openExtensionSession", () => {
 		expect(sent.searchParams.get("token")).toBe(EXTENSION_TOKEN);
 		expect(sent.searchParams.get("mcpRelayUrl")).toBe(session.extensionUrl);
 		expect(session.extensionConnected).toBe(true);
+		expect(session.tabCount).toBe(1);
 	});
 
 	test("a connect page that never reaches the relay fails at the timeout", async () => {
