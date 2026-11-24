@@ -666,7 +666,7 @@ export class AgentSession {
 			this.#abortInProgress ||
 			this.#isDisposed ||
 			this.#streamingEdit.abortTriggered,
-		tryRetractRetryDraft: persistenceKey => this.#retryDraftRetraction?.(persistenceKey) ?? true,
+		tryRetractRetryDraft: persistenceKey => this.#retryDraftRetraction?.(persistenceKey) === true,
 		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 		resetCurrentResponsesProviderSession: reason => this.#providerSessions.resetResponses(this.model, reason),
 		maybeAutoRedeemCodexReset: () => this.#usage.maybeAutoRedeemCodexReset(),
@@ -2362,8 +2362,8 @@ export class AgentSession {
 	#retryDraftRetraction: ((persistenceKey: string) => boolean) | undefined;
 
 	/**
-	 * Bind the terminal's synchronous check-and-retract operation. A draft
-	 * already in native scrollback cannot be retracted.
+	 * Bind a display's synchronous check-and-retract operation. Without
+	 * this proof, leave the draft alone: append-only displays cannot erase it.
 	 */
 	setRetryDraftRetraction(retract: (persistenceKey: string) => boolean): () => void {
 		this.#retryDraftRetraction = retract;

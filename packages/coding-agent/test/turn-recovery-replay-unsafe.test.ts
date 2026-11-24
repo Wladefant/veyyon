@@ -287,7 +287,10 @@ describe("AgentSession transient-error recovery replay safety", () => {
 	const draft = "The answer starts here";
 	const answer = `${draft} and finishes here.`;
 
-	async function runSocketReset(model: Model, outcome: "recover" | "exhaust" | "unknown-tool" | "committed-draft") {
+	async function runSocketReset(
+		model: Model,
+		outcome: "recover" | "exhaust" | "unknown-tool" | "committed-draft" | "append-only",
+	) {
 		const failure = { content: [draft], stopReason: "error", errorMessage: socketReset } as const;
 		const mock = createMockModel({
 			responses: [failure, outcome === "recover" ? { content: [answer] } : failure],
@@ -339,7 +342,9 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.modelFallback": false,
 		});
 		const session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
-		if (outcome === "committed-draft") session.setRetryDraftRetraction(() => false);
+		if (outcome !== "append-only") {
+			session.setRetryDraftRetraction(() => outcome !== "committed-draft");
+		}
 		const events = trackSessionEvents(session);
 		try {
 			await session.prompt("test prompt");
@@ -406,23 +411,26 @@ describe("AgentSession transient-error recovery replay safety", () => {
 		expect(result.messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: socketReset });
 	});
 
-	it("leaves the draft and terminal error in the journal if the display cannot retract the draft", async () => {
-		const result = await runSocketReset(gptModel, "committed-draft");
+	it.each(["committed-draft", "append-only"] as const)(
+		"leaves the draft and terminal error intact for %s display",
+		async outcome => {
+			const result = await runSocketReset(gptModel, outcome);
 
-		expect(result.streamCalls).toBe(1);
-		expect(result.retryStartEvents).toEqual([]);
-		const failure = {
-			role: "assistant",
-			stopReason: "error",
-			errorMessage: socketReset,
-			content: [{ type: "text", text: draft }],
-		};
-		expect(result.messages.at(-1)).toMatchObject(failure);
-		const persistedAssistant = result.entries.findLast(
-			entry => entry.type === "message" && entry.message.role === "assistant",
-		);
-		expect(persistedAssistant).toMatchObject({ type: "message", message: failure });
-	});
+			expect(result.streamCalls).toBe(1);
+			expect(result.retryStartEvents).toEqual([]);
+			const failure = {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: socketReset,
+				content: [{ type: "text", text: draft }],
+			};
+			expect(result.messages.at(-1)).toMatchObject(failure);
+			const persistedAssistant = result.entries.findLast(
+				entry => entry.type === "message" && entry.message.role === "assistant",
+			);
+			expect(persistedAssistant).toMatchObject({ type: "message", message: failure });
+		},
+	);
 
 	it("settles a socket reset without replaying an already dispatched tool with no result", async () => {
 		const result = await runSocketReset(gptModel, "unknown-tool");
