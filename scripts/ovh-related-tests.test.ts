@@ -72,10 +72,13 @@ function createGitFixture(files: Record<string, string>): { fixtureDir: string; 
 }
 
 describe("OVH related-test selector", () => {
-	it("selects nearby tests for coding-agent settings without falling back to the package", () => {
+	it("keeps coding-agent settings dependencies when the same change touches changelogs", () => {
 		const changedFile = "packages/coding-agent/src/config/settings.ts";
 		const changedTest = "scripts/ovh-test-shards.test.ts";
-		const output = runSelector([changedFile, changedTest]);
+		const rootChangelog = "CHANGELOG.md";
+		const memberChangelog = "packages/coding-agent/CHANGELOG.md";
+		const wireChangelog = "contracts/wire/CHANGELOG.md";
+		const output = runSelector([changedFile, changedTest, rootChangelog, memberChangelog, wireChangelog]);
 		const selectedTests = parseSelectedTests(output);
 		const count = selectedTests.length;
 
@@ -86,7 +89,22 @@ describe("OVH related-test selector", () => {
 		expect(output).toContain(": transitive;");
 		expect(output).toContain("packages/coding-agent/test/config-hot-reload.test.ts");
 		expect(selectedTests).toContain(changedTest);
+		expect(output).toContain(`${rootChangelog}: transitive; transitive tests=0; selected=0`);
+		expect(output).toContain(`${memberChangelog}: transitive; transitive tests=6; selected=6`);
+		expect(output).toContain(`${wireChangelog}: transitive; transitive tests=5; selected=5`);
+		expect(selectedTests).toContain("scripts/changelog-version-headings-are-unique.test.ts");
+		expect(selectedTests).toContain("scripts/release-changelog.test.ts");
+		expect(selectedTests).toContain("apps/site/deploy.test.ts");
+	}, 120000);
 
+	it("keeps the real generated settings reference and runtime prompt consumers", () => {
+		const generated = "docs/handbook/src/reference/settings-reference.md";
+		const prompt = "packages/coding-agent/src/prompts/agent/user-prompt.md";
+		const output = runSelector([generated, prompt]);
+		const selected = parseSelectedTests(output);
+		expect(selected).toContain("scripts/gen-settings-reference.test.ts");
+		expect(selected).toContain("scripts/a-generated-doc-says-so-on-its-first-line.test.ts");
+		expect(selected).toContain("packages/coding-agent/test/tools/tool-prompt-budget.test.ts");
 	}, 120000);
 
 	describe("git fixture regressions", () => {
@@ -99,6 +117,16 @@ describe("OVH related-test selector", () => {
 				"tsconfig.json": JSON.stringify({
 					compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext" },
 				}),
+				"CHANGELOG.md": "# Changelog\n",
+				"docs/CHANGELOG.md": "# Documentation history\n",
+				"docs/example-package.json": JSON.stringify({ name: "example-package" }),
+				"scripts/docs-history.test.ts":
+					'import { readFileSync } from "node:fs";\nexport const history = readFileSync("docs/CHANGELOG.md", "utf8");\n',
+				"packages/pkg-a/CHANGELOG.md": "# Package changelog\n",
+				"packages/pkg-a/src/doc-references.ts":
+					'export const paths = ["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md"];\n',
+				"packages/pkg-a/test/doc-reference-consumer.test.ts":
+					'import { paths } from "../src/doc-references.js";\nexport const references = paths;\n',
 				"packages/pkg-a/package.json": JSON.stringify({ name: "@fixture/pkg-a", version: "1.0.0" }),
 				"packages/pkg-a/src/mod-a.ts": 'export const a = "alpha";\n',
 				"packages/pkg-a/src/mod-b.ts": 'console.log("barrel side effect");\nexport const b = "beta";\n',
@@ -124,6 +152,18 @@ describe("OVH related-test selector", () => {
 
 		afterAll(() => {
 			cleanupFixture?.();
+		});
+
+		it.each(["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md"])(
+			"does not follow incidental references to %s through source imports",
+			file => {
+				expect(parseSelectedTests(runSelector([file], { cwd: fixtureDir }))).toEqual([]);
+			},
+		);
+
+		it("keeps ordinary changelog readers when a sibling only looks like a package manifest", () => {
+			const output = runSelector(["docs/CHANGELOG.md"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual(["scripts/docs-history.test.ts"]);
 		});
 
 		it("retains consumer when importing a value re-exported by a barrel from changed module", () => {
