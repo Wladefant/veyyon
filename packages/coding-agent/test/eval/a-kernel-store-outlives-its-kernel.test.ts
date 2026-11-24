@@ -201,8 +201,8 @@ describe("defs()", () => {
 			kernelOwnerId: OWNER,
 		});
 		expect(listed.exitCode).toBe(0);
-		expect(listed.output).toContain("hunt: function hunt(target, depth)");
-		expect(listed.output).toContain("rateLimit: number 5");
+		expect(listed.output).toMatch(/^hunt: function$/m);
+		expect(listed.output).toMatch(/^rateLimit: number$/m);
 		for (const preludeName of ["read", "kv", "defs", "parallel", "pipeline", "agent", "budget"]) {
 			expect(listed.output).not.toMatch(new RegExp(`^${preludeName}:`, "m"));
 		}
@@ -535,8 +535,8 @@ describeRequiringTool("python3", "the store across languages", () => {
 			artifactsDir: artifacts,
 		});
 		expect(listed.exitCode).toBe(0);
-		expect(listed.output).toContain("probe: function probe");
-		expect(listed.output).toContain("retries: int 3");
+		expect(listed.output).toMatch(/^probe: function$/m);
+		expect(listed.output).toMatch(/^retries: int$/m);
 		for (const preludeName of ["read", "kv", "defs", "parallel", "agent", "budget"]) {
 			expect(listed.output).not.toMatch(new RegExp(`^${preludeName}:`, "m"));
 		}
@@ -578,9 +578,9 @@ describeRequiringTool("python3", "the store across languages", () => {
 	/**
 	 * defs() printed each value's repr cut to 60 characters, but built the whole repr first, so a session holding
 	 * a few large strings, or a dict that held them, spent seconds to minutes in a call that shows 60 characters
-	 * of each. The spies record any repr of a whole container or string; a container states its length instead.
+	 * of each. The spies detect any call to a subclass's repr. Defs shows only names and shapes.
 	 */
-	it("Python defs states a container's length and cuts a string before its repr", async () => {
+	it("Python defs reports shapes without calling user-defined repr", async () => {
 		using tempDir = TempDir.createSync("@veyyon-kernel-defs-");
 		const artifacts = path.join(tempDir.path(), "artifacts");
 		const sessionId = `kv-py-defs-bounded:${crypto.randomUUID()}`;
@@ -602,14 +602,14 @@ describeRequiringTool("python3", "the store across languages", () => {
 		);
 		expect(res.exitCode).toBe(0);
 		expect(res.output.split("\n")).toEqual([
-			`blob: Spy_bytes b'${"z".repeat(55)}...`,
-			"frozen: Spy_frozenset[2]",
-			"members: Spy_set[1]",
-			"pair: Spy_tuple[2]",
-			"rows: Spy_list[3]",
-			"seen: list[0]",
-			"table: Spy_dict[1]",
-			`text: Spy_str '${"y".repeat(56)}...`,
+			"blob: Spy_bytes",
+			"frozen: Spy_frozenset",
+			"members: Spy_set",
+			"pair: Spy_tuple",
+			"rows: Spy_list",
+			"seen: list(0)",
+			"table: Spy_dict",
+			"text: Spy_str",
 			"seen []",
 			"",
 		]);

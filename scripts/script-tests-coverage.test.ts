@@ -26,7 +26,7 @@ import { describe, expect, it } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { repoScriptTests } from "./ci-test-ts";
-import { commandText, workflowFiles, workflowTestPaths } from "./runner-references";
+import { commandText, dedicatedRunnerTestPaths, workflowFiles, workflowTestPaths } from "./runner-references";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
 
@@ -46,7 +46,7 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "install-tests", "repo-cache"
 function findTestFiles(dir: string, acc: string[] = []): string[] {
 	for (const entry of readdirSync(path.join(REPO_ROOT, dir))) {
 		if (SKIP_DIRS.has(entry)) continue;
-		const relative = path.join(dir, entry);
+		const relative = `${dir}/${entry}`;
 		const full = path.join(REPO_ROOT, relative);
 		if (statSync(full).isDirectory()) findTestFiles(relative, acc);
 		else if (entry.endsWith(".test.ts")) acc.push(relative);
@@ -56,7 +56,7 @@ function findTestFiles(dir: string, acc: string[] = []): string[] {
 
 const onDisk = ROOTS.flatMap(root => findTestFiles(root)).sort();
 const listed = [...repoScriptTests].sort();
-const covered = new Set([...listed, ...workflowTestPaths()]);
+const covered = new Set([...listed, ...workflowTestPaths(), ...dedicatedRunnerTestPaths()]);
 
 describe("the repo-level test list", () => {
 	/** Proves the walk found something. Without this, an empty walk would make the
@@ -103,7 +103,7 @@ describe("the repo-level test list", () => {
 	/** The other direction: a dead entry looks like coverage and provides none, and
 	 * `bun test` will not complain about it. */
 	it("lists no suite that has been renamed or deleted", () => {
-		const stale = listed.filter(file => !onDisk.includes(file));
+		const stale = listed.filter(file => !statSync(path.join(REPO_ROOT, file), { throwIfNoEntry: false })?.isFile());
 
 		expect(stale, `remove these from repoScriptTests, they do not exist: ${stale.join(", ")}`).toEqual([]);
 	});

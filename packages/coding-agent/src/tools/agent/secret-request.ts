@@ -2,7 +2,11 @@ import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy } from "@veyyon/utils";
 import type { SecretIntakeCreateInput, SecretIntakeOperation, SecretIntakeResult } from "../../secrets/intake-broker";
-import { getSessionSecretIntake, getSessionSecretIntakeContext, hasSessionSecretIntakeFactory } from "../../secrets/intake-session";
+import {
+	getSessionSecretIntake,
+	getSessionSecretIntakeContext,
+	hasSessionSecretIntakeFactory,
+} from "../../secrets/intake-session";
 import type { ToolSession } from "..";
 
 const secretRequestSchema = lazy(() =>
@@ -34,14 +38,23 @@ function exactInput(params: unknown): SecretRequestParams {
 	const input = params as Record<string, unknown>;
 	if (typeof input.action !== "string" || !Object.hasOwn(KEYS_BY_ACTION, input.action)) throw new Error(REFUSAL);
 	const keys = KEYS_BY_ACTION[input.action as keyof typeof KEYS_BY_ACTION];
-	if (Reflect.ownKeys(input).length !== keys.length || keys.some(key => !Object.hasOwn(input, key))) throw new Error(REFUSAL);
+	if (Reflect.ownKeys(input).length !== keys.length || keys.some(key => !Object.hasOwn(input, key)))
+		throw new Error(REFUSAL);
 	for (const key of keys) if (key !== "action" && typeof input[key] !== "string") throw new Error(REFUSAL);
 	return input as SecretRequestParams;
 }
 
 function toResult(request: SecretIntakeResult): AgentToolResult {
 	return {
-		content: [{ type: "text", text: JSON.stringify({ request: request.request, ...(request.secretRef ? { secretRef: request.secretRef } : {}) }) }],
+		content: [
+			{
+				type: "text",
+				text: JSON.stringify({
+					request: request.request,
+					...(request.secretRef ? { secretRef: request.secretRef } : {}),
+				}),
+			},
+		],
 		details: { request: request.request, ...(request.secretRef ? { secretRef: request.secretRef } : {}) },
 	};
 }
@@ -49,11 +62,15 @@ function toResult(request: SecretIntakeResult): AgentToolResult {
 export class SecretRequestTool implements AgentTool<typeof secretRequestSchema.value> {
 	readonly name = "secret_request";
 	readonly label = "Secret request";
-	readonly description = "Request, inspect, cancel, or privately consume an operator-approved credential. Never provide a secret value.";
+	readonly description =
+		"Request, inspect, cancel, or privately consume an operator-approved credential. Never provide a secret value.";
 	readonly strict = true;
 	readonly approval = "write" as const;
+	readonly loadMode = "essential" as const;
 
-	get parameters(): typeof secretRequestSchema.value { return secretRequestSchema.value; }
+	get parameters(): typeof secretRequestSchema.value {
+		return secretRequestSchema.value;
+	}
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -79,8 +96,12 @@ export class SecretRequestTool implements AgentTool<typeof secretRequestSchema.v
 					response = await broker.create(context, createInput);
 					break;
 				}
-				case "get": response = broker.get(context, input.requestId); break;
-				case "cancel": response = broker.cancel(context, input.requestId); break;
+				case "get":
+					response = broker.get(context, input.requestId);
+					break;
+				case "cancel":
+					response = broker.cancel(context, input.requestId);
+					break;
 				case "consume": {
 					const operation: SecretIntakeOperation = { tool: input.tool, purpose: input.purpose };
 					response = await broker.consume(context, input.secretRef, operation);

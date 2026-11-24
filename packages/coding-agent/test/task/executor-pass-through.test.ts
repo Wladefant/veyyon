@@ -57,6 +57,7 @@ function createModelRegistry(model: Model): ModelRegistry {
 	return {
 		authStorage: {},
 		refresh: async () => {},
+		getAll: () => [model],
 		getAvailable: () => [model],
 		getApiKey: async () => "test-key",
 	} as unknown as ModelRegistry;

@@ -87,3 +87,13 @@ export function workflowTestPaths(): string[] {
 	}
 	return found;
 }
+
+/** The Windows guest probe runs only inside the sandbox launched by this proof script. */
+export function dedicatedRunnerTestPaths(): string[] {
+	const suite = "scripts/test-sandbox/windows-guest-sentinel-proof.test.ts";
+	const proof = readFileSync(path.join(repoRoot, "scripts/test-sandbox/leak-proof.ps1"), "utf8");
+	return proof.includes(`$probeFile = Join-Path $scriptDir "${path.basename(suite)}"`) &&
+		proof.includes('bun test `"$probeFile`"')
+		? [suite]
+		: [];
+}

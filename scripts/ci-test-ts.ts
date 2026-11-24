@@ -466,7 +466,6 @@ export const repoScriptTests = [
 	"scripts/a-package-module-loads-through-one-build.test.ts",
 	"scripts/arktype-values-load-through-the-deferred-module.test.ts",
 	"scripts/a-package-is-added-only-when-an-existing-one-cannot-serve.test.ts",
-	"scripts/a-package-module-loads-through-one-build.test.ts",
 	"scripts/a-shipped-module-arrives-with-a-test-that-names-it.test.ts",
 	"scripts/a-suite-is-named-for-the-behavior-it-defends.test.ts",
 	"scripts/a-test-proves-behavior-not-that-a-spy-was-called.test.ts",
@@ -672,6 +671,22 @@ export const repoScriptTests = [
 	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
 	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
 	"scripts/check-ts-runs-workspaces-even-when-tools-fails.test.ts",
+	// Static gates over the tree's doc comments, hooks, and duplicated sources. Unwired, a
+	// violation was invisible to every job.
+	"scripts/a-doc-comment-closes-before-the-code-it-documents.test.ts",
+	"scripts/a-doc-comment-sits-on-the-declaration-it-describes.test.ts",
+	"scripts/a-shared-test-module-registers-no-hook-at-module-scope.test.ts",
+	"scripts/no-source-file-repeats-another.test.ts",
+	"scripts/workspace-dependency-graph.test.ts",
+	// The shallow-checkout baseline reads. Nothing else ran them.
+	"scripts/a-shallow-checkout-fetches-only-the-baseline-commits-a-suite-reads.test.ts",
+	"scripts/install-pc2.test.ts",
+	// The OVH selector and shard planner are pure logic. ovh-related-tests.test.ts names this
+	// file as part of the script-test graph.
+	"scripts/ovh-related-tests.test.ts",
+	"scripts/ovh-native-cache.test.ts",
+	"scripts/ovh-test-shards.test.ts",
+	"scripts/ovh-tmp-run-cancellation.test.ts",
 ];
 
 /**
