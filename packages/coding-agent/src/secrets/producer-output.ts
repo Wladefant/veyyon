@@ -43,6 +43,20 @@ const MARKDOWN_COMMIT_LINK =
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
 
 const MD_AUTH_COLON_SUFFIX = /\b(authori[sz]ation):[ \t]*(\*\*|\*|__|_|`)/gi;
+const CREDENTIAL_RECORD_GLOBAL = new RegExp(CREDENTIAL_RECORD.source, "gi");
+
+function allLinesWithinRecordLimit(text: string): boolean {
+	let lineStart = 0;
+	while (lineStart < text.length) {
+		const newline = text.indexOf("\n", lineStart);
+		const end = newline < 0 ? text.length : newline;
+		const sepLen = newline < 0 ? 0 : 1;
+		if (end - lineStart + sepLen > MAX_RECORD_CHARS) return false;
+		if (newline < 0) break;
+		lineStart = newline + 1;
+	}
+	return true;
+}
 
 function pickSentinel(text: string): string | null {
 	for (let code = 0xe000; code <= 0xe0ff; code++) {
@@ -125,7 +139,8 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 	const { stripped, toOriginal } = text.includes("^[[")
 		? stripCaretCsiWithMap(text)
 		: { stripped: text, toOriginal: null };
-	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
+	CREDENTIAL_RECORD_GLOBAL.lastIndex = 0;
+	const labels = CREDENTIAL_RECORD_GLOBAL;
 	const spans: { start: number; valueStart: number; end: number }[] = [];
 	let authorizationHeading = false;
 	let offset = 0;
@@ -152,11 +167,11 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		)
 			continue;
 		const escapedBreak = stripped.lastIndexOf("\\n", match.index);
-		const logicalLineStart = Math.max(
-			sourceLineStart,
-			escapedBreak >= 0 ? escapedBreak + 2 : 0,
-		);
-		if (PERSIST_CREDENTIALS_LABEL.test(stripped.slice(logicalLineStart, start)) && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
+		const logicalLineStart = Math.max(sourceLineStart, escapedBreak >= 0 ? escapedBreak + 2 : 0);
+		if (
+			PERSIST_CREDENTIALS_LABEL.test(stripped.slice(logicalLineStart, start)) &&
+			PERSIST_CREDENTIALS_BOOLEAN.test(tail)
+		)
 			continue;
 		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail)) continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
@@ -350,6 +365,7 @@ function stripCaretCsiWithMap(text: string): { stripped: string; toOriginal: num
 function structuredStart(text: string, skipInlineCode = false): number {
 	// Only a complete scalar record owns its quotes. Quotes in raw labels must
 	// not consume delimiters belonging to a later structured argument.
+	if (!text.includes("{") && !text.includes("[")) return -1;
 	let seenNonWhitespace = false;
 	for (let start = 0; start < text.length; start++) {
 		const escapedCsi = caretCsiLength(text, start);
@@ -759,9 +775,10 @@ export class ProducerOutputGuard {
 			// Classify labels before an owner can rename them. Normalization must not
 			// reveal a label that was missed while retaining raw literal secret bytes.
 			const classified = classifyCredentialText(text);
-			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== classifyCredentialText(original))
+			const originalClassified = original === text ? classified : classifyCredentialText(original);
+			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== originalClassified)
 				return BLOCKED_OUTPUT_RECORD;
-			const filtered = classifyCredentialText(text, this.#redact);
+			const filtered = this.#redact ? classifyCredentialText(text, this.#redact) : classified;
 			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
 			const sanitized = sanitizeText(filtered);
 			const normalized = this.#redact?.(sanitized) ?? sanitized;
@@ -980,7 +997,7 @@ export class ProducerOutputGuard {
 			}
 			return prefix + (this.#structured || this.#assignments > 0 ? "" : this.#flushCandidate());
 		}
-		return prefix + this.#sanitize(record + newline, false);
+		return prefix + safe;
 	}
 
 	push(chunk: string): string {
@@ -1107,8 +1124,39 @@ export class ProducerOutputGuard {
 	#pushRecords(chunk: string): string {
 		if (this.#withholding) return "";
 		const output: string[] = [];
+		let batchChecked = false;
 		let offset = 0;
 		while (offset < chunk.length) {
+			if (
+				!batchChecked &&
+				!this.#redact &&
+				!this.#pendingPrefixLength &&
+				!this.#dropping &&
+				!this.#oversizedPending &&
+				!this.#structured &&
+				this.#assignments === 0 &&
+				!this.#candidate &&
+				!this.#candidateOversized &&
+				!this.#authorizationHeading &&
+				this.#pending === ""
+			) {
+				batchChecked = true;
+				const lastNl = chunk.lastIndexOf("\n");
+				if (lastNl >= offset) {
+					const batch = offset === 0 && lastNl === chunk.length - 1 ? chunk : chunk.slice(offset, lastNl + 1);
+					if (
+						batch.length <= MAX_DIRECT_SANITIZE_CHARS &&
+						(batch.length <= MAX_RECORD_CHARS || allLinesWithinRecordLimit(batch)) &&
+						// Decimal records cannot contain labels, structured data or built-in
+						// secret prefixes. Owner-supplied filters still take the record path.
+						!/[^0-9\n]/.test(batch)
+					) {
+						output.push(batch);
+						offset = lastNl + 1;
+						continue;
+					}
+				}
+			}
 			const newline = chunk.indexOf("\n", offset);
 			const end = newline < 0 ? chunk.length : newline;
 			const separator = newline < 0 ? "" : "\n";
