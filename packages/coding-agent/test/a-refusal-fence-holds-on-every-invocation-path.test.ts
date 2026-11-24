@@ -201,10 +201,9 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			[
 				"cursor-bridge-tools.ts",
 				"sdk.ts",
-				"sdk.ts",
-				"sdk.ts",
-				"session/agent-session.ts",
 				"session/factory-tools.ts",
+				"session/runtime/tool-activation.ts",
+				"session/tool-discovery.ts",
 			].map(site => `packages/coding-agent/src/${site}`),
 		);
 	}, 300_000);
