@@ -177,6 +177,8 @@ export abstract class OAuthCallbackFlow {
 			);
 
 			const { code } = await this.#waitForCallback(state);
+			// The browser has finished authorization; token exchange may still take time.
+			if (launch) launch.authUrl = undefined;
 			this.#throwIfCancelled();
 
 			this.ctrl.onProgress?.("Exchanging authorization code for tokens...");
@@ -305,9 +307,9 @@ export abstract class OAuthCallbackFlow {
 
 		if (url.pathname !== this.callbackPath) {
 			if (
+				launch.authUrl &&
 				url.pathname === LAUNCH_PATH &&
-				matchesToken(url.searchParams.get("token"), launch.token) &&
-				launch.authUrl
+				matchesToken(url.searchParams.get("token"), launch.token)
 			) {
 				return new Response(null, {
 					status: 302,

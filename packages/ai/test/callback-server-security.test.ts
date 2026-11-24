@@ -4,6 +4,8 @@ import type { OAuthAuthInfo, OAuthCredentials } from "@veyyon/ai/registry/oauth/
 import { parseHTML } from "linkedom";
 
 class CallbackProbeFlow extends OAuthCallbackFlow {
+	beforeExchange?: () => Promise<void>;
+
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string }> {
 		const url = new URL("https://auth.example.test/authorize");
 		url.searchParams.set("state", state);
@@ -12,6 +14,7 @@ class CallbackProbeFlow extends OAuthCallbackFlow {
 	}
 
 	async exchangeToken(code: string): Promise<OAuthCredentials> {
+		await this.beforeExchange?.();
 		return {
 			access: code,
 			refresh: "refresh-token",
@@ -22,7 +25,7 @@ class CallbackProbeFlow extends OAuthCallbackFlow {
 
 const activeAborts: AbortController[] = [];
 
-async function startFlow(): Promise<{
+async function startFlow(beforeExchange?: () => Promise<void>): Promise<{
 	info: OAuthAuthInfo;
 	abort: AbortController;
 	login: Promise<OAuthCredentials>;
@@ -42,6 +45,7 @@ async function startFlow(): Promise<{
 			allowPortFallback: true,
 		},
 	);
+	flow.beforeExchange = beforeExchange;
 	const login = flow.login();
 	const info = await auth.promise;
 	return { info, abort, login };
@@ -267,6 +271,44 @@ describe("OAuthCallbackFlow launch route security", () => {
 			expect(credentials.access).toBe("launch-flow-code");
 			expect(credentials.refresh).toBe("refresh-token");
 		} finally {
+			abort.abort("test cleanup");
+			await loginSettled;
+		}
+	});
+
+	it("revokes the launch shortcut when the callback settles while token exchange is pending", async () => {
+		const exchangeStarted = Promise.withResolvers<void>();
+		const releaseExchange = Promise.withResolvers<void>();
+		const { info, abort, login } = await startFlow(() => {
+			exchangeStarted.resolve();
+			return releaseExchange.promise;
+		});
+		const loginSettled = login.catch(() => undefined);
+		try {
+			const authUrl = new URL(info.url);
+			const redirectUri = authUrl.searchParams.get("redirect_uri");
+			const state = authUrl.searchParams.get("state");
+			if (!info.launchUrl || !redirectUri || !state) {
+				throw new Error("OAuth test flow did not advertise its launch and callback parameters");
+			}
+			const launch = await fetch(info.launchUrl, { redirect: "manual" });
+			expect(launch.status).toBe(302);
+
+			const callback = new URL(redirectUri);
+			callback.searchParams.set("code", "deferred-exchange-code");
+			callback.searchParams.set("state", state);
+			expect((await fetch(callback)).status).toBe(200);
+			await exchangeStarted.promise;
+
+			const expiredLaunch = await fetch(info.launchUrl, { redirect: "manual" });
+			expect(expiredLaunch.status).toBe(404);
+			expect(expiredLaunch.headers.get("location")).toBeNull();
+			expect(await expiredLaunch.text()).not.toContain(state);
+
+			releaseExchange.resolve();
+			expect((await login).access).toBe("deferred-exchange-code");
+		} finally {
+			releaseExchange.resolve();
 			abort.abort("test cleanup");
 			await loginSettled;
 		}
