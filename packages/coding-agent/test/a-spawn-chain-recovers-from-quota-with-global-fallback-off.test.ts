@@ -45,6 +45,7 @@ function fixture(explicit = true, global = false) {
 		"retry.fallbackChains": { [selectors[0]]: selectors.slice(1), default: ["unrelated/model"] },
 	});
 	const cooldowns = new Map<string, number>();
+	const cooldownKey = (selector: string) => selector.split(":")[0]!;
 	const events: AgentSessionEvent[] = [];
 	const session = {
 		agent: new Agent({ initialState: { model: models[0], messages: [], tools: [] } }),
@@ -60,8 +61,9 @@ function fixture(explicit = true, global = false) {
 			getApiKey: async () => "fake-key",
 			refreshSelectedModelMetadata: async (model: (typeof models)[number]) => model,
 			authStorage: { markUsageLimitReached: async () => ({ switched: false }) },
-			isSelectorSuppressed: (selector: string) => (cooldowns.get(selector.split(":")[0]) ?? 0) > Date.now(),
-			suppressSelector: (selector: string, until: number) => cooldowns.set(selector.split(":")[0], until),
+			normalizeSuppressedSelector: cooldownKey,
+			isSelectorSuppressed: (selector: string) => (cooldowns.get(cooldownKey(selector)) ?? 0) > Date.now(),
+			suppressSelector: (selector: string, until: number) => cooldowns.set(cooldownKey(selector), until),
 		} as unknown as ModelRegistry,
 		model: models[0],
 		thinkingLevel: undefined,
