@@ -323,7 +323,7 @@ describe("/mcp auth commands", () => {
 					throw new Error("Consent cancelled");
 				});
 				const { controller, showError } = createController(authStorage);
-				await controller.handle("/mcp reauth envserver");
+				await controller.handle("reauth envserver");
 				expect(authorizationScopes).toEqual([scenario.expected]);
 				expect(registeredScopes).toEqual([scenario.expected]);
 				expect(showError.mock.calls.flat().join("\n")).toContain("Consent cancelled");
