@@ -1666,9 +1666,11 @@ export class AgentSession {
 			const automaticHandoffModel = this.#automaticHandoffSummaryModel(context);
 			if (automaticHandoffModel) {
 				if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
-				if (signal?.aborted) return;
-				if (await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel, signal)) return;
-				if (signal?.aborted) return;
+				signal?.throwIfAborted();
+				const switched = await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel, signal);
+				// This hook runs between provider calls. Unwind the turn on abort rather than sampling again.
+				signal?.throwIfAborted();
+				if (switched) return;
 			}
 			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
 		});
