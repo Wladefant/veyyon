@@ -1,6 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { executeBash } from "@veyyon/coding-agent/exec/bash-executor";
-
 import {
 	clampTimeout,
 	describeTimeoutParam,
@@ -8,6 +7,7 @@ import {
 	TOOL_TIMEOUTS,
 	type ToolWithTimeout,
 } from "@veyyon/coding-agent/tools/core/tool-timeouts";
+import { Shell } from "@veyyon/natives";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
 
 // Every tool's timeout is derived through `clampTimeout`, which is the single
@@ -294,45 +294,36 @@ describe("fetch timeout single-source regression", () => {
 });
 
 /**
- * The bash executor's RESOLVED deadline, in milliseconds, for every shape of the
- * `timeout` option.
- *
- * WHAT THIS LOCKS OUT, AND WHY IT IS WRITTEN THIS WAY. `exec/bash-executor.ts` used to
- * hardcode `?? 300_000` as the fallback deadline for callers that pass no timeout (the
- * RPC `executeBash(command)` path): a second copy of the bash tool default that could
- * diverge from `TOOL_TIMEOUTS.bash` the moment the table changed, which is exactly how
- * the `fetch` `default: 20` / hardcoded-`30` split happened. It now derives the value
- * from the single owner.
- *
- * The FIRST attempt at locking that down read the executor's source and asserted three
- * substrings were present or absent. That test could not fail on the bug it names: the
- * arithmetic could be wrong (`* 100`), the floor could be dropped, `0` could stop
- * disabling the deadline, and every substring would still be exactly where it was. It
- * also failed on harmless renames. So the assertions below are on the NUMBER the
- * executor actually schedules its abort for, observed by capturing the delay it hands
- * to `setTimeout` while running a command that finishes immediately. That is the value
- * the operator experiences, and it is what a changed multiplier, a changed table entry,
- * a dropped floor or a re-hardcoded literal that no longer matches the table all move.
+ * Capture the full budget scheduled before setup and the backstop scheduled before
+ * spawning the command. A caller that omits a timeout (for example the RPC path)
+ * must still derive that budget from the tool default, not a second constant.
+ * Freeze the monotonic clock so setup does not subtract an unpredictable fraction
+ * from the backstop. For explicit timeouts, the native shell enforces the deadline
+ * first, and the JavaScript backstop gives the native result time to arrive.
  *
  * IF IT REGRESSES: a bash command runs for a different length of time than the config
  * says, in either direction. Too long and a runaway shell holds the session past its
  * budget; too short and ordinary work is aborted mid-flight.
  */
-async function resolvedBashDeadlinesMs(options?: { timeout?: number }): Promise<number[]> {
-	const delays: number[] = [];
+async function captureBashDeadlines(options?: { timeout?: number }) {
+	const jsDelays: number[] = [];
+	const shellRun = spyOn(Shell.prototype, "run");
+	const clock = spyOn(performance, "now").mockReturnValue(0);
 	const realSetTimeout = globalThis.setTimeout;
 	globalThis.setTimeout = ((handler: () => void, delay?: number, ...rest: unknown[]) => {
-		if (typeof delay === "number") delays.push(delay);
+		if (typeof delay === "number") jsDelays.push(delay);
 		return realSetTimeout(handler, delay, ...rest);
 	}) as typeof globalThis.setTimeout;
 	try {
-		// `true` exits at once, so the deadline timer is scheduled and cleared without
-		// the test waiting for it. Only the SCHEDULED value is under test.
-		await executeBash("true", options);
+		const result = await executeBash("true", options);
+		expect(result.exitCode).toBe(0);
+		expect(result.cancelled).toBe(false);
+		return { jsDelays, nativeBudgets: shellRun.mock.calls.map(([runOptions]) => runOptions.timeoutMs) };
 	} finally {
 		globalThis.setTimeout = realSetTimeout;
+		clock.mockRestore();
+		shellRun.mockRestore();
 	}
-	return delays;
 }
 
 /**
@@ -346,8 +337,9 @@ beforeAll(async () => {
 });
 
 describe("the bash executor's resolved deadline", () => {
-	it("falls back to TOOL_TIMEOUTS.bash.default converted to milliseconds, and nothing else", async () => {
-		expect(await resolvedBashDeadlinesMs()).toEqual([TOOL_TIMEOUTS.bash.default * 1000]);
+	it("schedules the configured default for setup and execution", async () => {
+		const defaultMs = TOOL_TIMEOUTS.bash.default * 1000;
+		expect(await captureBashDeadlines()).toEqual({ jsDelays: [defaultMs, defaultMs], nativeBudgets: [undefined] });
 	});
 
 	/**
@@ -357,7 +349,7 @@ describe("the bash executor's resolved deadline", () => {
 	 */
 	it("puts that fallback at 300000ms, the value bash has always run with", async () => {
 		expect(TOOL_TIMEOUTS.bash.default).toBe(300);
-		expect(await resolvedBashDeadlinesMs()).toEqual([300_000]);
+		expect((await captureBashDeadlines()).jsDelays).toEqual([300_000, 300_000]);
 	});
 
 	/**
@@ -365,18 +357,23 @@ describe("the bash executor's resolved deadline", () => {
 	 * than the deadline, this case would still report the default instead of 7000, and the
 	 * two tests would be measuring nothing together.
 	 */
-	it("uses an explicitly requested timeout verbatim instead of the fallback", async () => {
-		expect(await resolvedBashDeadlinesMs({ timeout: 7000 })).toEqual([7000]);
+	it("uses the requested native budget and adds grace to the JavaScript backstop", async () => {
+		expect(await captureBashDeadlines({ timeout: 7000 })).toEqual({
+			jsDelays: [7000, 7200],
+			nativeBudgets: [7000],
+		});
 	});
 
 	/** `0` DISABLES the deadline, which `describeTimeoutParam` advertises to the model. */
 	it("schedules no deadline at all for a timeout of 0", async () => {
-		expect(await resolvedBashDeadlinesMs({ timeout: 0 })).toEqual([]);
+		expect(await captureBashDeadlines({ timeout: 0 })).toEqual({ jsDelays: [], nativeBudgets: [undefined] });
 	});
 
-	/** And the 1s floor holds, so a tiny positive timeout cannot abort the shell as it starts. */
-	it("raises a sub-second timeout to the 1000ms floor rather than honouring it", async () => {
-		expect(await resolvedBashDeadlinesMs({ timeout: 50 })).toEqual([1000]);
+	it("floors the JavaScript budget at 1000ms without raising the native deadline", async () => {
+		expect(await captureBashDeadlines({ timeout: 50 })).toEqual({
+			jsDelays: [1000, 1200],
+			nativeBudgets: [50],
+		});
 	});
 });
 
