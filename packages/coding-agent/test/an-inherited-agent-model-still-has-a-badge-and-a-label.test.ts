@@ -155,6 +155,7 @@ describe("an inherited subagent model still has a badge and a label", () => {
 			modelRegistry: {
 				refresh: async () => {},
 				getAvailable: () => [configured],
+				getAll: () => [configured],
 				getApiKey: async () => "k",
 			} as never,
 			enableLsp: false,
