@@ -11,7 +11,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@veyyon/coding-agent/tools/index";
+import { SecretRequestTool } from "@veyyon/coding-agent/tools/agent/secret-request";
+import { BUILTIN_TOOLS, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools/index";
+import { GithubTool } from "@veyyon/coding-agent/tools/web/gh";
 import { ArgotSession } from "argot";
 import { makeToolSession } from "./tool-session";
 
@@ -31,6 +33,16 @@ const SWEEP_SETTINGS: Record<string, unknown> = {
 	// "auto" resolves to "off" below the tool-count threshold, which would drop `search_tool_bm25`
 	// out of the sweep.
 	"tools.discoveryMode": "all",
+};
+
+/**
+ * Constructs the two tools whose factories return null or throw without a `gh` CLI or a secret intake
+ * broker. Their constructors only store the session, so the sweep validates their schemas with no
+ * network, no `gh` call and no broker. Any other factory that returns null or throws stays a hole.
+ */
+const CONSTRUCTOR_FALLBACKS: Partial<Record<string, (session: ToolSession) => AgentTool>> = {
+	github: session => new GithubTool(session),
+	secret_request: session => new SecretRequestTool(session),
 };
 
 export interface EveryToolSweep {
@@ -71,13 +83,18 @@ export async function constructEveryTool(profileDir: string): Promise<EveryToolS
 	});
 	const sweep: EveryToolSweep = { tools: [], unconstructable: [], notRegistered: [] };
 	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
+		const fallback = CONSTRUCTOR_FALLBACKS[name];
 		let tool: AgentTool | null;
 		try {
 			tool = await factory(session);
 		} catch {
-			sweep.unconstructable.push(name);
-			continue;
+			if (!fallback) {
+				sweep.unconstructable.push(name);
+				continue;
+			}
+			tool = null;
 		}
+		tool ??= fallback?.(session) ?? null;
 		if (tool) sweep.tools.push(tool);
 		else sweep.notRegistered.push(name);
 	}

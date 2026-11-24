@@ -248,6 +248,7 @@ export class InProcessBackend implements ExecutionBackend {
 			cancelled = true;
 			interrupt("Trial aborted by context signal");
 		};
+		context.signal?.addEventListener("abort", onCancel);
 		if (context.signal?.aborted) onCancel();
 
 		const runClient = async (): Promise<{

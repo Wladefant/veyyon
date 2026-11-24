@@ -252,6 +252,11 @@ export class MessagePersistence {
 		};
 	}
 
+	/** Wait for the message ends queued when a branch reader starts. */
+	drain(): Promise<void> {
+		return this.#tail;
+	}
+
 	/** Resolves once the queued write of {@link message} finished, or at once when none is queued. */
 	async waitFor(message: AgentMessage): Promise<void> {
 		const key = sessionMessagePersistenceKey(message);

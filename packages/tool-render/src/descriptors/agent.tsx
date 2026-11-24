@@ -1097,6 +1097,37 @@ function YieldBody({ args, result }: ToolRenderProps): ReactNode {
 	);
 }
 
+const SECRET_REQUEST_ACTIONS: Record<string, string> = {
+	create: "Request",
+	get: "Check",
+	cancel: "Cancel",
+	consume: "Consume",
+};
+const SECRET_REQUEST_STATUSES: Record<string, true> = {
+	pending: true,
+	saving: true,
+	saved: true,
+	declined: true,
+	cancelled: true,
+	expired: true,
+	consumed: true,
+	failed: true,
+};
+
+function SecretRequestSummary({ args, result }: ToolRenderProps): ReactNode {
+	const request = detailsRecord(result)?.request;
+	const action = str(args.action);
+	const status = isRecord(request) ? str(request.status) : null;
+	const actionLabel =
+		action && Object.hasOwn(SECRET_REQUEST_ACTIONS, action) ? SECRET_REQUEST_ACTIONS[action] : "Secret request";
+	return (
+		<>
+			<span>{actionLabel}</span>
+			{status && Object.hasOwn(SECRET_REQUEST_STATUSES, status) && <Badge>{status}</Badge>}
+		</>
+	);
+}
+
 // ============================================================================
 // Exports
 // ============================================================================
@@ -1111,5 +1142,6 @@ export const agentDescriptors: readonly ToolDescriptor[] = [
 	{ name: "vibe_kill", Summary: VibeSummary, Body: VibeBody },
 	{ name: "vibe_list", Summary: VibeSummary, Body: VibeBody },
 	{ name: "goal", Summary: GoalSummary, Body: GoalBody },
+	{ name: "secret_request", Summary: SecretRequestSummary },
 	{ name: "yield", Summary: YieldSummary, Body: YieldBody },
 ];

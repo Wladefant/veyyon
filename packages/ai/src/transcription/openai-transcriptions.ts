@@ -1,7 +1,8 @@
 import { calculateCost } from "@veyyon/catalog/models";
 import type { Api, FetchImpl, Model, Usage } from "@veyyon/catalog/types";
+import { lazy } from "@veyyon/utils/abortable";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import { type } from "arktype";
+import { type } from "../utils/schema/arktype";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import type { TranscriptionRequest, TranscriptionResult, TranscriptionSegment, TranscriptionWord } from "./types";
@@ -17,29 +18,31 @@ export class TranscriptionApiError extends AIError.ProviderHttpError {
 	override readonly name = "TranscriptionApiError";
 }
 
-const transcriptionSegmentSchema = type({
-	start: "number",
-	end: "number",
-	text: "string",
-	"id?": "number | string",
-	"speaker?": "number | string",
-});
+const upstreamResponseSchema = lazy(() => {
+	const transcriptionSegmentSchema = type({
+		start: "number",
+		end: "number",
+		text: "string",
+		"id?": "number | string",
+		"speaker?": "number | string",
+	});
 
-const transcriptionWordSchema = type({
-	word: "string",
-	start: "number",
-	end: "number",
-	"speaker?": "number | string",
-	"confidence?": "number",
-});
+	const transcriptionWordSchema = type({
+		word: "string",
+		start: "number",
+		end: "number",
+		"speaker?": "number | string",
+		"confidence?": "number",
+	});
 
-const upstreamResponseSchema = type({
-	text: "string",
-	"language?": "string",
-	"duration?": "number",
-	"segments?": transcriptionSegmentSchema.array(),
-	"words?": transcriptionWordSchema.array(),
-	"usage?": "object",
+	return type({
+		text: "string",
+		"language?": "string",
+		"duration?": "number",
+		"segments?": transcriptionSegmentSchema.array(),
+		"words?": transcriptionWordSchema.array(),
+		"usage?": "object",
+	});
 });
 
 function decodeUsage(model: Model<Api>, raw: unknown): { usage: Usage; seconds?: number } {
@@ -125,7 +128,7 @@ export async function transcribeOpenAI(
 	);
 
 	const body: unknown = await response.json();
-	const parsed = upstreamResponseSchema(body);
+	const parsed = upstreamResponseSchema.value(body);
 	if (parsed instanceof type.errors) {
 		throw new AIError.ProviderResponseError(
 			`${model.provider}/${model.id} transcription response is malformed: ${parsed.summary}`,

@@ -139,14 +139,11 @@ export class ComposerEscape {
 		return aborted;
 	}
 
-	/** Pauses loop mode and stops its turn: the streaming turn, else the submission waiting to start. */
+	/** Pauses loop mode, cancels any waiting submission, and stops an active turn. */
 	#escapeLoopMode(): void {
 		this.ctx.pauseLoop();
-		if (this.ctx.session.isStreaming) {
-			this.#abortStreamingTurn();
-		} else {
-			this.ctx.cancelPendingSubmission();
-		}
+		this.ctx.cancelPendingSubmission();
+		if (this.ctx.session.isStreaming) this.#abortStreamingTurn();
 	}
 
 	/**

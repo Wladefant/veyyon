@@ -24,6 +24,9 @@ export interface CheckpointLease {
 	targetNode?: string;
 	transferId?: string;
 }
+
+/** The authority returned a grant without a live fence. A guard must not retry that grant. */
+export class CheckpointAuthorityFenceError extends Error {}
 function hasLiveLeaseFence(lease: CheckpointLease | null | undefined): lease is CheckpointLease {
 	if (!lease || !Number.isSafeInteger(lease.epoch) || lease.epoch < 0) return false;
 	const expiresAt = typeof lease.expiresAt === "string" ? Date.parse(lease.expiresAt) : Number.NaN;
@@ -198,7 +201,7 @@ export class CheckpointClient {
 			}
 			if (!hasLiveLeaseFence(lease)) {
 				this.loseLease(sessionId);
-				throw new Error("Checkpoint authority lease fence invalid");
+				throw new CheckpointAuthorityFenceError("Checkpoint authority lease fence invalid");
 			}
 			this.#leases.set(sessionId, lease);
 			this.#lost.delete(sessionId);

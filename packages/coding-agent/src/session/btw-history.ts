@@ -1,8 +1,8 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { acquireFileLock, atomicWriteFile, type FileLockHandle, isEnoent, toError } from "@veyyon/utils";
-import { type } from "arktype";
+import { acquireFileLock, atomicWriteFile, type FileLockHandle, isEnoent, lazy, toError } from "@veyyon/utils";
+import { type } from "@veyyon/ai/utils/schema/arktype";
 
 export interface BtwHistoryTurn {
 	question: string;
@@ -38,25 +38,27 @@ export function getBtwCopyText(record: BtwHistoryRecord): string | undefined {
 	return record.answer.trim() ? record.answer : undefined;
 }
 
-const turnFields = {
-	question: "string",
-	answer: "string",
-	status: "'running' | 'complete' | 'cancelled' | 'error' | 'interrupted'",
-	createdAt: "0 <= number <= 8640000000000000",
-	updatedAt: "0 <= number <= 8640000000000000",
-	"error?": "string",
-} as const;
-const turnSchema = type({ ...turnFields, "+": "reject" });
-const recordSchema = type({
-	...turnFields,
-	id: "string > 0",
-	leafId: "string | null",
-	"followUps?": turnSchema.array(),
-	"+": "reject",
+const recordSchema = lazy(() => {
+	const turnFields = {
+		question: "string",
+		answer: "string",
+		status: "'running' | 'complete' | 'cancelled' | 'error' | 'interrupted'",
+		createdAt: "0 <= number <= 8640000000000000",
+		updatedAt: "0 <= number <= 8640000000000000",
+		"error?": "string",
+	} as const;
+	const turnSchema = type({ ...turnFields, "+": "reject" });
+	return type({
+		...turnFields,
+		id: "string > 0",
+		leafId: "string | null",
+		"followUps?": turnSchema.array(),
+		"+": "reject",
+	});
 });
 
 function parseRecord(value: unknown): BtwHistoryRecord {
-	const result = recordSchema(value);
+	const result = recordSchema.value(value);
 	if (result instanceof type.errors) {
 		throw new Error(`Invalid BTW history record: ${result.summary}`);
 	}

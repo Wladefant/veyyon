@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CheckpointClient, CheckpointLease } from "./cloud-checkpoints";
+import { CheckpointAuthorityFenceError, type CheckpointClient, type CheckpointLease } from "./cloud-checkpoints";
 import type { SessionOwnershipMarker } from "./session-ownership-marker";
 /** One local runtime owns this guard. Losing its lease requires an explicit fork or transfer. */
 export class SynchronizedSession {
@@ -92,7 +92,13 @@ export class SynchronizedSession {
 					throw error;
 				}
 			} else {
-				this.#lease = await this.client.acquireLease(this.sessionId, this.ownerNode);
+				try {
+					this.#lease = await this.client.acquireLease(this.sessionId, this.ownerNode);
+				} catch (error) {
+					// A refused initial fence is authority proof: never reacquire implicitly.
+					if (error instanceof CheckpointAuthorityFenceError) this.#loseOwnership();
+					throw error;
+				}
 			}
 			// close() can run while acquisition/finalization is awaiting the authority.
 			this.#assertOpen();

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CheckpointClient, type CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
+import { CheckpointAuthorityFenceError, CheckpointClient, type CheckpointFetch } from "../src/checkpoints/cloud-checkpoints";
 import { SynchronizedSession } from "../src/checkpoints/synchronized-session";
 
 const SECOND_RUNTIME_ID = "00000000-0000-4000-8000-000000000002";
@@ -64,7 +64,7 @@ test("a second device cannot admit the same cloud session while its owner lease 
 			return Response.json({ error: "stale writer" }, { status: 409 });
 		return Response.json({
 			ownerNode: body?.ownerNode ?? owner,
-			epoch,
+			epoch: action === "release" ? epoch + 1 : epoch,
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
 			manifestHash: "",
@@ -211,7 +211,7 @@ test("concurrent admission shares one in-flight checkpoint lease acquisition", a
 			entered.resolve();
 			await allowLease.promise;
 		}
-		return Response.json(lease);
+		return Response.json(action === "release" ? { ...lease, epoch: lease.epoch + 1 } : lease);
 	};
 	const session = new SynchronizedSession(
 		"concurrent-admission",
@@ -377,7 +377,7 @@ test("close during checkpoint lease acquisition releases the late grant and refu
 			entered.resolve();
 			await allowLease.promise;
 		}
-		return Response.json(lease);
+		return Response.json(action === "release" ? { ...lease, epoch: lease.epoch + 1 } : lease);
 	};
 	const session = new SynchronizedSession(
 		"late-admission",
@@ -417,11 +417,13 @@ test("an expired checkpoint lease permanently fences subsequent admissions", asy
 		undefined,
 		"00000000-0000-4000-8000-00000000000d",
 	);
-	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	const refused = await session.admit().catch(error => error);
+	expect(refused).toBeInstanceOf(CheckpointAuthorityFenceError);
+	expect(refused.message).toBe("Checkpoint authority lease fence invalid");
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
 	expect(actions).toEqual(["lease"]);
 	await session.close();
-	expect(actions).toEqual(["lease", "release"]);
+	expect(actions).toEqual(["lease"]);
 });
 
 // WHY: a single-use transfer claim is also asynchronous. Closing while it is
@@ -504,11 +506,11 @@ test("an expired renewal response fences the current admission", async () => {
 		undefined,
 		"00000000-0000-4000-8000-00000000000d",
 	);
-	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	await expect(session.admit()).rejects.toThrow(/^Checkpoint authority lease fence invalid$/);
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
 	expect(actions).toEqual(["lease", "renew"]);
 	await session.close();
-	expect(actions).toEqual(["lease", "renew", "release"]);
+	expect(actions).toEqual(["lease", "renew"]);
 });
 
 // WHY: rejected ownership must not keep renewing. A successful lease renews,
@@ -534,7 +536,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 		undefined,
 		8,
 	);
-	await expect(expired.admit()).rejects.toThrow(/Checkpoint lease lost/);
+	await expect(expired.admit()).rejects.toThrow(/^Checkpoint authority lease fence invalid$/);
 
 	const started = Promise.withResolvers<void>();
 	const finishPeriodic = Promise.withResolvers<void>();
@@ -554,7 +556,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 			started.resolve();
 			await finishPeriodic.promise;
 		}
-		return Response.json(validLease);
+		return Response.json(action === "release" ? { ...validLease, epoch: validLease.epoch + 1 } : validLease);
 	};
 	const live = new SynchronizedSession(
 		"valid-periodic",

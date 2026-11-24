@@ -24,6 +24,7 @@
  */
 
 import { describe, expect, it, spyOn } from "bun:test";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
@@ -41,7 +42,7 @@ import type {
 import { harnesses } from "../../engine/members/loaded";
 import { PlanChangedError, planIdentity } from "../../engine/plan/plan-identity";
 import { buildRunPlan, type RunPlan } from "../../engine/plan/run-plan";
-import { VARIANT_MATRIX_AXES } from "../../engine/plan/variant-matrix";
+import { expandVariantMatrix, VARIANT_MATRIX_AXES, type VariantMatrixSelection } from "../../engine/plan/variant-matrix";
 import { executeRun } from "../../engine/run/execute";
 import {
 	journalPathFor,
@@ -50,6 +51,7 @@ import {
 	readRunJournal,
 	StaleRunJournalError,
 } from "../../engine/run/journal";
+import { buildSkillArms, type FrozenSkillArm } from "../../engine/skills/arms";
 import { main } from "../../evals";
 
 const MODEL_A = "anthropic/claude-sonnet-4-5";
@@ -98,25 +100,37 @@ interface PlanShape extends SuiteShape {
 	readonly builds?: readonly string[];
 	readonly repeats?: number;
 	readonly taskIds?: readonly string[];
+	/** Only `selectionOf` reads this. `planOf` would bind an arm, so the arm sweep expands the matrix itself. */
+	readonly skillArms?: readonly FrozenSkillArm[];
+}
+
+function selectionOf(shape: PlanShape = {}): VariantMatrixSelection {
+	return {
+		harnesses: ["veyyon"],
+		models: shape.models ?? [MODEL_A],
+		configs: shape.configs,
+		promptVariants: shape.promptVariants,
+		attachments: shape.attachments,
+		builds: shape.builds,
+		skillArms: shape.skillArms,
+	};
 }
 
 async function planOf(workDir: string, shape: PlanShape = {}): Promise<RunPlan> {
 	return await buildRunPlan({
 		suite: suiteOf(shape),
 		harnesses,
-		selection: {
-			harnesses: ["veyyon"],
-			models: shape.models ?? [MODEL_A],
-			configs: shape.configs,
-			promptVariants: shape.promptVariants,
-			attachments: shape.attachments,
-			builds: shape.builds,
-		},
+		selection: selectionOf(shape),
 		tasks: shape.taskIds,
 		repeats: shape.repeats,
 		context: { workDir },
 		runId: "one-run-id",
 	});
+}
+
+/** A plan whose variants carry `arm`, expanded without binding it. */
+async function armPlanOf(workDir: string, arm: FrozenSkillArm): Promise<RunPlan> {
+	return { ...(await planOf(workDir)), variants: expandVariantMatrix(selectionOf({ skillArms: [arm] })) };
 }
 
 /** A backend that applies every axis, so an axis check never precedes the plan check. */
@@ -174,6 +188,16 @@ const CHANGES: { what: string; shape: PlanShape }[] = [
 	{ what: "a build", shape: { builds: ["/builds/veyyon"] } },
 ];
 
+/** A real arm from `buildSkillArms`, so the digest reads a value the builder accepts. */
+const SKILL_CONTENT = "Read the target file before any edit.\nChange only the lines the task names.";
+const SKILL_ARM: FrozenSkillArm = buildSkillArms({
+	version: 1,
+	skillName: "fixture-skill",
+	sourceHash: createHash("sha256").update(SKILL_CONTENT, "utf8").digest("hex"),
+	content: SKILL_CONTENT,
+	components: [{ name: "read-first", content: "Read the target file before any edit." }],
+}).find(arm => arm.kind === "full")!;
+
 /** A value on every axis the variant matrix expands, keyed by the axis. */
 const EVERY_AXIS_SET: Record<string, PlanShape> = {
 	// `planOf` names the harness itself.
@@ -183,6 +207,7 @@ const EVERY_AXIS_SET: Record<string, PlanShape> = {
 	promptVariants: { promptVariants: ["/overlays/p.json"] },
 	attachments: { attachments: ["prompt/extra.prompt.md"] },
 	builds: { builds: ["/builds/veyyon"] },
+	skillArms: { skillArms: [SKILL_ARM] },
 };
 
 /** A value no field of a variant holds, of that field's own shape. */
@@ -195,6 +220,13 @@ function changed(value: unknown): unknown {
 const SAME_PLAN: { what: string; shape: PlanShape }[] = [
 	{ what: "a narrowed task list", shape: { taskIds: ["t1"] } },
 	{ what: "more repeats", shape: { repeats: 2 } },
+];
+
+/** Fields of a skill arm other than its id. The id is in the variant name, so these leave the name alone. */
+const ARM_FIELDS: { what: string; arm: Partial<FrozenSkillArm> }[] = [
+	{ what: "its content hash", arm: { contentHash: "0".repeat(64) } },
+	{ what: "its recipe hash", arm: { recipeHash: "0".repeat(64) } },
+	{ what: "the components it omits", arm: { omittedComponents: ["other-component"] } },
 ];
 
 describe("planIdentity", () => {
@@ -263,7 +295,8 @@ describe("planIdentity", () => {
 		try {
 			const every: PlanShape = {};
 			for (const shape of Object.values(EVERY_AXIS_SET)) Object.assign(every, shape);
-			const plan = await planOf(temp.path(), every);
+			// The matrix expands every axis; a normal plan supplies the rest without binding the arm.
+			const plan = { ...(await planOf(temp.path())), variants: expandVariantMatrix(selectionOf(every)) };
 			const [variant] = plan.variants as [Variant];
 			const base = planIdentity(plan);
 			const unanswered = Object.keys(variant).filter(field => {
@@ -271,6 +304,21 @@ describe("planIdentity", () => {
 				return planIdentity({ ...plan, variants: [other] }) === base;
 			});
 			expect(unanswered).toEqual([]);
+		} finally {
+			await temp.remove();
+		}
+	});
+
+	it.each(ARM_FIELDS)("changes with $what, under the same name and with no bound skill", async ({ arm }) => {
+		const temp = await TempDir.create("@evals-test-plan-identity-arm-");
+		try {
+			const base = await armPlanOf(temp.path(), SKILL_ARM);
+			const altered = await armPlanOf(temp.path(), { ...SKILL_ARM, ...arm });
+			// Neither plan binds a skill, so the arm alone must move the digest.
+			expect(base.skillBinding).toBeUndefined();
+			expect(altered.skillBinding).toBeUndefined();
+			expect(altered.variants.map((v: Variant) => v.name)).toEqual(base.variants.map((v: Variant) => v.name));
+			expect(planIdentity(altered)).not.toBe(planIdentity(base));
 		} finally {
 			await temp.remove();
 		}
