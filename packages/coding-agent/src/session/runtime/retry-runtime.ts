@@ -558,19 +558,21 @@ export class RetryRuntime {
 			}
 			if (!attempt.switchedCredential) await this.#switchModel(attempt, policy.maxDelayMs);
 		}
+		const attemptNumber = this.#attempt;
+		const unrecoverable = await this.#closeUnrecoverable(attempt, policy.maxDelayMs);
 		if (options?.knownEndpointDns) {
 			logger.debug("Known endpoint DNS recovery", {
 				sessionId: this.#session.sessionId,
 				generation,
-				attempt: this.#attempt,
+				attempt: attemptNumber,
 				kind: AIError.stringify(id),
 				policySource: describeRetryPolicySource(policy),
 				maxAttempts: policy.maxRetries,
 				delayMs: attempt.delayMs,
-				selection: attempt.switchedModel ? "fallback" : attempt.retryingDnsSelector ? "same-selector" : "surface",
+				selection: unrecoverable ? "surface" : attempt.switchedModel ? "fallback" : "same-selector",
 			});
 		}
-		if (await this.#closeUnrecoverable(attempt, policy.maxDelayMs)) return false;
+		if (unrecoverable) return false;
 
 		await this.#recordPendingRecoveredError(message, id, attempt);
 
