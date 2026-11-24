@@ -113,12 +113,8 @@ false, is not a credential reference and does not prompt.
 
 ## Per-tool overrides
 
-When you want one tool to behave differently from its tier, name it under
-`tools.approval`. Each entry maps a tool to `allow`, `deny`, or `prompt`, and that choice
-wins for that tool whatever the mode is, with one exception: while a plan-mode session is
-active, a per-tool `allow` does not let an exec-tier tool run. Plan mode is a cap rather
-than a default, so it outranks both the configured mode and the per-tool setting. A `deny`
-is a hard block in every direction.
+Set `tools.approval.<tool>` to `allow`, `deny`, or `prompt` to override the
+mode for ordinary approvals. Plan mode and hard tool denials still block a call.
 
 ```yaml
 # ~/.veyyon/profiles/default/agent/config.yml
@@ -131,6 +127,12 @@ tools:
 
 Here the mode is `ask-command`, so writes run without a prompt. The override then pulls `bash`
 back to `prompt`, so commands still stop for your approval.
+
+## Recursive shell deletes
+
+`bash` and `launch start` refuse recognized recursive shell deletes regardless of the
+target. Neither a per-tool `allow` nor a session bypass overrides the refusal.
+See [Recursive shell deletes](../features/sandbox.md#recursive-shell-deletes).
 
 ## Critical bash commands
 
@@ -150,10 +152,7 @@ The same half stops a truncating redirect into a directory that holds credential
 `echo x > ~/.ssh/id_ed25519` destroys a private key as thoroughly as a delete does. Appending with
 `>>` is left alone, since that is how you add a key to `authorized_keys`.
 
-Deletes inside your workspace are not affected. `rm -rf node_modules`, `rm -rf dist`, and
-`rm -rf /tmp/build-1234` run without a prompt, and so does a delete inside a protected directory
-that does not hold credentials, such as `rm -rf ~/.config/some-app`. Ordinary redirects, such as
-`bun test > /tmp/results.txt`, are not affected either.
+Ordinary redirects such as `bun test > /tmp/results.txt` are not affected.
 
 The second half is a pattern list (`FLAGGED_BASH_PATTERNS`, in the same file) for the shapes that
 are about text rather than paths, and each entry is recorded as one of two strengths. **Destructive**
@@ -162,8 +161,8 @@ remote fetch piped to a shell, host control commands such as `reboot`, and a she
 network socket: they run code nobody read, or take the machine down, without destroying data.
 
 Both halves ship with Veyyon and cannot be narrowed. You can widen the first half with
-`tools.protectedPaths`, a list of absolute paths (a leading `~` is expanded) that a recursive
-delete must also stop for:
+`tools.protectedPaths`, a list of absolute paths (a leading `~` is expanded) that
+the destructive-path check must also stop for:
 
 ```yaml
 tools:
@@ -172,9 +171,8 @@ tools:
     - ~/Documents
 ```
 
-That setting only adds. The built-in rules read no configuration, so no value written there
-removes the prompt for your home directory, the system roots, or your credentials. An entry that
-is not an absolute or `~`-relative path is ignored.
+That setting only adds protection. An entry that is not an absolute or
+`~`-relative path is ignored. The setting never permits a recursive shell delete.
 
 The first half and the destructive patterns stop for approval in `yolo` too, and the `/yolo` session
 bypass does not lift them. Apart from an explicit per-tool `prompt`, that is the only prompt `yolo`

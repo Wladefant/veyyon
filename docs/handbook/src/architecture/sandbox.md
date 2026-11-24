@@ -10,7 +10,8 @@ Seatbelt, or bubblewrap. The boundary is policy the agent loop enforces before d
   `bash`, `edit`, `write`, and related tools.
 - Apply per-tool overrides (`tools.approval` → `allow` / `deny` / `prompt`) on top of the mode.
 - Apply the two argument-level boundaries the tier cannot see: a filesystem target outside the session working directory, and a call whose arguments contain a stored credential. Both prompt on every rung except `yolo`, the shipped `auto` included.
-- Force a prompt for hard-coded flagged bash patterns. The destructive ones (recursive deletion of the home directory or a system directory, fork bombs, disk destruction, writes to the system account files) prompt on every rung, `yolo` included: that is a floor rather than an ordinary prompt, and only an explicit `tools.approval.bash: allow` lifts it, while `deny` remains a hard block. The merely dangerous ones (`curl | sh`, `reboot`, `nc -e`) prompt on every rung below `yolo`.
+- Refuse recognized direct recursive deletes in `bash` and `launch start`, before execution and independently of approval mode.
+- Force a prompt for destructive bash risks not already denied, such as disk destruction, even in `yolo` without an explicit per-tool `allow`. Merely dangerous patterns (`curl | sh`, `reboot`, `nc -e`) prompt only below `yolo`.
 - Show the approval prompt in the TUI before a command or edit that requires approval runs.
 
 ## Public boundary

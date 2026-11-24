@@ -30,6 +30,7 @@ import { resolveToCwd } from "../core/path-utils";
 import { checkPolysimMainArgv, checkPolysimMainDenial, type PolysimDenialResult } from "../core/polysim-main-guard";
 import { previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
+import { findRecursiveLaunchDeleteDenial } from "./bash-guard";
 import {
 	cancelCapturedLaunchExitWatch,
 	type LaunchExitWatchPause,
@@ -436,9 +437,20 @@ function polysimDenialFor(params: unknown, session: ToolSession): PolysimDenialR
 	return undefined;
 }
 
+function recursiveDeleteDenialFor(params: unknown): string | undefined {
+	if (typeof params !== "object" || params === null) return undefined;
+	const call = params as Partial<LaunchParams>;
+	if (call.op === "start" && call.application) {
+		return findRecursiveLaunchDeleteDenial(call.application, call.args ?? [], { ...process.env, ...call.env });
+	}
+	return undefined;
+}
+
 function approvalFor(params: unknown, session: ToolSession): ToolApprovalDecision {
 	const polysimDenial = polysimDenialFor(params, session);
 	if (polysimDenial) return { tier: "exec", deny: true, reason: polysimDenial.reason };
+	const deleteDenial = recursiveDeleteDenialFor(params);
+	if (deleteDenial) return { tier: "exec", deny: true, reason: deleteDenial };
 	if (typeof params !== "object" || params === null || !("op" in params)) return "exec";
 	switch (params.op) {
 		case "list":
@@ -496,6 +508,8 @@ export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchTo
 	): Promise<AgentToolResult<LaunchToolDetails>> {
 		const polysimDenial = polysimDenialFor(params, this.session);
 		if (polysimDenial) throw new ToolError(polysimDenial.reason);
+		const deleteDenial = recursiveDeleteDenialFor(params);
+		if (deleteDenial) throw new ToolError(deleteDenial);
 		// Session CPU budget: keep the group in sync on every op, but refuse only
 		// the ops that create a process. A saturated budget that also refused
 		// `stop` left no way to end the work saturating it. The broker (spawned
@@ -529,10 +543,8 @@ export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchTo
 					: undefined;
 			watchPause = pauseLaunchExitWatch(this.session, client.projectDir, requiredName(params), expected);
 		}
-		let success = false;
 		try {
 			const result = await client.request(operation, signal);
-			success = true;
 			if (watchPause?.captured) {
 				cancelCapturedLaunchExitWatch(this.session, client.projectDir, requiredName(params), watchPause.captured);
 			}

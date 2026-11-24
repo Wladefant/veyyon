@@ -466,6 +466,14 @@ export interface DeleteVerdict {
 /** Characters that end one command and begin another, outside quotes. */
 const SEGMENT_BREAKS = new Set([";", "&", "|", "\n", "(", ")"]);
 
+type ShellSyntax = "posix" | "powershell" | "cmd";
+
+function isShellEscape(character: string, quote: string | undefined, syntax: ShellSyntax): boolean {
+	if (syntax === "powershell") return character === "`" && quote !== "'";
+	if (syntax === "cmd") return character === "^" && !quote;
+	return character === "\\" && quote !== "'";
+}
+
 /**
  * Split a command line into the individual commands it runs.
  *
@@ -501,7 +509,7 @@ export interface CommandSpan {
  * [`hostReachableCommand`] blanks one command in place rather than rejoining
  * the survivors, so it needs the bounds. Every other reader wants the strings.
  */
-export function splitCommandSpans(line: string, ignoreComments = false): CommandSpan[] {
+export function splitCommandSpans(line: string, ignoreComments = false, syntax: ShellSyntax = "posix"): CommandSpan[] {
 	const spans: CommandSpan[] = [];
 	let current = "";
 	let start = 0;
@@ -515,7 +523,7 @@ export function splitCommandSpans(line: string, ignoreComments = false): Command
 	};
 	for (let index = 0; index < line.length; index += 1) {
 		const character = line[index]!;
-		if (character === "\\" && quote !== "'" && index + 1 < line.length) {
+		if (isShellEscape(character, quote, syntax) && index + 1 < line.length) {
 			wordStart = false;
 			current += character + line[index + 1]!;
 			index += 1;
@@ -526,7 +534,7 @@ export function splitCommandSpans(line: string, ignoreComments = false): Command
 			current += character;
 			continue;
 		}
-		if (character === "`") {
+		if (syntax === "posix" && character === "`") {
 			wordStart = false;
 			const end = line.indexOf("`", index + 1);
 			const stop = end === -1 ? line.length : end + 1;
@@ -541,7 +549,7 @@ export function splitCommandSpans(line: string, ignoreComments = false): Command
 			index = stop - 1;
 			continue;
 		}
-		if (character === '"' || character === "'") {
+		if (character === '"' || (syntax !== "cmd" && character === "'")) {
 			wordStart = false;
 			quote = character;
 			current += character;
@@ -555,7 +563,11 @@ export function splitCommandSpans(line: string, ignoreComments = false): Command
 			index = newline;
 			continue;
 		}
-		if (SEGMENT_BREAKS.has(character)) {
+		if (
+			(SEGMENT_BREAKS.has(character) && (syntax !== "cmd" || character !== ";")) ||
+			(syntax !== "posix" && character === "\r") ||
+			(syntax === "powershell" && (character === "{" || character === "}"))
+		) {
 			push(index);
 			wordStart = true;
 			continue;
@@ -585,6 +597,15 @@ function endOfCommandSubstitution(line: string, open: number): number {
 	return line.length;
 }
 
+interface CommandWord {
+	text: string;
+	quotedStart?: true;
+}
+
+interface ShellWord extends CommandWord {
+	literal: boolean;
+}
+
 /**
  * Split one segment into words the way a shell would, keeping enough of the
  * quoting to know which expansions survive.
@@ -593,21 +614,23 @@ function endOfCommandSubstitution(line: string, open: number): number {
  * `rm -rf '$HOME'` is a request to delete a directory actually named `$HOME`
  * and is not confused with the expansion.
  */
-export function splitWords(segment: string): { text: string; literal: boolean }[] {
-	const words: { text: string; literal: boolean }[] = [];
+export function splitWords(segment: string, syntax: ShellSyntax = "posix"): ShellWord[] {
+	const words: ShellWord[] = [];
 	let current = "";
 	let literal = false;
 	let started = false;
+	let quotedStart = false;
 	let quote: '"' | "'" | undefined;
 	const push = (): void => {
-		if (started) words.push({ text: current, literal });
+		if (started) words.push(quotedStart ? { text: current, literal, quotedStart: true } : { text: current, literal });
 		current = "";
 		literal = false;
 		started = false;
+		quotedStart = false;
 	};
 	for (let index = 0; index < segment.length; index += 1) {
 		const character = segment[index]!;
-		if (character === "\\" && quote !== "'" && index + 1 < segment.length) {
+		if (isShellEscape(character, quote, syntax) && index + 1 < segment.length) {
 			current += segment[index + 1]!;
 			literal = true;
 			started = true;
@@ -626,7 +649,7 @@ export function splitWords(segment: string): { text: string; literal: boolean }[
 		// A command substitution is one word even when it contains spaces, so
 		// `$(cat a b)` does not arrive as two targets, neither of which looks
 		// like a substitution on its own.
-		if (character === "`") {
+		if (syntax === "posix" && character === "`") {
 			const end = segment.indexOf("`", index + 1);
 			const stop = end === -1 ? segment.length : end + 1;
 			current += segment.slice(index, stop);
@@ -641,7 +664,8 @@ export function splitWords(segment: string): { text: string; literal: boolean }[
 			index = stop - 1;
 			continue;
 		}
-		if (character === '"' || character === "'") {
+		if (character === '"' || (syntax !== "cmd" && character === "'")) {
+			if (syntax === "powershell" && !started) quotedStart = true;
 			quote = character;
 			if (character === "'") literal = true;
 			started = true;
@@ -1521,6 +1545,115 @@ function processCommandName(word: string): string {
 		.slice(start)
 		.toLowerCase()
 		.replace(/\.exe$/, "");
+}
+
+const POWERSHELL_REMOVE: Readonly<Record<string, true>> = {
+	"remove-item": true,
+	ri: true,
+	rm: true,
+	rmdir: true,
+	rd: true,
+	del: true,
+	erase: true,
+};
+const CMD_REMOVE: Readonly<Record<string, true>> = { rmdir: true, rd: true, del: true, erase: true };
+const RECURSIVE_DELETE_DENIAL =
+	"Recursive shell deletion is blocked. Use an approved cleanup operation, such as wt_remove.py for worktrees.";
+
+function isDirectRecursiveDelete(name: string, args: readonly CommandWord[], syntax: ShellSyntax): boolean {
+	const powershellRemove = Object.hasOwn(POWERSHELL_REMOVE, name);
+	const cmdRemove = Object.hasOwn(CMD_REMOVE, name);
+	if (!powershellRemove && !cmdRemove) return false;
+	for (const { text: arg, quotedStart } of args) {
+		if (quotedStart) continue;
+		if (arg === "--") break;
+		if (name === "rm" && syntax !== "powershell" && (arg === "--recursive" || /^-[^-]*[rR]/.test(arg))) {
+			return true;
+		}
+		if (cmdRemove && arg.toLowerCase() === "/s") return true;
+		if (powershellRemove && arg.startsWith("-")) {
+			const colon = arg.indexOf(":");
+			const parameter = (colon === -1 ? arg : arg.slice(0, colon)).toLowerCase();
+			if (syntax === "powershell" && colon !== -1 && arg.slice(colon + 1).toLowerCase() === "$false") continue;
+			if (parameter.startsWith("-r") && "-recurse".startsWith(parameter)) return true;
+		}
+	}
+	return false;
+}
+
+function recursiveDeleteInArgv(
+	words: readonly CommandWord[],
+	env: NodeJS.ProcessEnv,
+	syntax: ShellSyntax,
+	depth: number,
+): boolean {
+	let start = 0;
+	while (start < words.length) {
+		const word = words[start]!.text;
+		if (word === "command" && /^-[vV]$/.test(words[start + 1]?.text ?? "")) return false;
+		if (syntax === "cmd" && word.toLowerCase() === "call") {
+			start += 1;
+			continue;
+		}
+		if (!PROCESS_STOP_PREFIX.test(word) && !isPrefixCommand(word) && !(start > 0 && word.startsWith("-"))) break;
+		start += 1;
+	}
+	const name = processCommandName((words[start]?.text ?? "").replace(/^@/, ""));
+	const args = words.slice(start + 1);
+	if (isDirectRecursiveDelete(name, args, syntax)) return true;
+	const shape = INTERPRETED_SCRIPT_COMMANDS.get(name);
+	const innerSyntax = name === "cmd" ? "cmd" : name === "powershell" || name === "pwsh" ? "powershell" : "posix";
+	if (!shape && innerSyntax === "posix") return false;
+	if (depth >= MAX_INTERPRETED_SHELL_DEPTH) return false;
+	const flag =
+		innerSyntax === "cmd" ? CMD_SCRIPT_FLAG : innerSyntax === "powershell" ? POWERSHELL_SCRIPT_FLAG : SCRIPT_FLAG;
+	const flagIndex = args.findIndex(arg => flag.test(arg.text));
+	const scriptStart = shape === "nextWord" ? 0 : flagIndex < 0 ? args.length : flagIndex + 1;
+	const script =
+		innerSyntax === "posix"
+			? args[scriptStart]?.text
+			: args
+					.slice(scriptStart)
+					.map(arg => arg.text)
+					.join(" ");
+	return !!script && recursiveDeleteInText(script, env, innerSyntax, depth + 1);
+}
+
+function recursiveDeleteInText(command: string, env: NodeJS.ProcessEnv, syntax: ShellSyntax, depth: number): boolean {
+	const home = syntax === "posix" ? resolveGuardHome(env) : "";
+	for (const { text } of splitCommandSpans(command, syntax !== "cmd", syntax)) {
+		const raw = splitWords(text, syntax);
+		let words: readonly CommandWord[] = raw;
+		if (syntax === "posix") {
+			const expanded = raw.map(word => expandWord(word, home, env));
+			if (isHostIsolatedContainerRun(expanded)) continue;
+			words = expanded;
+		}
+		if (recursiveDeleteInArgv(words, env, syntax, depth)) return true;
+	}
+	return false;
+}
+
+/**
+ * Refuse direct recursive deletes before shell dispatch. Inspect command words, not target paths:
+ * nobody has proved that a generic shell delete can stay within a disposable root. This is not
+ * confinement for an interpreter, an opaque script, or terminal input.
+ */
+export function findRecursiveShellDeleteDenial(
+	command: string,
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	return recursiveDeleteInText(command, env, "posix", 0) ? RECURSIVE_DELETE_DENIAL : undefined;
+}
+
+/** Launch starts an executable with argv, so only parse text passed to a shell. */
+export function findRecursiveLaunchDeleteDenial(
+	application: string,
+	args: readonly string[],
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	const words = [application, ...args].map(text => ({ text }));
+	return recursiveDeleteInArgv(words, env, "posix", 0) ? RECURSIVE_DELETE_DENIAL : undefined;
 }
 
 function isBroadProcessStop(name: string, words: readonly ExpandedWord[], start: number): boolean {

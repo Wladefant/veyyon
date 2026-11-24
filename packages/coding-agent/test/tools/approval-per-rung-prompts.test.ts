@@ -192,7 +192,7 @@ describe("approval cards per rung, through a real session", () => {
 		it("still stops a call the bash guard marks critical, before it executes", async () => {
 			Settings.instance.override("tools.approvalMode", "auto");
 
-			const outcome = await call("bash", { command: "rm -rf /" });
+			const outcome = await call("bash", { command: "chmod -R u+r /veyyon-per-rung-missing-fixture" });
 
 			expect(outcome.ran).toBe(false);
 			expect(outcome.error).toContain("requires approval");
@@ -249,10 +249,19 @@ describe("approval cards per rung, through a real session", () => {
 		it("still stops a call the bash guard marks critical", async () => {
 			Settings.instance.override("tools.approvalMode", "yolo");
 
-			const outcome = await call("bash", { command: "rm -rf /" });
+			const outcome = await call("bash", { command: "chmod -R u+r /veyyon-per-rung-missing-fixture" });
 
 			expect(outcome.ran).toBe(false);
 			expect(outcome.error).toContain("requires approval");
+		});
+
+		it("denies a recursive delete rather than requesting approval", async () => {
+			Settings.instance.override("tools.approvalMode", "yolo");
+
+			const outcome = await call("bash", { command: "rm -rf ./missing-fixture" });
+
+			expect(outcome.ran).toBe(false);
+			expect(outcome.error).toContain("Recursive shell deletion is blocked");
 		});
 	});
 });

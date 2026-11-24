@@ -85,11 +85,12 @@ The `yolo` mode above still honors your per-tool policies: `tools.approval.<tool
 
 Run `/yolo` in the TUI and confirm the danger prompt to turn it on. While it is on, file writes, shell commands, and network calls run without a prompt. The composer border and prompt glyph turn red and the status line shows a red `YOLO` marker, so you always know it is active.
 
-Three things still stop a call:
+These checks still stop a call:
 
 - an explicit `tools.approval.<tool>: deny`, a hard denial rather than a prompt,
+- a hard tool denial, such as the refusal of a recognized direct recursive shell delete,
 - plan mode (mutating tools stay blocked), and
-- a `critical` safety decision, such as a command that would recursively delete your home directory. This one is a prompt, and it is the single prompt the bypass does not lift. Set `tools.approval.<tool>: allow` if you want it gone too.
+- a `critical` safety decision, such as a command that would format a disk. This is a prompt. An explicit `tools.approval.<tool>: allow` in `yolo` mode can lift it, but cannot lift a hard denial.
 
 The bypass is session-scoped. It defaults to off, is never written to settings, and resets to off when the session ends. Turn it off at any time with `/yolo off`, and check the current state with `/yolo status`.
 

@@ -57,6 +57,7 @@ import {
 	findBroadProcessStopDenial,
 	findCriticalBashRisk,
 	findFlaggedBashPattern,
+	findRecursiveShellDeleteDenial,
 	hostReachableCommand,
 	isHomedirUnsafePackageCommand,
 } from "./bash-guard";
@@ -206,13 +207,14 @@ export function bashApprovalDecision(
 	}
 	const processStopDenial = findBroadProcessStopDenial(command, judgementEnv);
 	if (processStopDenial) return { tier: "exec", deny: true, reason: processStopDenial };
+	const deleteDenial = findRecursiveShellDeleteDenial(command, judgementEnv);
+	if (deleteDenial) return { tier: "exec", deny: true, reason: deleteDenial };
 	const risk =
 		command === "" ? undefined : findCriticalBashRisk(command, undefined, extraProtectedPaths, judgementEnv, cwd);
 	// Same split as the flagged patterns below: `critical` is the floor yolo
-	// keeps, `override` is a prompt every rung below yolo raises. A delete whose
-	// verdict rests on ASSUMING an unknown variable holds `/` is `dangerous`, so
-	// `rm -rf "$BUILD_DIR"` no longer stops a yolo session while `rm -rf /`,
-	// `rm -rf ~` and `rm -rf "$OUT"/*` still do. See judgeUnsettledDeleteTarget.
+	// keeps; `override` is a prompt every rung below yolo raises. For requests
+	// not already denied above, the risk classifier distinguishes a known
+	// destructive target from one that depends on an unproven expansion.
 	if (risk) {
 		return risk.severity === "destroys"
 			? { tier: "exec", critical: true, reason: risk.reason }
@@ -1105,6 +1107,8 @@ export class BashTool
 		const expanded = await this.#expandInternalUrls(extracted.command, env, extracted.cwd);
 		const processStopDenial = findBroadProcessStopDenial(expanded.command, bashJudgementEnv(input));
 		if (processStopDenial) throw new ToolError(processStopDenial);
+		const deleteDenial = findRecursiveShellDeleteDenial(expanded.command, { ...process.env, ...expanded.env });
+		if (deleteDenial) throw new ToolError(deleteDenial);
 
 		// Best-effort cache invalidation: drop github-cache rows for any issue/PR
 		// number touched by a mutating `gh` subcommand inside this bash call so

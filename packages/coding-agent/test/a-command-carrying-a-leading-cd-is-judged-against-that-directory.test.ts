@@ -37,105 +37,108 @@ describe("a command carrying a leading cd is judged against that directory", () 
 		command: string,
 		cwd?: string,
 		extraProtectedPaths: readonly string[] = [PROTECTED_DIR],
-	): { critical: boolean; tier: string; reason?: string } => {
+	): { critical: boolean; deny: boolean; tier: string; reason?: string } => {
 		const decision = bashApprovalDecision(
 			cwd !== undefined ? { command, cwd } : { command },
 			extraProtectedPaths,
 			SESSION_CWD,
 		);
 		if (typeof decision === "string") {
-			return { critical: false, tier: decision };
+			return { critical: false, deny: false, tier: decision };
 		}
 		return {
 			critical: decision.critical === true,
+			deny: decision.deny === true,
 			tier: decision.tier,
 			reason: decision.reason,
 		};
 	};
 
-	it("refuses a destructive delete when leading cd points to a protected path", () => {
-		const result = decide(`cd ${PROTECTED_DIR} && rm -rf *`);
+	it("refuses a destructive recursive rewrite when leading cd points to a protected path", () => {
+		const result = decide(`cd ${PROTECTED_DIR} && chmod -R 755 *`);
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain(PROTECTED_DIR);
 	});
 
-	it("refuses a destructive delete when leading cd points to system root", () => {
-		const result = decide("cd /etc && rm -rf *");
+	it("refuses a destructive recursive rewrite when leading cd points to system root", () => {
+		const result = decide("cd /etc && chmod -R 755 *");
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain("/etc");
 	});
 
 	it("refuses when leading cd uses single quotes around target directory", () => {
-		const result = decide(`cd '${PROTECTED_DIR}' && rm -rf *`);
+		const result = decide(`cd '${PROTECTED_DIR}' && chmod -R 755 *`);
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain(PROTECTED_DIR);
 	});
 
 	it("refuses when leading cd uses double quotes around target directory", () => {
-		const result = decide(`cd "${PROTECTED_DIR}" && rm -rf *`);
+		const result = decide(`cd "${PROTECTED_DIR}" && chmod -R 755 *`);
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain(PROTECTED_DIR);
 	});
 
 	it("refuses when leading cd contains irregular whitespace and tabs", () => {
-		const result = decide(`cd \t  ${PROTECTED_DIR} \t && \t rm -rf *`);
+		const result = decide(`cd \t  ${PROTECTED_DIR} \t && \t chmod -R 755 *`);
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain(PROTECTED_DIR);
 	});
 
 	it("refuses when leading cd climbs out of the session directory to system root", () => {
 		// SESSION_CWD is /srv/work/proj/pkg (4 levels deep), 4 climbs reach /
-		const result = decide("cd ../../../.. && rm -rf *");
+		const result = decide("cd ../../../.. && chmod -R 755 *");
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain("a protected system directory (/)");
 	});
 
 	it("refuses when cwd is supplied as an explicit relative path climbing to system root", () => {
-		const result = decide("rm -rf *", "../../../..");
+		const result = decide("chmod -R 755 *", "../../../..");
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain("a protected system directory (/)");
 	});
 
 	it("refuses when cwd is supplied as an explicit relative path reaching a protected path", () => {
 		// Session cwd is /srv/work/proj/pkg. Climbing 3 levels reaches /srv, then into /srv/protected
-		const result = decide("rm -rf *", "../../../protected", ["/srv/protected"]);
+		const result = decide("chmod -R 755 *", "../../../protected", ["/srv/protected"]);
 		expect(result.critical).toBe(true);
 		expect(result.reason).toContain("/srv/protected");
 	});
 
 	it("allows ordinary relative commands inside the safe session directory", () => {
-		const result = decide("cd src && rm -rf build");
+		const result = decide("cd src && chmod -R 755 build");
 		expect(result.critical).toBe(false);
+		expect(result.deny).toBe(false);
 		expect(result.tier).toBe("exec");
 	});
 
 	it("leaves explicit cwd untouched when leading cd is present", () => {
 		// Explicit cwd points to a safe subdirectory, but command has leading cd to safe dir
-		const result = decide("cd src && rm -rf build", "/srv/work/proj/pkg/subdir");
+		const result = decide("cd src && chmod -R 755 build", "/srv/work/proj/pkg/subdir");
 		expect(result.critical).toBe(false);
+		expect(result.deny).toBe(false);
 		expect(result.tier).toBe("exec");
 	});
 
 	it("does not extract leading cd when the path contains shell variables ($VAR)", () => {
-		const extracted = extractEffectiveBashCommand("cd $TARGET && rm -rf *");
+		const extracted = extractEffectiveBashCommand("cd $TARGET && chmod -R 755 *");
 		expect(extracted.cwd).toBeUndefined();
-		expect(extracted.command).toBe("cd $TARGET && rm -rf *");
+		expect(extracted.command).toBe("cd $TARGET && chmod -R 755 *");
 	});
 
 	it("does not extract leading cd when the path contains command substitutions $(...)", () => {
-		const extracted = extractEffectiveBashCommand("cd $(dirname foo) && rm -rf *");
+		const extracted = extractEffectiveBashCommand("cd $(dirname foo) && chmod -R 755 *");
 		expect(extracted.cwd).toBeUndefined();
-		expect(extracted.command).toBe("cd $(dirname foo) && rm -rf *");
+		expect(extracted.command).toBe("cd $(dirname foo) && chmod -R 755 *");
 	});
 
 	it("does not extract leading cd when the path contains backticks", () => {
-		const extracted = extractEffectiveBashCommand("cd `pwd` && rm -rf *");
+		const extracted = extractEffectiveBashCommand("cd `pwd` && chmod -R 755 *");
 		expect(extracted.cwd).toBeUndefined();
-		expect(extracted.command).toBe("cd `pwd` && rm -rf *");
+		expect(extracted.command).toBe("cd `pwd` && chmod -R 755 *");
 	});
 
 	it("does not extract cd across multiple lines when && is on a subsequent line", () => {
-		const multiline = "cd /tmp\necho start && rm -rf *";
+		const multiline = "cd /tmp\necho start && chmod -R 755 *";
 		const extracted = extractEffectiveBashCommand(multiline);
 		expect(extracted.cwd).toBeUndefined();
 		expect(extracted.command).toBe(multiline);
@@ -146,12 +149,13 @@ describe("a command carrying a leading cd is judged against that directory", () 
 		expect(decide("ls -la").critical).toBe(false);
 		expect(decide("bun test").tier).toBe("exec");
 		expect(decide("bun test").critical).toBe(false);
-		expect(decide("rm -rf build").tier).toBe("exec");
-		expect(decide("rm -rf build").critical).toBe(false);
+		expect(decide("chmod -R 755 build").tier).toBe("exec");
+		expect(decide("chmod -R 755 build").critical).toBe(false);
+		expect(decide("chmod -R 755 build").deny).toBe(false);
 
 		// Dangerous / destructive commands still trigger critical floor with identical reasons
-		const rootDelete = decide("rm -rf /");
-		expect(rootDelete.critical).toBe(true);
-		expect(rootDelete.reason).toBe("rm would recursively remove a protected system directory (/)");
+		const rootRewrite = decide("chmod -R 755 /");
+		expect(rootRewrite.critical).toBe(true);
+		expect(rootRewrite.reason).toBe("chmod would recursively remove a protected system directory (/)");
 	});
 });

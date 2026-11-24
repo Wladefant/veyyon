@@ -37,6 +37,7 @@ import { bashApprovalDecision } from "../src/tools/shell/bash";
 import type { BashRiskSeverity, FlaggedBashPattern } from "../src/tools/shell/bash-guard";
 import {
 	FLAGGED_BASH_PATTERNS,
+	findCriticalBashRisk,
 	findFlaggedBashPattern,
 	PROTECTED_HOME_DIRECTORIES,
 	PROTECTED_ROOTS,
@@ -242,7 +243,7 @@ describe("ordinary work stays ordinary", () => {
 			"npm run reboot-tests",
 			"find . -name '*.ts'",
 			"curl https://example.com/api > out.json",
-			"rm -rf node_modules",
+			"chmod -R 644 ./build",
 			"git commit -m 'shutdown the queue'",
 		]) {
 			expect(findFlaggedBashPattern(command)).toBeUndefined();
@@ -256,14 +257,15 @@ describe("ordinary work stays ordinary", () => {
  * cannot see.
  *
  * WHY THIS EXISTS SEPARATELY. `FLAGGED_BASH_PATTERNS` is matched as text, so a
- * sample per row covers it. A recursive delete is not: the verdict comes from
- * `findCriticalBashRisk` after expansion, and its severity turns on WHICH
- * READING of an unsettled variable fired. That made the same mistake available
- * one level down — a bare `rm -rf "$BUILD_DIR"` was `critical`, the verdict
- * `/yolo` cannot lift, because the name MIGHT hold `/`. An unset name expands
- * to nothing, so that was a floor built on a guess about a value that does not
- * exist, and it stopped the most ordinary cleanup an agent writes.
- *
+ * sample per row covers it. A recursive rewrite is not: direct recursive
+ * deletes are hard-denied before the classifier, while recursive rewrites
+ * (`chgrp -R`, `chmod -R`, `chown -R`) still reach `findCriticalBashRisk`
+ * after expansion, and their severity turns on WHICH READING of an unsettled
+ * variable fired. That made the same mistake available one level down — a bare
+ * `chgrp -R staff "$BUILD_DIR"` was `critical`, the verdict `/yolo` cannot
+ * lift, because the name MIGHT hold `/`. An unset name expands to nothing, so
+ * that was a floor built on a guess about a value that does not exist, and it
+ * stopped ordinary operations an agent writes.
  * WHY IT IS THE CLASS RATHER THAN THE INCIDENT. The reported shape was one
  * variable name, but the mistake is one bit per PROTECTED PATH, so the roots
  * are enumerated from the exported tables at run time. Adding an entry to
@@ -275,7 +277,7 @@ describe("ordinary work stays ordinary", () => {
  * `X=../../..` is the root, and no finite set of readings finds it. That
  * residual is accepted where the rule is written, not here.
  */
-describe("the yolo floor under a recursive delete", () => {
+describe("the yolo floor under a recursive rewrite", () => {
 	const rung = (command: string): "critical" | "prompts" | "allowed" => {
 		const decision = bashApprovalDecision({ command, env: { HOME } });
 		if (typeof decision === "string") return "allowed";
@@ -286,7 +288,7 @@ describe("the yolo floor under a recursive delete", () => {
 	/** A path the text settles is certain, so it stops yolo however it is spelled. */
 	it("stops yolo for every protected root named literally", () => {
 		for (const root of PROTECTED_ROOTS) {
-			expect(rung(`rm -rf ${root}`)).toBe("critical");
+			expect(rung(`chgrp -R staff ${root}`)).toBe("critical");
 		}
 	});
 
@@ -298,7 +300,7 @@ describe("the yolo floor under a recursive delete", () => {
 	it("stops yolo when an unset prefix leaves a protected root behind", () => {
 		for (const root of PROTECTED_ROOTS) {
 			if (root === "/") continue; // The row below owns it: `$UNSET/` spells no component of its own.
-			expect(rung(`rm -rf "$UNSET_PREFIX${root}"`)).toBe("critical");
+			expect(rung(`chgrp -R staff "$UNSET_PREFIX${root}"`)).toBe("critical");
 		}
 	});
 
@@ -310,20 +312,21 @@ describe("the yolo floor under a recursive delete", () => {
 	 * literal component (`bin`, `.ssh`, even the `*`), which floors it whatever
 	 * the empty reading is worth. These two spell NOTHING — emptying the
 	 * expansion leaves bare `/` — so if the empty reading ever stops meaning
-	 * "certain", `rm -rf "$dir"/` starts running unasked on yolo and nothing else
-	 * in this file notices. Demoting that one severity was tried against this
-	 * suite and passed until this row existed.
+	 * "certain", `chgrp -R staff "$dir"/` starts running unasked on yolo and
+	 * nothing else in this file notices. Demoting that one severity was tried
+	 * against this suite and passed until this row existed.
 	 */
 	it("stops yolo when emptying the expansion leaves the root itself", () => {
-		expect(rung('rm -rf "$UNSET_PREFIX"/')).toBe("critical");
-		expect(rung('rm -rf "$UNSET_PREFIX"/*')).toBe("critical");
-		expect(rung('rm -rf "$UNSET_PREFIX/"')).toBe("critical");
+		expect(rung('chgrp -R staff "$UNSET_PREFIX"/')).toBe("critical");
+		expect(rung('chgrp -R staff "$UNSET_PREFIX"/*')).toBe("critical");
+		expect(rung('chgrp -R staff "$UNSET_PREFIX/"')).toBe("critical");
 	});
 
-	/** Same reasoning for the home directories, reached through the home reading. */
-	it("stops yolo for a credentials or protected home directory under an unset prefix", () => {
+	// Use a fixed home for the classifier, not the host's home directory.
+	it("classifies an unset prefix before a protected home component as critical", () => {
 		for (const directory of [...SECRET_HOME_DIRECTORIES, ...PROTECTED_HOME_DIRECTORIES]) {
-			expect(rung(`rm -rf "$UNSET_PREFIX/${directory}"`)).toBe("critical");
+			const risk = findCriticalBashRisk(`chgrp -R staff "$UNSET_PREFIX/${directory}"`, HOME, [], {});
+			expect(risk?.severity).toBe("destroys");
 		}
 	});
 
@@ -334,12 +337,12 @@ describe("the yolo floor under a recursive delete", () => {
 	 * after this one is what makes that safe.
 	 */
 	const SPECULATIVE = [
-		'rm -rf "$BUILD_DIR"',
-		'rm -rf "$CARGO_TARGET_DIR"',
-		'rm -rf "$WORKTREE"',
-		'rm -rf "$checkout"',
-		'rm -rf "$OUT_DIR" "$TMP_ROOT"',
-		'bash -c "rm -rf $D"',
+		'chgrp -R staff "$BUILD_DIR"',
+		'chgrp -R staff "$CARGO_TARGET_DIR"',
+		'chgrp -R staff "$WORKTREE"',
+		'chgrp -R staff "$checkout"',
+		'chgrp -R staff "$OUT_DIR" "$TMP_ROOT"',
+		'bash -c "chgrp -R staff $D"',
 	];
 
 	it("runs a bare unset variable on yolo instead of stopping the session", () => {
@@ -369,18 +372,18 @@ describe("the yolo floor under a recursive delete", () => {
 			return typeof decision !== "string" && decision.critical === true;
 		};
 
-		expect(decide("rm -rf $V", { V: "/*" })).toBe(true);
-		expect(decide("rm -rf $V", { V: "/ /tmp/x" })).toBe(true);
-		expect(decide("rm -rf $V", { V: "~" })).toBe(true);
+		expect(decide("chgrp -R staff $V", { V: "/*" })).toBe(true);
+		expect(decide("chgrp -R staff $V", { V: "/ /tmp/x" })).toBe(true);
+		expect(decide("chgrp -R staff $V", { V: "~" })).toBe(true);
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test, not a JS template.
-		expect(decide("rm -rf ${NOPE_UNSET:-/}", {})).toBe(true);
-		expect(decide("cd / && rm -rf $PWD", {})).toBe(true);
-		expect(decide("rm -rf ~someone-else", {})).toBe(true);
+		expect(decide("chgrp -R staff ${NOPE_UNSET:-/}", {})).toBe(true);
+		expect(decide("cd / && chgrp -R staff $PWD", {})).toBe(true);
+		expect(decide("chgrp -R staff ~someone-else", {})).toBe(true);
 	});
 
 	/** A deny is still a hard block for both halves of the split. */
 	it("denies both halves when the operator denied bash", () => {
-		for (const command of [...SPECULATIVE, "rm -rf /"]) {
+		for (const command of [...SPECULATIVE, "chgrp -R staff /", "rm -rf /"]) {
 			expect(resolveApproval(bash, { command }, "yolo", { bash: "deny" }).policy).toBe("deny");
 		}
 	});

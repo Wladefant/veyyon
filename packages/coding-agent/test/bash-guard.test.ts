@@ -908,13 +908,14 @@ describe("the text patterns the guard still carries", () => {
  *
  * WHY THE GUARD READS THE ENVIRONMENT AT ALL. It used to resolve only `$HOME`,
  * so every other variable was unknown, and an unknown expansion in a recursive
- * delete is critical. `rm -rf $TMPDIR/scratch` therefore prompted in yolo, which
- * is a mode whose whole promise is that it does not. A guard that cries wolf on
- * `$TMPDIR` is one people switch off before it ever sees a real wolf.
+ * delete or rewrite is critical. `chmod -R 755 $TMPDIR/scratch` therefore
+ * prompted in yolo, which is a mode whose whole promise is that it does not. A
+ * guard that cries wolf on `$TMPDIR` is one people switch off before it ever
+ * sees a real wolf.
  *
  * WHY THAT IS DANGEROUS IF DONE NAIVELY. Substituting a variable's value into
  * one word is not what a shell does, and each gap below was measured running
- * `rm -rf /` with no prompt at any rung, including the `critical` floor that is
+ * `chmod -R 755 /` with no prompt at any rung, including the `critical` floor that is
  * the last thing standing in yolo:
  *
  *   1. the bash tool's own `env` argument reaches the CHILD but was not read by
@@ -928,65 +929,68 @@ describe("the text patterns the guard still carries", () => {
  *
  * Every case is driven through `bashApprovalDecision`, the entry point the tool
  * actually calls, because the first hole was invisible to a test that called
- * `findCriticalBashRisk` directly with no environment.
+ * `findCriticalBashRisk` directly with no environment. Direct recursive `rm`
+ * is now hard-denied before the classifier, so these approval-path tests use
+ * recursive `chmod -R` (a recursive rewrite still routed through the classifier).
  */
 describe("expansion the shell will perform, judged the way the shell will perform it", () => {
-	// Three rungs, not two. Collapsing `override` into "allowed" would report a
-	// call that still prompts everywhere below yolo as if the guard had waved it
-	// through, which is the difference this suite now turns on.
-	const verdict = (args: { command: string; env?: Record<string, string> }): "critical" | "prompts" | "allowed" => {
+	const verdict = (args: {
+		command: string;
+		env?: Record<string, string>;
+	}): "critical" | "prompts" | "denied" | "allowed" => {
 		const decision = bashApprovalDecision(args);
 		if (typeof decision === "string") return "allowed";
+		if (decision.deny === true) return "denied";
 		if (decision.critical === true) return "critical";
 		return decision.override === true ? "prompts" : "allowed";
 	};
 
 	/** The call's own `env` is what the child gets, so it is what the guard must judge. */
 	it("judges a variable supplied by the call's env argument, not the ambient one", () => {
-		expect(verdict({ command: "rm -rf $LANG", env: { LANG: "/" } })).toBe("critical");
-		expect(verdict({ command: "rm -rf $ANYTHING", env: { ANYTHING: "$HOME" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $LANG", env: { LANG: "/" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $ANYTHING", env: { ANYTHING: "$HOME" } })).toBe("critical");
 	});
 
-	/** `VAR=/ rm -rf $VAR` binds the variable for the very command being judged. */
+	/** `VAR=/ chmod -R 755 $VAR` binds the variable for the very command being judged. */
 	it("applies an inline assignment, including behind env and sudo", () => {
-		expect(verdict({ command: "PWD=/ rm -rf $PWD" })).toBe("critical");
-		expect(verdict({ command: "env PWD=/ rm -rf $PWD" })).toBe("critical");
-		expect(verdict({ command: "sudo FOO=/ rm -rf $FOO" })).toBe("critical");
+		expect(verdict({ command: "PWD=/ chmod -R 755 $PWD" })).toBe("critical");
+		expect(verdict({ command: "env PWD=/ chmod -R 755 $PWD" })).toBe("critical");
+		expect(verdict({ command: "sudo FOO=/ chmod -R 755 $FOO" })).toBe("critical");
 	});
 
 	/**
 	 * A value that would word-split or glob is refused rather than pasted. The
-	 * shell turns `rm -rf $V` with `V="/ /tmp/x"` into two arguments and
+	 * shell turns `chmod -R 755 $V` with `V="/ /tmp/x"` into two arguments and
 	 * `V="/*"` into every top-level entry; the guard models neither, so the only
 	 * safe reading of such a value is no reading.
 	 */
 	it("refuses to substitute a value that would word-split or glob", () => {
-		expect(verdict({ command: "rm -rf $V", env: { V: "/ /tmp/x" } })).toBe("critical");
-		expect(verdict({ command: "rm -rf $V", env: { V: "/*" } })).toBe("critical");
-		expect(verdict({ command: "rm -rf $V", env: { V: "$OTHER" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $V", env: { V: "/ /tmp/x" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $V", env: { V: "/*" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $V", env: { V: "$OTHER" } })).toBe("critical");
 	});
 
 	/** An operator form is unmodelled, and unmodelled must mean unknown. */
 	it("treats a parameter expansion carrying an operator as unknown", () => {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test, not a JS template.
-		expect(verdict({ command: "rm -rf ${NOPE_UNSET:-/}" })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 ${NOPE_UNSET:-/}" })).toBe("critical");
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test, not a JS template.
-		expect(verdict({ command: "rm -rf ${NOPE_UNSET-/}" })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 ${NOPE_UNSET-/}" })).toBe("critical");
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test, not a JS template.
-		expect(verdict({ command: "rm -rf ${HOME%%/*}" })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 ${HOME%%/*}" })).toBe("critical");
 	});
 
 	/**
 	 * And the point of the whole exercise: a plainly-set variable naming an
 	 * ordinary directory runs without a prompt. If this regresses, the guard is
-	 * back to blocking `rm -rf $TMPDIR/scratch` and the complaint that started
-	 * this is back with it.
+	 * back to blocking `chmod -R 755 $TMPDIR/scratch` and the complaint that
+	 * started this is back with it.
 	 */
-	it("runs an ordinary delete through a set variable without asking", () => {
-		expect(verdict({ command: "rm -rf $V/scratch", env: { V: "/tmp" } })).toBe("allowed");
+	it("runs an ordinary recursive rewrite through a set variable without asking", () => {
+		expect(verdict({ command: "chmod -R 755 $V/scratch", env: { V: "/tmp" } })).toBe("allowed");
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test, not a JS template.
-		expect(verdict({ command: "rm -rf ${V}/debug", env: { V: "/build/target" } })).toBe("allowed");
-		expect(verdict({ command: "rm -rf node_modules" })).toBe("allowed");
+		expect(verdict({ command: "chmod -R 755 ${V}/debug", env: { V: "/build/target" } })).toBe("allowed");
+		expect(verdict({ command: "chmod -R 755 node_modules" })).toBe("allowed");
 	});
 
 	/**
@@ -1006,13 +1010,13 @@ describe("expansion the shell will perform, judged the way the shell will perfor
 	 * changed is that it no longer pretends to be as certain as `rm -rf /`.
 	 */
 	it("still refuses a variable nothing has set wherever a reading needs no assumption", () => {
-		expect(verdict({ command: "rm -rf $NOTHING_SETS_THIS/bin" })).toBe("critical");
-		expect(verdict({ command: 'rm -rf "$dir"/*' })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $NOTHING_SETS_THIS/bin" })).toBe("critical");
+		expect(verdict({ command: 'chmod -R 755 "$dir"/*' })).toBe("critical");
 	});
 
 	it("asks about a bare unset variable without putting it on the yolo floor", () => {
-		expect(verdict({ command: "rm -rf $NOTHING_SETS_THIS" })).toBe("prompts");
-		expect(verdict({ command: 'rm -rf "$BUILD_DIR"' })).toBe("prompts");
+		expect(verdict({ command: "chmod -R 755 $NOTHING_SETS_THIS" })).toBe("prompts");
+		expect(verdict({ command: 'chmod -R 755 "$BUILD_DIR"' })).toBe("prompts");
 	});
 
 	/**
@@ -1022,11 +1026,11 @@ describe("expansion the shell will perform, judged the way the shell will perfor
 	 * running `rm -rf /` with no prompt at any rung.
 	 */
 	it("keeps the floor when a value exists and the scan refused to model it", () => {
-		expect(verdict({ command: "rm -rf $V", env: { V: "/*" } })).toBe("critical");
-		expect(verdict({ command: "rm -rf $V", env: { V: "/ /tmp/x" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $V", env: { V: "/*" } })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 $V", env: { V: "/ /tmp/x" } })).toBe("critical");
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion under test, not a JS template.
-		expect(verdict({ command: "rm -rf ${NOPE_UNSET:-/}" })).toBe("critical");
-		expect(verdict({ command: "cd / && rm -rf $PWD" })).toBe("critical");
+		expect(verdict({ command: "chmod -R 755 ${NOPE_UNSET:-/}" })).toBe("critical");
+		expect(verdict({ command: "cd / && chmod -R 755 $PWD" })).toBe("critical");
 	});
 });
 
@@ -1050,25 +1054,26 @@ describe("paths the shell resolves differently from the process", () => {
 	// A four-deep working directory, as a real project has, so `../..` lands
 	// inside it and `../../../../../..` climbs past the root.
 	const CWD = "/srv/work/proj/pkg";
-	const decide = (command: string): "critical" | "allowed" => {
+	const decide = (command: string): "critical" | "denied" | "allowed" => {
 		const decision = bashApprovalDecision({ command }, [], CWD);
+		if (typeof decision !== "string" && decision.deny === true) return "denied";
 		return typeof decision !== "string" && decision.critical === true ? "critical" : "allowed";
 	};
 
 	/** `cd` rewrites PWD inside the very command being judged. */
-	it("refuses a delete through a variable the shell maintains", () => {
-		expect(decide("cd / && rm -rf $PWD")).toBe("critical");
-		expect(decide("cd /; rm -rf $PWD")).toBe("critical");
-		expect(decide("pushd / >/dev/null && rm -rf $PWD")).toBe("critical");
-		// Even with no `cd` at all: the value can move before the delete runs, so
+	it("refuses a recursive rewrite through a variable the shell maintains", () => {
+		expect(decide("cd / && chmod -R 755 $PWD")).toBe("critical");
+		expect(decide("cd /; chmod -R 755 $PWD")).toBe("critical");
+		expect(decide("pushd / >/dev/null && chmod -R 755 $PWD")).toBe("critical");
+		// Even with no `cd` at all: the value can move before the rewrite runs, so
 		// the guard does not pretend to know it.
-		expect(decide("rm -rf $PWD")).toBe("critical");
+		expect(decide("chmod -R 755 $PWD")).toBe("critical");
 	});
 
 	/** A relative path that climbs out of the workspace is judged where it lands. */
-	it("resolves a relative delete against the working directory and refuses an escape", () => {
-		expect(decide("rm -rf ../../../../../..")).toBe("critical");
-		expect(decide("rm -rf ../../../..")).toBe("critical");
+	it("resolves a relative recursive rewrite against the working directory and refuses an escape", () => {
+		expect(decide("chmod -R 755 ../../../../../..")).toBe("critical");
+		expect(decide("chmod -R 755 ../../../..")).toBe("critical");
 	});
 
 	/**
@@ -1076,12 +1081,12 @@ describe("paths the shell resolves differently from the process", () => {
 	 * "relative is always fine" rule was protecting. A rule that refused these
 	 * would be turned off within a day.
 	 */
-	it("still runs an ordinary relative delete without asking", () => {
-		expect(decide("rm -rf node_modules")).toBe("allowed");
-		expect(decide("rm -rf ./dist")).toBe("allowed");
-		expect(decide("rm -rf ../build")).toBe("allowed");
-		expect(decide("rm -rf ../sibling/dist")).toBe("allowed");
-		expect(decide("rm -rf ../..")).toBe("allowed");
+	it("still runs an ordinary relative recursive rewrite without asking", () => {
+		expect(decide("chmod -R 755 node_modules")).toBe("allowed");
+		expect(decide("chmod -R 755 ./dist")).toBe("allowed");
+		expect(decide("chmod -R 755 ../build")).toBe("allowed");
+		expect(decide("chmod -R 755 ../sibling/dist")).toBe("allowed");
+		expect(decide("chmod -R 755 ../..")).toBe("allowed");
 	});
 });
 describe("isHomedirUnsafePackageCommand", () => {
