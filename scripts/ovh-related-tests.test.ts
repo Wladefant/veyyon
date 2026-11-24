@@ -94,6 +94,16 @@ describe("OVH related-test selector", () => {
 		expect(selectedTests).toContain("apps/site/deploy.test.ts");
 	}, 120000);
 
+	it("keeps the real generated settings reference and runtime prompt consumers", () => {
+		const generated = "docs/handbook/src/reference/settings-reference.md";
+		const prompt = "packages/coding-agent/src/prompts/agent/user-prompt.md";
+		const output = runSelector([generated, prompt]);
+		const selected = parseSelectedTests(output);
+		expect(output).toContain(`${generated}: transitive; transitive tests=1; selected=1`);
+		expect(selected).toContain("scripts/gen-settings-reference.test.ts");
+		expect(selected).toContain("packages/coding-agent/test/tools/tool-prompt-budget.test.ts");
+	}, 120000);
+
 	describe("git fixture regressions", () => {
 		let fixtureDir: string;
 		let cleanupFixture: () => void;

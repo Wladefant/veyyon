@@ -347,6 +347,11 @@ for (const consumer of allTracked) {
 
 const reverse = new Map();
 for (const graph of [ordinaryReverse, symbolReverse, conservativeReverse, refReverse, cliReverse]) for (const [dependency, consumers] of graph) for (const consumer of consumers) edge(reverse, dependency, consumer);
+function isDocumentation(file) {
+  return /\.md$/i.test(file) && (!file.includes('/') || /(?:^|\/)docs\//.test(file) ||
+    /(?:^|\/)(?:changelog|readme)\.md$/i.test(file));
+}
+
 function markdownConsumers(file) {
   if (path.posix.basename(file).toLowerCase() === 'changelog.md') {
     const dir = path.posix.dirname(file);
@@ -361,6 +366,11 @@ function markdownConsumers(file) {
     if (dir === 'packages/coding-agent') readers.push('apps/site/deploy.test.ts');
     return readers.filter(test => tests.has(test));
   }
+  // This test reads the generated file through a path constant in the generator.
+  if (file === 'docs/handbook/src/reference/settings-reference.md') {
+    const test = 'scripts/gen-settings-reference.test.ts';
+    return tests.has(test) ? [test] : [];
+  }
   // Literal mentions are not proof that source or metadata depends on Markdown content.
   return [...(refReverse.get(file) ?? [])].filter(consumer => tests.has(consumer));
 }
@@ -368,12 +378,12 @@ function markdownConsumers(file) {
 function reachableFrom(rootFile) {
   const distances = new Map([[rootFile, 0]]);
   const queue = [rootFile];
-  const markdown = /\.md$/i.test(rootFile);
-  if (markdown) for (const test of markdownConsumers(rootFile)) distances.set(test, 1);
+  const documentation = isDocumentation(rootFile);
+  if (documentation) for (const test of markdownConsumers(rootFile)) distances.set(test, 1);
   for (let i = 0; i < queue.length; i++) {
     const file = queue[i];
-    // Keep real module imports of Markdown assets, such as Bun's text imports for prompts.
-    const consumers = markdown && i === 0 ? ordinaryReverse.get(file) : reverse.get(file);
+    // An explicit module import is stronger evidence than a quoted path mention.
+    const consumers = documentation && i === 0 ? ordinaryReverse.get(file) : reverse.get(file);
     for (const next of consumers ?? []) if (!distances.has(next)) {
       distances.set(next, distances.get(file) + 1);
       queue.push(next);
