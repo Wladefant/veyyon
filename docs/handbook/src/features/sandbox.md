@@ -93,6 +93,7 @@ Use an approved cleanup operation, such as `wt_remove.py` for worktrees.
 The check does not inspect arbitrary programs or scripts. It does not treat
 `launch send` input as shell source. It cannot undo a deletion. Use an
 operating-system boundary to protect files from code that runs as the agent.
+`find` expressions still use the existing Bash risk check.
 
 ## Critical bash commands
 

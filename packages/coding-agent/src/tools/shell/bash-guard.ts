@@ -597,6 +597,15 @@ function endOfCommandSubstitution(line: string, open: number): number {
 	return line.length;
 }
 
+interface CommandWord {
+	text: string;
+	quotedStart?: true;
+}
+
+interface ShellWord extends CommandWord {
+	literal: boolean;
+}
+
 /**
  * Split one segment into words the way a shell would, keeping enough of the
  * quoting to know which expansions survive.
@@ -605,17 +614,19 @@ function endOfCommandSubstitution(line: string, open: number): number {
  * `rm -rf '$HOME'` is a request to delete a directory actually named `$HOME`
  * and is not confused with the expansion.
  */
-export function splitWords(segment: string, syntax: ShellSyntax = "posix"): { text: string; literal: boolean }[] {
-	const words: { text: string; literal: boolean }[] = [];
+export function splitWords(segment: string, syntax: ShellSyntax = "posix"): ShellWord[] {
+	const words: ShellWord[] = [];
 	let current = "";
 	let literal = false;
 	let started = false;
+	let quotedStart = false;
 	let quote: '"' | "'" | undefined;
 	const push = (): void => {
-		if (started) words.push({ text: current, literal });
+		if (started) words.push(quotedStart ? { text: current, literal, quotedStart: true } : { text: current, literal });
 		current = "";
 		literal = false;
 		started = false;
+		quotedStart = false;
 	};
 	for (let index = 0; index < segment.length; index += 1) {
 		const character = segment[index]!;
@@ -654,6 +665,7 @@ export function splitWords(segment: string, syntax: ShellSyntax = "posix"): { te
 			continue;
 		}
 		if (character === '"' || (syntax !== "cmd" && character === "'")) {
+			if (syntax === "powershell" && !started) quotedStart = true;
 			quote = character;
 			if (character === "'") literal = true;
 			started = true;
@@ -1548,18 +1560,12 @@ const CMD_REMOVE: Readonly<Record<string, true>> = { rmdir: true, rd: true, del:
 const RECURSIVE_DELETE_DENIAL =
 	"Recursive shell deletion is blocked. Use an approved cleanup operation, such as wt_remove.py for worktrees.";
 
-function isDirectRecursiveDelete(name: string, args: readonly string[], syntax: ShellSyntax): boolean {
-	if (name === "find") {
-		return args.some(
-			(arg, index) =>
-				arg === "-delete" ||
-				((arg === "-exec" || arg === "-execdir") && processCommandName(args[index + 1] ?? "") === "rm"),
-		);
-	}
+function isDirectRecursiveDelete(name: string, args: readonly CommandWord[], syntax: ShellSyntax): boolean {
 	const powershellRemove = Object.hasOwn(POWERSHELL_REMOVE, name);
 	const cmdRemove = Object.hasOwn(CMD_REMOVE, name);
 	if (!powershellRemove && !cmdRemove) return false;
-	for (const arg of args) {
+	for (const { text: arg, quotedStart } of args) {
+		if (quotedStart) continue;
 		if (arg === "--") break;
 		if (name === "rm" && syntax !== "powershell" && (arg === "--recursive" || /^-[^-]*[rR]/.test(arg))) {
 			return true;
@@ -1576,15 +1582,15 @@ function isDirectRecursiveDelete(name: string, args: readonly string[], syntax: 
 }
 
 function recursiveDeleteInArgv(
-	words: readonly string[],
+	words: readonly CommandWord[],
 	env: NodeJS.ProcessEnv,
 	syntax: ShellSyntax,
 	depth: number,
 ): boolean {
 	let start = 0;
 	while (start < words.length) {
-		const word = words[start]!;
-		if (word === "command" && /^-[vV]$/.test(words[start + 1] ?? "")) return false;
+		const word = words[start]!.text;
+		if (word === "command" && /^-[vV]$/.test(words[start + 1]?.text ?? "")) return false;
 		if (syntax === "cmd" && word.toLowerCase() === "call") {
 			start += 1;
 			continue;
@@ -1592,7 +1598,7 @@ function recursiveDeleteInArgv(
 		if (!PROCESS_STOP_PREFIX.test(word) && !isPrefixCommand(word) && !(start > 0 && word.startsWith("-"))) break;
 		start += 1;
 	}
-	const name = processCommandName((words[start] ?? "").replace(/^@/, ""));
+	const name = processCommandName((words[start]?.text ?? "").replace(/^@/, ""));
 	const args = words.slice(start + 1);
 	if (isDirectRecursiveDelete(name, args, syntax)) return true;
 	const shape = INTERPRETED_SCRIPT_COMMANDS.get(name);
@@ -1601,9 +1607,15 @@ function recursiveDeleteInArgv(
 	if (depth >= MAX_INTERPRETED_SHELL_DEPTH) return false;
 	const flag =
 		innerSyntax === "cmd" ? CMD_SCRIPT_FLAG : innerSyntax === "powershell" ? POWERSHELL_SCRIPT_FLAG : SCRIPT_FLAG;
-	const flagIndex = args.findIndex(arg => flag.test(arg));
+	const flagIndex = args.findIndex(arg => !arg.quotedStart && flag.test(arg.text));
 	const scriptStart = shape === "nextWord" ? 0 : flagIndex < 0 ? args.length : flagIndex + 1;
-	const script = innerSyntax === "posix" ? args[scriptStart] : args.slice(scriptStart).join(" ");
+	const script =
+		innerSyntax === "posix"
+			? args[scriptStart]?.text
+			: args
+					.slice(scriptStart)
+					.map(arg => arg.text)
+					.join(" ");
 	return !!script && recursiveDeleteInText(script, env, innerSyntax, depth + 1);
 }
 
@@ -1611,14 +1623,13 @@ function recursiveDeleteInText(command: string, env: NodeJS.ProcessEnv, syntax: 
 	const home = syntax === "posix" ? resolveGuardHome(env) : "";
 	for (const { text } of splitCommandSpans(command, syntax !== "cmd", syntax)) {
 		const raw = splitWords(text, syntax);
-		let words: readonly { text: string }[] = raw;
+		let words: readonly CommandWord[] = raw;
 		if (syntax === "posix") {
 			const expanded = raw.map(word => expandWord(word, home, env));
 			if (isHostIsolatedContainerRun(expanded)) continue;
 			words = expanded;
 		}
-		const argv = words.map(word => word.text);
-		if (recursiveDeleteInArgv(argv, env, syntax, depth)) return true;
+		if (recursiveDeleteInArgv(words, env, syntax, depth)) return true;
 	}
 	return false;
 }
@@ -1641,7 +1652,8 @@ export function findRecursiveLaunchDeleteDenial(
 	args: readonly string[],
 	env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-	return recursiveDeleteInArgv([application, ...args], env, "posix", 0) ? RECURSIVE_DELETE_DENIAL : undefined;
+	const words = [application, ...args].map(text => ({ text }));
+	return recursiveDeleteInArgv(words, env, "posix", 0) ? RECURSIVE_DELETE_DENIAL : undefined;
 }
 
 function isBroadProcessStop(name: string, words: readonly ExpandedWord[], start: number): boolean {
