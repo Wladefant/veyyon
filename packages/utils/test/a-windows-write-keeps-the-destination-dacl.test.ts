@@ -336,10 +336,17 @@ process.exit(23);
 			if (!otherVolume) throw new Error("The cross-volume check needs a second scratch volume.");
 			const foreignDir = fs.mkdtempSync(path.join(otherVolume, "w-dacl-"));
 			const target = path.join(dir, "destination.txt");
-			const foreign = path.join(foreignDir, "foreign.txt");
+			const foreign = path.join(foreignDir, path.basename(target));
 			try {
 				fs.writeFileSync(target, "destination\n");
 				fs.writeFileSync(foreign, "foreign\n");
+				// Match the file DACLs explicitly so the rename reaches the volume check,
+				// regardless of inheritance or ACE order on the two scratch volumes.
+				const aclFile = path.join(dir, "cross-volume-acl.txt");
+				icacls(target, "/inheritance:d");
+				icacls(target, "/save", aclFile);
+				icacls(foreignDir, "/restore", aclFile);
+				fs.unlinkSync(aclFile);
 				const destination = reserveWindowsWriteStage(target);
 				try {
 					const source = reserveWindowsWriteStage(foreign);
@@ -357,7 +364,7 @@ process.exit(23);
 				}
 				expect(fs.readFileSync(target, "utf8")).toBe("destination\n");
 				expect(fs.readFileSync(foreign, "utf8")).toBe("foreign\n");
-				expect(fs.readdirSync(foreignDir)).toEqual(["foreign.txt"]);
+				expect(fs.readdirSync(foreignDir)).toEqual([path.basename(foreign)]);
 				expect(leftovers()).toEqual([]);
 			} finally {
 				await removeWithRetries(foreignDir);

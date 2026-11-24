@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 public static class AppContainerLauncher
 {
@@ -445,5 +446,150 @@ public static class AppContainerLauncher
                 Marshal.FreeHGlobal(lpEnvironment);
             }
         }
+    }
+}
+
+public static class SecondaryScratch
+{
+    private const uint Delete = 0x00010000;
+    private const uint FileReadAttributes = 0x80;
+    private const uint Synchronize = 0x00100000;
+    private const uint FileShareRead = 1;
+    private const uint FileShareWrite = 2;
+    private const uint FileOpen = 1;
+    private const uint FileCreate = 2;
+    private const uint FileDirectoryFile = 1;
+    private const uint FileSynchronousIoNonalert = 0x20;
+    private const uint ObjCaseInsensitive = 0x40;
+    private const uint ObjDontReparse = 0x1000;
+    private const int FileDispositionInfo = 4;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnicodeString
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ObjectAttributes
+    {
+        public int Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public IntPtr Status;
+        public UIntPtr Information;
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtCreateFile(
+        out SafeFileHandle handle, uint access, ref ObjectAttributes attributes,
+        out IoStatusBlock status, IntPtr allocationSize, uint fileAttributes,
+        uint share, uint disposition, uint options, IntPtr eaBuffer, uint eaLength);
+
+    [DllImport("ntdll.dll")]
+    private static extern int RtlNtStatusToDosError(int status);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFileInformationByHandle(
+        SafeFileHandle handle, int infoClass, ref byte deleteFile, uint size);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(
+        SafeFileHandle handle, StringBuilder path, uint capacity, uint flags);
+
+    private static SafeFileHandle OpenDirectory(
+        string name, IntPtr root, IntPtr security, uint access, uint disposition)
+    {
+        ushort length = checked((ushort)(name.Length * sizeof(char)));
+        IntPtr buffer = Marshal.StringToHGlobalUni(name);
+        IntPtr objectName = IntPtr.Zero;
+        try
+        {
+            var unicode = new UnicodeString { Length = length, MaximumLength = length, Buffer = buffer };
+            objectName = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
+            Marshal.StructureToPtr(unicode, objectName, false);
+            var attributes = new ObjectAttributes {
+                Length = Marshal.SizeOf(typeof(ObjectAttributes)),
+                ObjectName = objectName,
+                RootDirectory = root,
+                Attributes = ObjCaseInsensitive | ObjDontReparse,
+                SecurityDescriptor = security
+            };
+            SafeFileHandle handle;
+            IoStatusBlock io;
+            int result = NtCreateFile(
+                out handle, access | Synchronize, ref attributes, out io,
+                IntPtr.Zero, 0, FileShareRead | FileShareWrite, disposition,
+                FileDirectoryFile | FileSynchronousIoNonalert, IntPtr.Zero, 0);
+            if (result < 0)
+            {
+                if (handle != null) handle.Dispose();
+                throw new Win32Exception(RtlNtStatusToDosError(result),
+                    "Cannot open secondary scratch directory '" + name + "' (NTSTATUS 0x" +
+                    result.ToString("X8") + ").");
+            }
+            return handle;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(objectName);
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    public static SafeFileHandle Create(string basePath, Guid id, byte[] securityDescriptor)
+    {
+        string fullPath = Path.GetFullPath(basePath);
+        string volume = Path.GetPathRoot(fullPath);
+        if (volume.Length != 3 || volume[1] != ':' || volume[2] != '\\')
+            throw new ArgumentException("Secondary scratch must use a local drive path.", "basePath");
+
+        // Reject reparses in the same operation that opens the base. Subsequent
+        // operations never resolve the caller-supplied base path again.
+        using (SafeFileHandle root = OpenDirectory(
+            @"\??\" + fullPath, IntPtr.Zero, IntPtr.Zero, FileReadAttributes, FileOpen))
+        {
+            // A drive mapping or short name must not hide the actual base from
+            // the runner's host-home guard.
+            string expected = @"\\?\" + fullPath.TrimEnd('\\');
+            var canonical = new StringBuilder(expected.Length + 2);
+            uint count = GetFinalPathNameByHandle(root, canonical, (uint)canonical.Capacity, 0);
+            if (count == 0)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (count >= canonical.Capacity ||
+                !string.Equals(canonical.ToString().TrimEnd('\\'), expected, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Secondary scratch base must use its canonical drive path: " + fullPath);
+
+            GCHandle security = GCHandle.Alloc(securityDescriptor, GCHandleType.Pinned);
+            try
+            {
+                return OpenDirectory(id.ToString("N"), root.DangerousGetHandle(),
+                    security.AddrOfPinnedObject(), Delete, FileCreate);
+            }
+            finally
+            {
+                GC.KeepAlive(root);
+                security.Free();
+            }
+        }
+    }
+
+    public static void DeleteEmpty(SafeFileHandle directory)
+    {
+        // The guest removes its own fixtures. Do not enumerate or recurse into
+        // guest-controlled entries. A leftover must fail cleanup instead.
+        byte deleteFile = 1;
+        if (!SetFileInformationByHandle(directory, FileDispositionInfo, ref deleteFile, 1))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 }

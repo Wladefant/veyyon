@@ -127,10 +127,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-sandbox/run.ps1
 ```
 
 For the NTFS cross-volume case, pass `-ScratchRoot` and `-SecondaryScratchRoot`
-before `--`. Use existing scratch bases on different NTFS volumes. The runner
-grants the AppContainer access only to a new private child of each base. It
-removes the children after the run. Without a secondary base, the cross-volume
-case reports a skip.
+before `--`. Use existing scratch bases on different NTFS volumes. Pass the
+canonical local drive path for the secondary base. The runner creates a new
+private child relative to an open directory handle and grants access at
+creation. The guest must remove its own secondary fixtures. The runner removes
+the empty child by handle and reports a cleanup failure if entries remain.
+Without a secondary base, the cross-volume case reports a skip.
+
+Run `secondary-scratch-proof.ps1 -ScratchRoot <existing-scratch-base>` to check
+the native secondary scratch creation and cleanup rules.
 
 1. Built-in AppContainer constraints:
    The Windows kernel enforces low integrity and capability sandboxing.

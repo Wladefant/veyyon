@@ -193,9 +193,6 @@ Assert-ScratchBase $ScratchRoot $realHome
 if ($SecondaryScratchRoot) {
     $SecondaryScratchRoot = [System.IO.Path]::GetFullPath($SecondaryScratchRoot)
     Assert-ScratchBase $SecondaryScratchRoot $realHome
-    if (-not (Test-Path -LiteralPath $SecondaryScratchRoot -PathType Container)) {
-        Die "Secondary scratch base must already exist: $SecondaryScratchRoot"
-    }
     if ([System.IO.Path]::GetPathRoot($SecondaryScratchRoot) -eq [System.IO.Path]::GetPathRoot($ScratchRoot)) {
         Die "Secondary scratch base must be on another volume"
     }
@@ -264,41 +261,37 @@ $sentinelPath = $null
 $exitCode = 1
 $cleanupFailed = $false
 $secondaryScratch = $null
+$secondaryScratchHandle = $null
 
 try {
-    if ($SecondaryScratchRoot) {
-        $candidate = Join-Path $SecondaryScratchRoot $uniqueId
-        if (Test-Path -LiteralPath $candidate) {
-            Die "Secondary scratch directory already exists: $candidate"
-        }
-        [System.IO.Directory]::CreateDirectory($candidate, $ds) | Out-Null
-        $secondaryScratch = $candidate
-        Assert-NoJunctionOrReparse $secondaryScratch
-    }
-
     # 1. Create AppContainer Profile
     $sidStr = [AppContainerLauncher]::CreateProfile($profileName, [ref]$pSid)
     $profileCreated = $true
     Log-Message "Created AppContainer profile $profileName ($sidStr)"
 
-    # Grant this profile access to the private per-run directories, never to the scratch bases.
-    foreach ($scratch in @($sessionScratch, $secondaryScratch)) {
-        if (-not $scratch) { continue }
-        & icacls $scratch /grant "*$sidStr`:(OI)(CI)(F)" /Q | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Die "icacls grant on scratch failed with exit code $LASTEXITCODE"
+    # Keep the primary runner's existing grant. The secondary grant is part of
+    # atomic creation and never reopens a path to set its DACL.
+    & icacls $sessionScratch /grant "*$sidStr`:(OI)(CI)(F)" /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Die "icacls grant on scratch failed with exit code $LASTEXITCODE"
+    }
+    $scratchAcl = Get-Acl -LiteralPath $sessionScratch
+    if (-not $scratchAcl.AreAccessRulesProtected) {
+        Die "Scratch DACL inheritance is not protected: $sessionScratch"
+    }
+    $forbiddenSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11")
+    foreach ($rule in $scratchAcl.Access) {
+        $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($forbiddenSids -contains $ruleSid) {
+            Die "Scratch DACL contains public/shared ACE ($ruleSid): $sessionScratch"
         }
-        $scratchAcl = Get-Acl -LiteralPath $scratch
-        if (-not $scratchAcl.AreAccessRulesProtected) {
-            Die "Scratch DACL inheritance is not protected: $scratch"
-        }
-        $forbiddenSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11")
-        foreach ($rule in $scratchAcl.Access) {
-            $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-            if ($forbiddenSids -contains $ruleSid) {
-                Die "Scratch DACL contains public/shared ACE ($ruleSid): $scratch"
-            }
-        }
+    }
+    if ($SecondaryScratchRoot) {
+        $packageSid = [System.Security.Principal.SecurityIdentifier]::new($sidStr)
+        $ds.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($packageSid, $fullRights, $inheritFlags, $propFlags, $allowType)))
+        $secondaryScratch = Join-Path $SecondaryScratchRoot $uniqueId
+        $secondaryScratchHandle = [SecondaryScratch]::Create(
+            $SecondaryScratchRoot, [Guid]$uniqueId, $ds.GetSecurityDescriptorBinaryForm())
     }
 
     # 3. Stage Bun executable into scratch
@@ -628,13 +621,22 @@ child.on('error', (err) => {
             $cleanupFailed = $true
         }
     }
-    foreach ($scratch in @($sessionScratch, $secondaryScratch)) {
-        if (-not $scratch -or -not (Test-Path -LiteralPath $scratch)) { continue }
+    if ($secondaryScratchHandle) {
         try {
-            Assert-NoJunctionOrReparse $scratch
-            Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction Stop
+            [SecondaryScratch]::DeleteEmpty($secondaryScratchHandle)
         } catch {
-            Log-Message "cleanup error: failed to remove session scratch '$scratch': $($_.Exception.Message)"
+            Log-Message "cleanup error: failed to remove secondary scratch '$secondaryScratch': $($_.Exception.Message)"
+            $cleanupFailed = $true
+        } finally {
+            $secondaryScratchHandle.Dispose()
+        }
+    }
+    if (Test-Path -LiteralPath $sessionScratch) {
+        try {
+            Assert-NoJunctionOrReparse $sessionScratch
+            Remove-Item -LiteralPath $sessionScratch -Recurse -Force -ErrorAction Stop
+        } catch {
+            Log-Message "cleanup error: failed to remove session scratch '$sessionScratch': $($_.Exception.Message)"
             $cleanupFailed = $true
         }
     }
