@@ -753,7 +753,12 @@ export class RetryRuntime {
 			// counter in place would exhaust it again on its first error.
 			this.#attempt = 1;
 		}
-		if (attempt.options?.knownEndpointDns && !switchedModel && !attempt.retryingDnsSelector) {
+		if (
+			attempt.options?.knownEndpointDns &&
+			!switchedModel &&
+			!attempt.retryingDnsSelector &&
+			!AIError.retriable(attempt.id)
+		) {
 			return this.#endWithFailure(message, this.#attempt, attempt.errorMessage);
 		}
 		if (attempt.classifierRefusal && !switchedModel) {
