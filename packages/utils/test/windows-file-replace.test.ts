@@ -1,0 +1,198 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { atomicWriteFilePreservingMode, removeWithRetries } from "@veyyon/utils";
+import {
+	closeWindowsWriteStage,
+	publishWindowsWriteStage,
+	reserveWindowsWriteStage,
+	writeWindowsWriteStage,
+} from "@veyyon/utils/windows-file-replace";
+
+describe.skipIf(process.platform !== "win32")("Windows security-preserving file writer", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "w-dacl-"));
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(dir);
+	});
+
+	function icacls(file: string, ...args: string[]): string {
+		const exe = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+		const result = spawnSync(exe, [path.basename(file), ...args], {
+			cwd: path.dirname(file),
+			encoding: "utf8",
+			timeout: 10_000,
+			windowsHide: true,
+		});
+		if (result.error) throw result.error;
+		if (result.status !== 0) throw new Error(`icacls ${args.join(" ")} failed: ${result.stdout}${result.stderr}`);
+		return result.stdout;
+	}
+
+	/** The SDDL DACL of `file`, read with READ_CONTROL only, which no share mode blocks. */
+	function dacl(file: string): string | undefined {
+		const saved = path.join(dir, `acl-${path.basename(file)}.txt`);
+		icacls(file, "/save", saved);
+		const text = fs.readFileSync(saved, "utf16le");
+		fs.unlinkSync(saved);
+		return text.split(/\r?\n/)[1]?.split("S:", 1)[0];
+	}
+
+	function leftovers(): string[] {
+		return fs.readdirSync(dir).filter(name => name.startsWith(".veyyon-"));
+	}
+
+	function restrictedFile(name: string): { file: string; original: string | undefined } {
+		const file = path.join(dir, name);
+		fs.writeFileSync(file, "initial\n");
+		// An explicit deny on an UNPROTECTED DACL: the parent grants what this file refuses.
+		icacls(file, "/deny", "*S-1-5-32-546:(R)");
+		const original = dacl(file);
+		expect(original).not.toMatch(/^D:[A-Z]*P[A-Z]*\(/);
+		expect(original).toContain("(D;");
+		return { file, original };
+	}
+	const aclTestTimeout = 35_000;
+
+	it(
+		"creates the stage of an unprotected destination with its explicit deny before any byte exists",
+		() => {
+			const { file, original } = restrictedFile("restricted.txt");
+			const stage = reserveWindowsWriteStage(file);
+			try {
+				const stagePath = path.join(dir, stage.stageName);
+				expect(fs.statSync(stagePath).size).toBe(0);
+				expect(dacl(stagePath)).toBe(original);
+				// No other handle with data access can exist on the stage, whatever its DACL grants.
+				expect(() => fs.openSync(stagePath, "r")).toThrow();
+			} finally {
+				closeWindowsWriteStage(stage);
+			}
+			expect(leftovers()).toEqual([]);
+			expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+		},
+		aclTestTimeout,
+	);
+
+	it(
+		"holds the staging file and directory handles until publication",
+		() => {
+			const { file, original } = restrictedFile("bound.txt");
+			const stage = reserveWindowsWriteStage(file);
+			try {
+				const stagePath = path.join(dir, stage.stageName);
+				expect(() => fs.renameSync(stagePath, path.join(dir, "moved.tmp"))).toThrow();
+				expect(() => fs.unlinkSync(stagePath)).toThrow();
+				expect(() => fs.renameSync(dir, `${dir}-moved`)).toThrow();
+				writeWindowsWriteStage(stage, Buffer.from("updated\n"), true);
+				publishWindowsWriteStage(stage);
+			} finally {
+				closeWindowsWriteStage(stage);
+			}
+			expect(fs.readFileSync(file, "utf8")).toBe("updated\n");
+			expect(dacl(file)).toBe(original);
+			expect(leftovers()).toEqual([]);
+		},
+		aclTestTimeout,
+	);
+
+	it("refuses a staged replacement if its destination is absent at the final check", () => {
+		const file = path.join(dir, "removed.txt");
+		fs.writeFileSync(file, "initial\n");
+		const stage = reserveWindowsWriteStage(file);
+		try {
+			writeWindowsWriteStage(stage, Buffer.from("updated\n"), false);
+			fs.renameSync(file, path.join(dir, "original.txt"));
+			expect(() => publishWindowsWriteStage(stage)).toThrow(/Reopening the replacement target/);
+		} finally {
+			closeWindowsWriteStage(stage);
+		}
+		expect(fs.existsSync(file)).toBe(false);
+		expect(fs.readFileSync(path.join(dir, "original.txt"), "utf8")).toBe("initial\n");
+		expect(leftovers()).toEqual([]);
+	});
+
+	it("refuses a staged replacement if the destination FileId changed at the final check", () => {
+		const file = path.join(dir, "changed-id.txt");
+		fs.writeFileSync(file, "initial\n");
+		const stage = reserveWindowsWriteStage(file);
+		try {
+			writeWindowsWriteStage(stage, Buffer.from("updated\n"), false);
+			fs.renameSync(file, path.join(dir, "original.txt"));
+			fs.writeFileSync(file, "other\n");
+			expect(() => publishWindowsWriteStage(stage)).toThrow(/destination changed/);
+		} finally {
+			closeWindowsWriteStage(stage);
+		}
+		expect(fs.readFileSync(file, "utf8")).toBe("other\n");
+		expect(leftovers()).toEqual([]);
+	});
+
+	it("keeps a creation a creation: a file that appears before publication is never replaced", () => {
+		const file = path.join(dir, "created.txt");
+		const stage = reserveWindowsWriteStage(file);
+		try {
+			writeWindowsWriteStage(stage, Buffer.from("ours\n"), false);
+			fs.writeFileSync(file, "racer\n");
+			expect(() => publishWindowsWriteStage(stage)).toThrow(/no replacement/);
+		} finally {
+			closeWindowsWriteStage(stage);
+		}
+		expect(fs.readFileSync(file, "utf8")).toBe("racer\n");
+		expect(leftovers()).toEqual([]);
+	});
+
+	it(
+		"refuses to publish when the destination's DACL changes while the write is staged",
+		() => {
+			const { file, original } = restrictedFile("changed.txt");
+			const stage = reserveWindowsWriteStage(file);
+			let changed: string | undefined;
+			try {
+				writeWindowsWriteStage(stage, Buffer.from("stale\n"), false);
+				icacls(file, "/deny", "*S-1-5-32-546:(W)");
+				changed = dacl(file);
+				expect(changed).not.toBe(original);
+				expect(() => publishWindowsWriteStage(stage)).toThrow(/security changed/);
+			} finally {
+				closeWindowsWriteStage(stage);
+			}
+			expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+			expect(dacl(file)).toBe(changed);
+			expect(leftovers()).toEqual([]);
+		},
+		aclTestTimeout,
+	);
+
+	it("refuses a destination whose alternate data stream a replacement would drop", async () => {
+		const file = path.join(dir, "streams.txt");
+		fs.writeFileSync(file, "initial\n");
+		fs.writeFileSync(`${file}:Zone.Identifier`, "[ZoneTransfer]\r\nZoneId=3\r\n");
+		await expect(atomicWriteFilePreservingMode(file, "updated\n", { preserveWindowsDacl: true })).rejects.toThrow(
+			/alternate data streams/,
+		);
+		expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+		expect(fs.readFileSync(`${file}:Zone.Identifier`, "utf8")).toContain("ZoneId=3");
+		expect(leftovers()).toEqual([]);
+	});
+
+	it(
+		"creates a missing file with the directory's normal inherited DACL",
+		async () => {
+			const reference = path.join(dir, "reference.txt");
+			fs.writeFileSync(reference, "");
+			const file = path.join(dir, "fresh.txt");
+			await atomicWriteFilePreservingMode(file, "fresh\n", { preserveWindowsDacl: true });
+			expect(fs.readFileSync(file, "utf8")).toBe("fresh\n");
+			expect(dacl(file)).toBe(dacl(reference));
+			expect(leftovers()).toEqual([]);
+		},
+		aclTestTimeout,
+	);
+});
