@@ -69,22 +69,22 @@ afterEach(() => {
 describe("OAuthCallbackFlow /launch route", () => {
 	it("advertises a short launch URL and 302s it to the pending authorization URL", async () => {
 		const { info, abort, login } = await startFlowAndWaitForAuth();
+		try {
+			// Contract 1 — launch URL is a tokenized loopback `/launch` URL that
+			// remains much shorter than the full provider authorization URL.
+			expect(info.launchUrl).toBeDefined();
+			expect(info.launchUrl).toMatch(/^http:\/\/localhost:\d+\/launch\?token=[A-Za-z0-9_-]{22}$/);
+			expect(info.launchUrl!.length).toBeLessThan(info.url.length);
 
-		// Contract 1 — launch URL is short and shaped like a loopback URL. A
-		// terminal that truncates below ~40 columns is degenerate; anything above
-		// that keeps the launch URL intact regardless of the full URL length.
-		expect(info.launchUrl).toBeDefined();
-		expect(info.launchUrl!.length).toBeLessThan(40);
-		expect(info.launchUrl).toMatch(/^http:\/\/localhost:\d+\/launch$/);
-
-		// Contract 2 — GET /launch returns 302 pointing at the pending authorize URL,
-		// byte-for-byte (the whole point: no truncation surface between UI and provider).
-		const response = await fetch(info.launchUrl!, { redirect: "manual" });
-		expect(response.status).toBe(302);
-		expect(response.headers.get("location")).toBe(info.url);
-
-		abort.abort("test done");
-		await login;
+			// Contract 2 — GET /launch returns 302 pointing at the pending authorize URL,
+			// byte-for-byte (the whole point: no truncation surface between UI and provider).
+			const response = await fetch(info.launchUrl!, { redirect: "manual" });
+			expect(response.status).toBe(302);
+			expect(response.headers.get("location")).toBe(info.url);
+		} finally {
+			abort.abort("test done");
+			await login;
+		}
 	});
 
 	it("stops answering /launch once the flow completes so no stale URL is redirected", async () => {
