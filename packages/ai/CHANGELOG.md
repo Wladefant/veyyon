@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Defer ArkType schema creation until the first OpenAI transcription response needs validation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+
 ## [1.12.2] - 2026-11-21
 
 ### Fixed

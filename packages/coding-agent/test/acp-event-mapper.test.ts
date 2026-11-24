@@ -100,6 +100,10 @@ class ReplayTestSession {
 	}
 
 	async refreshMCPTools(_tools: unknown): Promise<void> {}
+
+	async refreshExternalTurn(): Promise<readonly string[]> {
+		return await this.sessionManager.refreshExternalTurn();
+	}
 }
 
 describe("ACP event mapper", () => {
