@@ -1607,7 +1607,7 @@ function recursiveDeleteInArgv(
 	if (depth >= MAX_INTERPRETED_SHELL_DEPTH) return false;
 	const flag =
 		innerSyntax === "cmd" ? CMD_SCRIPT_FLAG : innerSyntax === "powershell" ? POWERSHELL_SCRIPT_FLAG : SCRIPT_FLAG;
-	const flagIndex = args.findIndex(arg => !arg.quotedStart && flag.test(arg.text));
+	const flagIndex = args.findIndex(arg => flag.test(arg.text));
 	const scriptStart = shape === "nextWord" ? 0 : flagIndex < 0 ? args.length : flagIndex + 1;
 	const script =
 		innerSyntax === "posix"

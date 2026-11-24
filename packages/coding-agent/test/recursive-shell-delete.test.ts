@@ -22,6 +22,7 @@ describe("direct recursive shell deletes", () => {
 		"rm -R ./scratch/*",
 		"echo preparing && (command /bin/rm -r ../fixtures) > report.log",
 		`bash -lc 'rm -rf "./fixture tree"'`,
+		`pwsh -Command "bash '-lc' 'rm -rf ./fixtures'"`,
 		String.raw`powershell.exe -NoProfile -Command 'Remove-Item -LiteralPath "C:\fixture tree" -Recurse -Force'`,
 		`pwsh -Command Get-ChildItem ./fixtures | Remove-Item -Recur`,
 		`pwsh -Command 'RI ./fixtures/* -Recurse'`,
