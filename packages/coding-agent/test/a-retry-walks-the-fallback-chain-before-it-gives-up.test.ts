@@ -183,7 +183,10 @@ describe("AgentSession retry fallback", () => {
 		await session.waitForIdle();
 
 		const switched = !test.noFallback && test.failures > test.retries;
-		expect(requests).toEqual([...Array<string>(test.retries + 1).fill(primary.id), ...(switched ? [fallback.id] : [])]);
+		expect(requests).toEqual([
+			...Array<string>(test.retries + 1).fill(primary.id),
+			...(switched ? [fallback.id] : []),
+		]);
 		expect(retryStartEvents).toHaveLength(test.retries + Number(switched));
 		for (let index = 0; index < test.retries; index++) {
 			const maxDelayMs = 5 * 2 ** index;
