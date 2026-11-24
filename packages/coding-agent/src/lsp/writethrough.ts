@@ -240,7 +240,7 @@ async function commitFileContentAtomic(dst: string, content: string, signal?: Ab
 	// Atomicity is the guarantee, not instantaneous cancellation.
 	throwIfAborted(signal);
 	try {
-		await atomicWriteFilePreservingMode(dst, content, { fsync: false });
+		await atomicWriteFilePreservingMode(dst, content, { fsync: false, preserveWindowsDacl: true });
 	} catch (error) {
 		// The temp-path rewrite that used to live here now belongs to
 		// `atomicWriteFile` itself, so EVERY caller gets a message naming the file

@@ -123,6 +123,25 @@
       "risk": "high",
       "components": ["coding-agent", "task"],
       "docs": ["docs/handbook/src/features/agents.md"]
+    },
+    "writetool-windows-dacl": {
+      "name": "WriteTool Windows DACL",
+      "description": "Preserve the DACL on a Windows file when WriteTool replaces its contents.",
+      "entry_files": [
+        "packages/coding-agent/src/tools/fs/write.ts",
+        "packages/coding-agent/src/lsp/writethrough.ts",
+        "packages/utils/src/atomic-write.ts",
+        "packages/utils/src/windows-file-replace.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/tools/atomic-write-via-write-tool-adversarial.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1157",
+      "risk": "high",
+      "components": [
+        "coding-agent",
+        "utils"
+      ]
     }
   }
 }
