@@ -40,7 +40,7 @@ try {
     Assert-Win32Failure {
         $unexpected = [SecondaryScratch]::Create($ScratchRoot, $id, $descriptor)
         $unexpected.Dispose()
-    } 80 # ERROR_FILE_EXISTS
+    } 183 # ERROR_ALREADY_EXISTS
     if ((Get-Acl -LiteralPath $directory).Sddl -ne $actual.Sddl) {
         throw 'Failed creation changed the existing directory DACL.'
     }
