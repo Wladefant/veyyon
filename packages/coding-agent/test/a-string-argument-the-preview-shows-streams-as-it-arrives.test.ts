@@ -37,6 +37,7 @@ import {
 	ToolArgsRevealController,
 } from "@veyyon/coding-agent/modes/terminal/controllers/tool-args-reveal";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import { installSessionSecretIntakeFactory } from "@veyyon/coding-agent/secrets/intake-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createVibeModeTools } from "@veyyon/coding-agent/tools/agent/manifest";
 import { decodeStreamedToolArgs } from "@veyyon/coding-agent/tools/core/streamed-tool-args";
@@ -193,14 +194,22 @@ async function buildRegistry(settings: Record<string, unknown>): Promise<Sweep> 
 	const unconstructable: string[] = [];
 	const notRegistered: string[] = [];
 	const tools: AgentTool[] = [];
-	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
-		try {
-			const tool = await factory(session);
-			if (tool) tools.push(tool as AgentTool);
-			else notRegistered.push(name);
-		} catch (error) {
-			unconstructable.push(`${name}: ${error}`);
+	// Construct the native tool without binding an actor or opening a broker.
+	const removeIntake = installSessionSecretIntakeFactory(session, "preview-sweep", async () => {
+		throw new Error("The preview sweep does not bind a secret intake actor");
+	});
+	try {
+		for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
+			try {
+				const tool = await factory(session);
+				if (tool) tools.push(tool as AgentTool);
+				else notRegistered.push(name);
+			} catch (error) {
+				unconstructable.push(`${name}: ${error}`);
+			}
 		}
+	} finally {
+		removeIntake();
 	}
 	tools.push(...((await createVibeModeTools(session)) as AgentTool[]));
 	const built = new Map<string, BuiltTool[]>();
