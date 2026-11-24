@@ -56,7 +56,8 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository &&
        vars.OVH_CI_PR_ADMISSION == 'verified')
     runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
-    timeout-minutes: 15
+    # Cap PR jobs without shortening explicit native or Cargo checks.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 5 || 15 }}
     outputs:
       matrix: ${{ steps.planner.outputs.matrix }}
       native_ready: ${{ steps.native.outputs.native_ready || 'false' }}
@@ -367,7 +368,7 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository &&
       vars.OVH_CI_PR_ADMISSION == 'verified'))
     runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
-    timeout-minutes: 15
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 5 || 15 }}
     strategy:
       fail-fast: false
       # Fit each serial job to its deadline without drawing more shared runner slots.
