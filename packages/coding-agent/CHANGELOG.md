@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).
 - Settle failed turns when the scheduler skips their automatic retry continuation ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
 - Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
