@@ -5,6 +5,7 @@
 ### Fixed
 
 - Report cancelled children separately from failures in inline task batches ([#1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([#1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
 ## [1.12.3] - 2026-11-21

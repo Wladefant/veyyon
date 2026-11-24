@@ -414,8 +414,8 @@ export function oauthRedirectOptions(oauth: MCPServerConfig["oauth"]): McpOAuthL
 /**
  * The OAuth endpoints an authentication failure from `url` leads to: the
  * endpoints the failure states, else the ones the server's well-known
- * documents advertise, completed with the scopes the protected-resource
- * metadata requires when neither states any. Null when no endpoints are found.
+ * documents advertise. Protected-resource scopes take precedence over a
+ * supported-set fallback on the direct-endpoint path. Null if no endpoints exist.
  * A failed well-known discovery rejects unless `ignoreDiscoveryFailure` is set,
  * which reads it as no endpoints.
  */
@@ -430,8 +430,7 @@ export async function oauthEndpointsForAuthFailure(
 			protectedScopes: authResult.scopes,
 		});
 		oauth = options.ignoreDiscoveryFailure ? await discovery.catch(() => null) : await discovery;
-	}
-	if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+	} else if (oauth && !oauth.explicitScopes && authResult.resourceMetadataUrl) {
 		// The JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
 		// advertised protected-resource metadata for the required scopes.
 		const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);

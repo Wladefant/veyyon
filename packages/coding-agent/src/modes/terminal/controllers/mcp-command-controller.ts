@@ -739,7 +739,7 @@ export class MCPCommandController {
 			oauth.tokenUrl,
 			client.clientId,
 			client.clientSecret,
-			oauth.scopes ?? "",
+			runtimeConfig.oauth?.scopes?.trim() || oauth.scopes || "",
 			{
 				...oauthRedirectOptions(found.config.oauth),
 				registrationUrl: oauth.registrationUrl,
