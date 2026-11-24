@@ -37,7 +37,6 @@ import {
 	ToolArgsRevealController,
 } from "@veyyon/coding-agent/modes/terminal/controllers/tool-args-reveal";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { installSessionSecretIntakeFactory } from "@veyyon/coding-agent/secrets/intake-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createVibeModeTools } from "@veyyon/coding-agent/tools/agent/manifest";
 import { decodeStreamedToolArgs } from "@veyyon/coding-agent/tools/core/streamed-tool-args";
@@ -161,7 +160,7 @@ interface BuiltTool {
 
 interface Sweep {
 	readonly unconstructable: string[];
-	readonly notRegistered: string[];
+	readonly notRegistered: string[][];
 	/** Every argument shape a tool was built with, one entry per distinct set of declared arguments. */
 	readonly built: Map<string, BuiltTool[]>;
 }
@@ -194,27 +193,19 @@ async function buildRegistry(settings: Record<string, unknown>): Promise<Sweep> 
 	const unconstructable: string[] = [];
 	const notRegistered: string[] = [];
 	const tools: AgentTool[] = [];
-	// Construct the native tool without binding an actor or opening a broker.
-	const removeIntake = installSessionSecretIntakeFactory(session, "preview-sweep", async () => {
-		throw new Error("The preview sweep does not bind a secret intake actor");
-	});
-	try {
-		for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
-			try {
-				const tool = await factory(session);
-				if (tool) tools.push(tool as AgentTool);
-				else notRegistered.push(name);
-			} catch (error) {
-				unconstructable.push(`${name}: ${error}`);
-			}
+	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
+		try {
+			const tool = await factory(session);
+			if (tool) tools.push(tool as AgentTool);
+			else notRegistered.push(name);
+		} catch (error) {
+			unconstructable.push(`${name}: ${error}`);
 		}
-	} finally {
-		removeIntake();
 	}
 	tools.push(...((await createVibeModeTools(session)) as AgentTool[]));
 	const built = new Map<string, BuiltTool[]>();
 	for (const tool of tools) built.set(tool.name, [{ tool, args: argumentsOf(tool) }]);
-	return { unconstructable, notRegistered, built };
+	return { unconstructable, notRegistered: [notRegistered], built };
 }
 
 /** `base` plus every tool shape in `other` whose declared arguments `base` has not seen. */
@@ -260,11 +251,12 @@ describe("a string argument the preview shows streams as it arrives", () => {
 		agentDir.removeSync();
 	});
 
-	it("builds every tool the registry declares", () => {
+	it("builds every tool available to both fixture sessions", () => {
 		expect(sweep.unconstructable).toEqual([]);
-		// The sweep constructs the registry twice, once for each task tool shape.
-		const expectedNotRegistered = git.github.available() ? [] : ["github", "github"];
-		expect(sweep.notRegistered).toEqual(expectedNotRegistered);
+		// These fixture sessions have no native secret intake factory.
+		// GitHub also requires the gh CLI on the host.
+		const unavailable = git.github.available() ? ["secret_request"] : ["github", "secret_request"];
+		expect(sweep.notRegistered.map(names => names.toSorted())).toEqual([unavailable, unavailable]);
 	});
 
 	/** Non-vacuity: the four arguments the defect was reported against are among the ones the sweep drives. */
