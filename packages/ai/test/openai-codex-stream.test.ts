@@ -2112,6 +2112,91 @@ describe("openai-codex streaming", () => {
 		},
 	);
 
+	it("keeps an active tool response alive past the setup deadline and clears its timers", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		resetCodexAccessProgramListings();
+		vi.useFakeTimers();
+		const baselineTimers = vi.getTimerCount();
+		const encoder = new TextEncoder();
+		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+		const writer = writable.getWriter();
+		const { promise: progressObserved, resolve: markProgressObserved } = Promise.withResolvers<void>();
+		const emit = (event: Record<string, unknown>) => writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+		let requestSignal: AbortSignal | undefined;
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: async (input, init) => {
+				const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+				if (url.pathname.endsWith("/codex/models")) return Response.json({ models: [] });
+				requestSignal = getRequestSignal(input, init);
+				return new Response(readable, { headers: { "content-type": "text/event-stream" } });
+			},
+			onPayload: async payload => payload,
+			onResponse: async () => {},
+			streamFirstEventTimeoutMs: 10,
+			streamIdleTimeoutMs: 1_000,
+		});
+		const consumed = (async () => {
+			for await (const event of stream) {
+				if (event.type === "toolcall_delta") markProgressObserved();
+			}
+		})();
+		const feed = (async () => {
+			await emit({
+				type: "response.output_item.added",
+				item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "read_file", arguments: "" },
+			});
+			await emit({ type: "response.function_call_arguments.delta", delta: '{"path":"' });
+		})();
+		try {
+			expect(
+				await Promise.race([
+					Promise.all([feed, progressObserved]).then(() => "progress"),
+					scheduler.wait(500).then(() => "pending"),
+				]),
+			).toBe("progress");
+			// A healthy stream still has an idle deadline, not a setup deadline.
+			vi.advanceTimersByTime(50);
+			expect(requestSignal?.aborted).toBe(false);
+
+			const finish = (async () => {
+				await emit({ type: "response.function_call_arguments.delta", delta: 'README.md"}' });
+				await emit({
+					type: "response.output_item.done",
+					item: {
+						type: "function_call",
+						id: "fc_1",
+						call_id: "call_1",
+						name: "read_file",
+						arguments: '{"path":"README.md"}',
+					},
+				});
+				await emit({
+					type: "response.completed",
+					response: { id: "resp_tool_ok", status: "completed", usage: DEFAULT_USAGE },
+				});
+			})();
+			const settled = await Promise.race([
+				Promise.all([stream.result(), consumed, finish]).then(([result]) => result),
+				scheduler.wait(500).then(() => "pending" as const),
+			]);
+			if (settled === "pending") throw new Error("Active tool response did not finish");
+			expect(settled.stopReason).toBe("toolUse");
+			expect(settled.content).toContainEqual(
+				expect.objectContaining({ type: "toolCall", name: "read_file", arguments: { path: "README.md" } }),
+			);
+			expect(requestSignal?.aborted).toBe(false);
+			expect(vi.getTimerCount()).toBe(baselineTimers);
+		} finally {
+			await writer.abort().catch(() => {});
+			resetCodexAccessProgramListings();
+			vi.useRealTimers();
+			await tempDir.remove();
+		}
+	});
+
 	it("retries a pre-response watchdog timeout with a fresh attempt signal", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());

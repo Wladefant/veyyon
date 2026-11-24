@@ -479,14 +479,14 @@ export class RetryRuntime {
 		// Create the retry gate on the first attempt so waitForRetry() can await it.
 		this.#ensureGate();
 
-		const errorMessage = message.errorMessage || "Unknown error";
+		const originalError = message.errorMessage || "Unknown error";
 		const id = this.#classify(message);
 		const staleReplay = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const attempt: RetryAttempt = {
 			message,
 			id,
-			errorMessage,
-			parsedRetryAfterMs: extractRetryHint(undefined, errorMessage),
+			errorMessage: originalError,
+			parsedRetryAfterMs: extractRetryHint(undefined, originalError),
 			// All attempts on the current model are spent. Don't fail yet: the
 			// fallback chain gets one last consult. Credential rotation can
 			// consume the entire budget without the fallback branch ever running

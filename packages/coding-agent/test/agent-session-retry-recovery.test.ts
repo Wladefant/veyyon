@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { Agent } from "@veyyon/agent-core";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
@@ -18,8 +18,11 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveAssistantErrorPresentation } from "@veyyon/coding-agent/presentation/transcript-builder";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import type { AgentSessionEvent, ScheduledAgentContinueOptions } from "@veyyon/coding-agent/session/agent-session-types";
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
+import { PostPromptTasks } from "@veyyon/coding-agent/session/runtime/post-prompt-tasks";
+import { type RetryHost, RetryRuntime, type RetrySession } from "@veyyon/coding-agent/session/runtime/retry-runtime";
+import { TurnContinuations } from "@veyyon/coding-agent/session/runtime/turn-continuations";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
@@ -111,6 +114,71 @@ function successfulAssistantEntry(sessionManager: SessionManager, text: string):
 	return found;
 }
 
+/**
+ * Yield in real time until `predicate` holds. Fake timers do not move `node:timers/promises`, so this
+ * is how a fake-timer test waits for the session to reach a state without advancing the clock.
+ */
+async function waitUntil(predicate: () => boolean, attempts = 500): Promise<void> {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		if (predicate()) return;
+		await scheduler.wait(1);
+	}
+	throw new Error("Timed out waiting for the retry state under test");
+}
+
+interface RetryFixture {
+	runtime: RetryRuntime;
+	messages: AgentMessage[];
+	events: AgentSessionEvent[];
+	scheduled: ScheduledAgentContinueOptions[];
+}
+
+/**
+ * A RetryRuntime with the real retry settings and settlement logic. No model is active, so no
+ * fallback chain or provider is consulted. `continuationScheduler`, when given, handles each
+ * continuation in place of the fixture's record of it.
+ */
+function createRetryFixture(continuationScheduler?: (options: ScheduledAgentContinueOptions) => void): RetryFixture {
+	const messages: AgentMessage[] = [];
+	const events: AgentSessionEvent[] = [];
+	const scheduled: ScheduledAgentContinueOptions[] = [];
+	const session = {
+		agent: { state: { messages }, appendMessage: () => {}, replaceMessages: () => {} },
+		sessionManager: { getBranch: () => [] },
+		settings: Settings.isolated({
+			"retry.baseDelayMs": 1,
+			"retry.maxDelayMs": 100,
+			"retry.maxRetries": 3,
+		}),
+		modelRegistry: undefined,
+		model: undefined,
+		thinkingLevel: undefined,
+		sessionId: "retry-fixture",
+		operatorNotices: { warn: () => {} },
+		configuredThinkingLevel: () => undefined,
+		setThinkingLevel: () => {},
+	} as unknown as RetrySession;
+	const host: RetryHost = {
+		emitSessionEvent: async event => {
+			events.push(event);
+		},
+		promptGeneration: () => 0,
+		scheduleAgentContinue: options => {
+			if (!options) throw new Error("Retry continuations always carry options");
+			scheduled.push(options);
+			continuationScheduler?.(options);
+		},
+		abortIsDeliberate: () => false,
+		setModelWithProviderSessionReset: () => {},
+		resetCurrentResponsesProviderSession: () => {},
+		maybeAutoRedeemCodexReset: async () => false,
+		removeAssistantMessageFromActiveContext: () => {},
+		persistLifecycleErrorMessage: async () => {},
+		resetSessionStopContinuationState: () => {},
+	};
+	return { runtime: new RetryRuntime(session, host), messages, events, scheduled };
+}
+
 describe("AgentSession retry recovery", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
@@ -143,6 +211,7 @@ describe("AgentSession retry recovery", () => {
 		const codex = requireBundledModel("openai-codex", "gpt-5.6-sol") as Model<"openai-codex-responses">;
 		const next = requireBundledModel("openai", "gpt-4o-mini");
 		const token = createCodexTestToken();
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		authStorage.setRuntimeApiKey("openai-codex", token);
 		authStorage.setRuntimeApiKey("openai", "test-key");
 		const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
@@ -236,6 +305,161 @@ describe("AgentSession retry recovery", () => {
 			release();
 			vi.useRealTimers();
 		}
+	});
+
+	it("settles a pending Codex fallback credential at its setup deadline and never resurrects it", async () => {
+		const primary = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const codex = requireBundledModel("openai-codex", "gpt-5.6-sol") as Model<"openai-codex-responses">;
+		const next = requireBundledModel("openai", "gpt-4o-mini");
+		const token = createCodexTestToken();
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey("openai-codex", token);
+		authStorage.setRuntimeApiKey("openai", "test-key");
+		// The Codex credential is still being resolved when the fallback is chosen. It stays pending
+		// until the test releases it, so only the setup deadline can settle the turn.
+		const credentialHold = Promise.withResolvers<string>();
+		let codexCredentialRequests = 0;
+		const codexStreams = vi.fn();
+		const mock = createMockModel({
+			responses: [{ throw: RETRIABLE_SERVER_ERROR }, { content: ["Recovered on the next fallback"] }],
+		});
+		const agent = new Agent({
+			getApiKey: model => {
+				if (model.provider !== "openai-codex") return "test-key";
+				codexCredentialRequests += 1;
+				return credentialHold.promise;
+			},
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [] },
+			streamFn: (model, context, options) => {
+				if (model.provider === "openai-codex") {
+					codexStreams();
+					throw new Error("the stalled Codex target must not be invoked");
+				}
+				return mock.stream(model, context, options);
+			},
+		});
+		const sessionManager = SessionManager.inMemory();
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			modelRegistry,
+			// No same-model retry: the first failure goes straight to the fallback chain.
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxDelayMs": 100,
+				"retry.maxRetries": 0,
+				"retry.fallbackChains": { "anthropic/*": [`${codex.provider}/${codex.id}`, `${next.provider}/${next.id}`] },
+			}),
+		});
+		sessions.push(session);
+		const retryEnds: AutoRetryEndEvent[] = [];
+		const appliedFallbacks: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") retryEnds.push(event);
+			if (event.type === "retry_fallback_applied") appliedFallbacks.push(event.to);
+		});
+		vi.useFakeTimers();
+		try {
+			const pending = session.prompt("Answer once the fallback can serve it");
+			await waitUntil(() => codexCredentialRequests === 1);
+			// One millisecond short of the setup deadline the stalled credential still holds the turn.
+			vi.advanceTimersByTime(299_999);
+			expect(await Promise.race([pending.then(() => "settled"), scheduler.wait(50).then(() => "pending")])).toBe(
+				"pending",
+			);
+			expect(codexStreams).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			const outcome = await Promise.race([pending.then(() => "settled"), scheduler.wait(500).then(() => "pending")]);
+			expect(outcome).toBe("settled");
+			expect(codexStreams).not.toHaveBeenCalled();
+			expect(mock.calls).toHaveLength(2);
+			expect(retryEnds).toEqual([expect.objectContaining({ success: true })]);
+			expect(appliedFallbacks).toEqual([`${codex.provider}/${codex.id}`, `${next.provider}/${next.id}`]);
+			expect(successfulAssistantEntry(sessionManager, "Recovered on the next fallback").message.stopReason).toBe(
+				"stop",
+			);
+			const settledEntries = assistantEntries(sessionManager).length;
+
+			// A late answer from the abandoned credential must not start a Codex turn or a second recovery.
+			credentialHold.resolve(token);
+			await scheduler.wait(10);
+			vi.advanceTimersByTime(1_000);
+			await scheduler.wait(10);
+			expect(codexStreams).not.toHaveBeenCalled();
+			expect(mock.calls).toHaveLength(2);
+			expect(retryEnds).toHaveLength(1);
+			expect(assistantEntries(sessionManager)).toHaveLength(settledEntries);
+		} finally {
+			credentialHold.resolve(token);
+			vi.useRealTimers();
+		}
+	});
+
+	it("releases the retry gate when the scheduler skips its continuation", async () => {
+		const continueAgent = vi.fn(async () => {});
+		const continuations = new TurnContinuations(new PostPromptTasks({ promptGeneration: () => 0 }), {
+			agent: {
+				continue: continueAgent,
+				waitForIdle: async () => {},
+				state: { isStreaming: false },
+			},
+			promptGeneration: () => 0,
+			unavailable: () => true,
+			disposed: () => false,
+			beginTurn: () => {},
+			endTurn: () => {},
+			restoreFallbackPrimary: async () => {},
+			retryGate: () => undefined,
+			ttsrResume: () => undefined,
+			releaseTtsrResume: () => {},
+			postCompactionNudges: () => [],
+			promptWith: async () => {},
+		});
+		const fixture = createRetryFixture(options => continuations.scheduleContinue(options));
+		const message = assistantMessage({ stopReason: "error", errorMessage: RETRIABLE_SERVER_ERROR });
+		expect(await fixture.runtime.recoverFailedTurn(message)).toBe(true);
+		const gate = fixture.runtime.gate;
+		if (!gate) throw new Error("Expected a retry gate before the scheduled continuation");
+		expect(await Promise.race([gate.then(() => "released"), scheduler.wait(500).then(() => "held")])).toBe(
+			"released",
+		);
+		expect(continueAgent).not.toHaveBeenCalled();
+		expect(fixture.events).toEqual([
+			expect.objectContaining({ type: "auto_retry_start" }),
+			expect.objectContaining({
+				type: "auto_retry_end",
+				success: false,
+				finalError: expect.stringContaining("Retry continuation skipped: session-unavailable"),
+			}),
+		]);
+		expect(fixture.runtime.isRetrying).toBe(false);
+	});
+
+	it("keeps a newer retry gate when an older continuation is skipped after it was created", async () => {
+		const fixture = createRetryFixture();
+		const message = assistantMessage({ stopReason: "error", errorMessage: RETRIABLE_SERVER_ERROR });
+		expect(await fixture.runtime.recoverFailedTurn(message)).toBe(true);
+		const staleSkip = fixture.scheduled.at(-1)?.onSkip;
+		const firstGate = fixture.runtime.gate;
+		expect(staleSkip).toBeDefined();
+		expect(firstGate).toBeDefined();
+
+		// The first turn settles and releases its gate. A newer failure then holds a gate of its own.
+		fixture.runtime.resolve();
+		expect(await fixture.runtime.recoverFailedTurn(message)).toBe(true);
+		const newerGate = fixture.runtime.gate;
+		if (!newerGate) throw new Error("Expected the newer failure to hold a retry gate");
+		expect(newerGate).not.toBe(firstGate);
+		// The older continuation is skipped only now. Its skip must not release the newer gate.
+		staleSkip?.("stale-generation");
+		expect(fixture.runtime.gate).toBe(newerGate);
+		expect(fixture.runtime.isRetrying).toBe(true);
+		expect(await Promise.race([newerGate.then(() => "released"), scheduler.wait(10).then(() => "held")])).toBe(
+			"held",
+		);
+		expect(fixture.events.map(event => event.type)).toEqual(["auto_retry_start", "auto_retry_start"]);
+		fixture.runtime.resolve();
 	});
 
 	async function runCredentialRecovery(): Promise<RecoveryRun> {
