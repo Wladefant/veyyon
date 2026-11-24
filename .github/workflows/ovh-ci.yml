@@ -109,7 +109,7 @@ jobs:
           base="$(git merge-base "$PINNED_BASE" HEAD)"
           echo "PINNED_BASE=$PINNED_BASE" >> "$GITHUB_ENV"
           echo "DIFF_BASE=$base" >> "$GITHUB_ENV"
-          workflow_paths=(.github/workflows/ci.yml .github/workflows/ovh-ci.yml scripts/validate-ovh-pr-workflow.ts)
+          workflow_paths=(.github/workflows/ci.yml .github/workflows/ovh-ci.yml scripts/ovh-test-shards.mjs scripts/validate-ovh-pr-workflow.ts)
           workflow_changes="$(git diff --name-only --no-renames "$base" HEAD -- "${workflow_paths[@]}")"
           if [[ -n "$workflow_changes" ]]; then
             echo 'workflow_changed=true' >> "$GITHUB_OUTPUT"
@@ -319,6 +319,8 @@ jobs:
           INPUT_FILE: ${{ runner.temp }}/ovh-related-tests
           OUTPUT_DIR: ${{ runner.temp }}/ovh-shards
           RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          # Reserve time for checkout, dependencies, artifacts and cleanup.
+          OVH_TARGET_SHARD_MS: ${{ github.event_name == 'pull_request' && '180000' || '' }}
         run: |
           set -euo pipefail
           mkdir -p "$OUTPUT_DIR"
