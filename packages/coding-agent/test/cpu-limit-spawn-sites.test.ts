@@ -218,11 +218,13 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	},
 	"packages/coding-agent/src/task/provider-error-reporter.ts": {
 		wired: true,
-		reason: "the model routing record-error script is adopted into the root budget; reportProviderError has no session id to charge",
+		reason:
+			"the model routing record-error script is adopted into the root budget; reportProviderError has no session id to charge",
 	},
 	"packages/coding-agent/src/secrets/intake-vault.ts": {
 		wired: true,
-		reason: "every bw-us vault CLI run is adopted into the root budget; the intake host has no single session to charge",
+		reason:
+			"every bw-us vault CLI run is adopted into the root budget; the intake host has no single session to charge",
 	},
 
 	// Exempt. Each of these is either not started by a session, or is not a
@@ -320,7 +322,8 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	},
 	"packages/coding-agent/src/cli/supervisor/session-stderr.ts": {
 		wired: false,
-		reason: "imports ChildProcess as a type only and spawns nothing; the supervisor's process.ts spawns the child and is exempt",
+		reason:
+			"imports ChildProcess as a type only and spawns nothing; the supervisor's process.ts spawns the child and is exempt",
 	},
 	"packages/coding-agent/src/config/resolve-config-value-sync.ts": {
 		wired: false,
@@ -329,7 +332,8 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	},
 	"packages/coding-agent/src/launch/terminal-control-transport.ts": {
 		wired: false,
-		reason: "the Windows broker that serves the harness's terminal-control pipe; the operator's control channel, and a budget kill would sever it",
+		reason:
+			"the Windows broker that serves the harness's terminal-control pipe; the operator's control channel, and a budget kill would sever it",
 	},
 	"packages/coding-agent/src/tools/web/browser/extension-session.ts": {
 		wired: false,

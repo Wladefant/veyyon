@@ -208,7 +208,7 @@ describe("agent runtime model resolution", () => {
 		const unavailable = model("primary", "unavailable-model");
 		const available = model("fallback", "working-model");
 		let models = [available];
-		let persistedEntries: Array<{ type: string; data: unknown }> = [];
+		const persistedEntries: Array<{ type: string; data: unknown }> = [];
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
 			const session = createYieldingSession();
 			session.sessionManager.appendCustomEntry = ((type: string, data: unknown) => {
@@ -222,7 +222,7 @@ describe("agent runtime model resolution", () => {
 			} as never;
 		});
 
-		const result = await runSubprocess({
+		await runSubprocess({
 			cwd: "/tmp",
 			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
 			task: "work",
@@ -258,7 +258,6 @@ describe("agent runtime model resolution", () => {
 	});
 
 	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
-
 		const defaultModel = model("anthropic", "claude-opus-5-5");
 		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
 			async () =>

@@ -136,7 +136,10 @@ describe("journal line parsing", () => {
 	it("refuses a line that is not JSON and a line that repeats a member name", () => {
 		expect(parseSubagentLaunchGrantLine("{")).toEqual({ ok: false, problem: "the line is not valid JSON" });
 
-		const line = JSON.stringify(receipt()).replace('"agentId":"LaunchLane"', '"agentId":"LaunchLane","agentId":"Other"');
+		const line = JSON.stringify(receipt()).replace(
+			'"agentId":"LaunchLane"',
+			'"agentId":"LaunchLane","agentId":"Other"',
+		);
 		expect(JSON.parse(line).agentId).toBe("Other");
 		expect(parseSubagentLaunchGrantLine(line)).toEqual({ ok: false, problem: "the line repeats a member name" });
 	});

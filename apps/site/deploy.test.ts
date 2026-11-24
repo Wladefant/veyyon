@@ -68,6 +68,9 @@ function createDisposableWorkspace(): TestWorkspace {
 		);
 	}
 
+	// The build also starts Bun children, which load the fixture from this config.
+	fs.writeFileSync(path.join(workspaceRoot, "bunfig.toml"), `preload = [${JSON.stringify(mockPreloadPath)}]\n`);
+
 	return {
 		workspaceRoot,
 		siteDir,
@@ -86,19 +89,13 @@ const mockPreloadPath = path.join(mockDir, "mock-github.cjs");
 fs.writeFileSync(
 	mockPreloadPath,
 	`
-const originalFetch = globalThis.fetch;
-if (originalFetch) {
-	globalThis.fetch = async function (url, options) {
-		const target = typeof url === "string" ? url : url?.url || url?.href || String(url);
-		if (target.includes("api.github.com/repos/santhreal/veyyon/releases")) {
-			return new Response("[]", {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		}
-		return originalFetch.call(this, url, options);
-	};
-}
+globalThis.fetch = async function (url) {
+	const target = new URL(typeof url === "string" ? url : url?.url || url?.href);
+	if (target.origin !== "https://api.github.com" || target.pathname !== "/repos/Wladefant/veyyon/releases") {
+		throw new Error("Unexpected test fetch: " + target);
+	}
+	return Response.json([]);
+};
 `,
 );
 
@@ -112,10 +109,11 @@ afterAll(() => {
 });
 
 function testSubprocessEnv(extra: Record<string, string> = {}): Record<string, string> {
-	const nodeOptions = [process.env.NODE_OPTIONS, `--require ${mockPreloadPath}`].filter(Boolean).join(" ");
+	const nodeOptions = [process.env.NODE_OPTIONS, `--require ${JSON.stringify(mockPreloadPath)}`].filter(Boolean).join(" ");
 	return {
 		...process.env,
 		NODE_OPTIONS: nodeOptions,
+		VEYYON_SITE_REPO: "Wladefant/veyyon",
 		...extra,
 	};
 }

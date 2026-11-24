@@ -9,34 +9,8 @@ import type { AgentSession } from "./agent-session";
 import { sessionCpuExecHooks } from "./cpu-limit";
 import type { McpEventBatchDetails, McpEventEntry, McpNotificationEntry } from "./factory-notices";
 
-interface MCPEventsManagerTarget {
-	setOnEvent(
-		handler:
-			| ((
-					serverName: string,
-					event: MCPEventOccurrence,
-					subscriptionKey: string,
-				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
-			| undefined,
-	): void;
-	setOnEventCursor?(
-		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
-	): void;
-	setEventCursorProvider?(
-		provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined,
-	): void;
-	setOnEventControl?(
-		handler:
-			| ((
-					serverName: string,
-					subscriptionKey: string,
-					message: MCPWebhookControl,
-				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
-			| undefined,
-	): void;
-	clearOnEvent?(): void;
-	stopEvents?(): void | Promise<void>;
-}
+type MCPEventsManagerTarget = Pick<MCPManager, "setOnEvent"> &
+	Partial<Pick<MCPManager, "setOnEventCursor" | "setEventCursorProvider" | "setOnEventControl" | "stopEvents">>;
 
 /** `key=value` command arguments as prompt arguments. An argument with no key before its `=` is dropped. */
 function promptArguments(args: string[]): Record<string, string> {
@@ -149,7 +123,10 @@ export function wireReactiveMCPManager({ manager, session, settings, refreshTool
 		let persistenceChain: Promise<void> = Promise.resolve();
 		const serializePersistence = <T>(operation: () => Promise<T>): Promise<T> => {
 			const result = persistenceChain.then(operation);
-			persistenceChain = result.then(() => undefined, () => undefined);
+			persistenceChain = result.then(
+				() => undefined,
+				() => undefined,
+			);
 			return result;
 		};
 		const ensureDurableJournal = async (): Promise<void> => {
@@ -191,15 +168,17 @@ export function wireReactiveMCPManager({ manager, session, settings, refreshTool
 				eventId?: string;
 			};
 			if (!state.subscriptionKey) continue;
-			if (state.cursor === null || typeof state.cursor === "string") cursors.set(state.subscriptionKey, state.cursor);
+			if (state.cursor === null || typeof state.cursor === "string")
+				cursors.set(state.subscriptionKey, state.cursor);
 			const id = state.eventId ?? state.control?.messageId;
 			if (!id) continue;
 			seenEventIds.add(scopedId(state.subscriptionKey, id));
-			const item = state.serverName && state.event
-				? { serverName: state.serverName, subscriptionKey: state.subscriptionKey, event: state.event }
-				: state.serverName && state.control
-					? { serverName: state.serverName, subscriptionKey: state.subscriptionKey, control: state.control }
-					: undefined;
+			const item =
+				state.serverName && state.event
+					? { serverName: state.serverName, subscriptionKey: state.subscriptionKey, event: state.event }
+					: state.serverName && state.control
+						? { serverName: state.serverName, subscriptionKey: state.subscriptionKey, control: state.control }
+						: undefined;
 			if (item) pendingToReplay.set(scopedId(state.subscriptionKey, id), item);
 		}
 

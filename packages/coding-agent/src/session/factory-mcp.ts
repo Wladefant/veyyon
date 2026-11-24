@@ -295,4 +295,3 @@ async function connectDeferredMCP(
 		logger.error("MCP tool load failed", { path: ".mcp.json", error: errorMessage(error) });
 	}
 }
-

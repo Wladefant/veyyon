@@ -1,7 +1,7 @@
-import { withFileLock } from "@veyyon/utils";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { withFileLock } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 
 export interface IntakeVaultIdentity {
@@ -65,13 +65,17 @@ function itemField(item: BitwardenItem, name: string): string | undefined {
 }
 
 function identityName(identity: IntakeVaultIdentity): string {
-	return `${ITEM_PREFIX}${createHash("sha256").update(JSON.stringify([identity.projectId, identity.purpose, identity.provider])).digest("hex")}`;
+	return `${ITEM_PREFIX}${createHash("sha256")
+		.update(JSON.stringify([identity.projectId, identity.purpose, identity.provider]))
+		.digest("hex")}`;
 }
 
 function identityMatches(item: BitwardenItem, identity: IntakeVaultIdentity): boolean {
-	return itemField(item, FIELD_PROJECT) === identity.projectId
-		&& itemField(item, FIELD_PURPOSE) === identity.purpose
-		&& itemField(item, FIELD_PROVIDER) === identity.provider;
+	return (
+		itemField(item, FIELD_PROJECT) === identity.projectId &&
+		itemField(item, FIELD_PURPOSE) === identity.purpose &&
+		itemField(item, FIELD_PROVIDER) === identity.provider
+	);
 }
 
 function digest(value: string): string {
@@ -98,15 +102,19 @@ export class BitwardenUsIntakeVault implements IntakeVault {
 			const rawItems = await this.#run(["list", "items", "--search", name]);
 			if (rawItems === undefined) fail("vault-invalid-response");
 			const items = this.#parseItems(rawItems);
-			const matches = items.filter(item => item.name === name
-				&& identityMatches(item, identity)
-				&& item.organizationId === this.#config.organizationId
-				&& item.collectionIds?.includes(collectionId));
+			const matches = items.filter(
+				item =>
+					item.name === name &&
+					identityMatches(item, identity) &&
+					item.organizationId === this.#config.organizationId &&
+					item.collectionIds?.includes(collectionId),
+			);
 			if (matches.length > 1) fail("vault-identity-mismatch");
 			if (matches.length === 1) {
 				const existing = matches[0];
-				if (typeof existing.id !== "string" || itemField(existing, FIELD_HASH) !== digest(value)) fail("vault-identity-mismatch");
-				if (await this.#readItem(identity, existing.id) !== value) fail("vault-identity-mismatch");
+				if (typeof existing.id !== "string" || itemField(existing, FIELD_HASH) !== digest(value))
+					fail("vault-identity-mismatch");
+				if ((await this.#readItem(identity, existing.id)) !== value) fail("vault-identity-mismatch");
 				return { itemId: existing.id };
 			}
 
@@ -133,7 +141,7 @@ export class BitwardenUsIntakeVault implements IntakeVault {
 			if (createResult === undefined) fail("vault-invalid-response");
 			const created = this.#parseItem(createResult);
 			if (typeof created.id !== "string" || !created.id) fail("vault-invalid-response");
-			if (await this.#readItem(identity, created.id) !== value) fail("vault-identity-mismatch");
+			if ((await this.#readItem(identity, created.id)) !== value) fail("vault-identity-mismatch");
 			return { itemId: created.id };
 		});
 	}
@@ -156,9 +164,14 @@ export class BitwardenUsIntakeVault implements IntakeVault {
 		} catch {
 			fail("vault-invalid-response");
 		}
-		if (collection === null || typeof collection !== "object" || Array.isArray(collection)) fail("vault-invalid-response");
+		if (collection === null || typeof collection !== "object" || Array.isArray(collection))
+			fail("vault-invalid-response");
 		const record = collection as { id?: string; name?: string; organizationId?: string };
-		if (record.id !== collectionId || record.name !== identity.vaultCollection || record.organizationId !== this.#config.organizationId) {
+		if (
+			record.id !== collectionId ||
+			record.name !== identity.vaultCollection ||
+			record.organizationId !== this.#config.organizationId
+		) {
 			fail("vault-identity-mismatch");
 		}
 		return collectionId;
@@ -169,14 +182,19 @@ export class BitwardenUsIntakeVault implements IntakeVault {
 		if (raw === undefined) fail("vault-invalid-response");
 		const item = this.#parseItem(raw);
 		this.#validateItem(item, identity, itemId);
-		if (typeof item.notes !== "string" || itemField(item, FIELD_HASH) !== digest(item.notes)) fail("vault-identity-mismatch");
+		if (typeof item.notes !== "string" || itemField(item, FIELD_HASH) !== digest(item.notes))
+			fail("vault-identity-mismatch");
 		return item.notes;
 	}
 
 	#validateItem(item: BitwardenItem, identity: IntakeVaultIdentity, itemId: string): void {
 		const collectionId = this.#config.projectCollections[identity.projectId];
-		if (item.id !== itemId || item.organizationId !== this.#config.organizationId || !item.collectionIds?.includes(collectionId ?? "")
-			|| !identityMatches(item, identity)) {
+		if (
+			item.id !== itemId ||
+			item.organizationId !== this.#config.organizationId ||
+			!item.collectionIds?.includes(collectionId ?? "") ||
+			!identityMatches(item, identity)
+		) {
 			fail("vault-identity-mismatch");
 		}
 	}
@@ -199,7 +217,8 @@ export class BitwardenUsIntakeVault implements IntakeVault {
 		} catch {
 			fail("vault-invalid-response");
 		}
-		if (!Array.isArray(items) || items.some(item => item === null || typeof item !== "object" || Array.isArray(item))) fail("vault-invalid-response");
+		if (!Array.isArray(items) || items.some(item => item === null || typeof item !== "object" || Array.isArray(item)))
+			fail("vault-invalid-response");
 		return items as BitwardenItem[];
 	}
 

@@ -207,7 +207,9 @@ export const commands: CommandEntry[] = [
 	{
 		name: "browser-extension",
 		load: () => import("./commands/browser-extension").then(m => m.default),
-		summary: { description: "Set up and control the Chrome extension bridge used by the browser tool (app.extension)" },
+		summary: {
+			description: "Set up and control the Chrome extension bridge used by the browser tool (app.extension)",
+		},
 	},
 	{
 		name: "tiny-models",
