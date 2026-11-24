@@ -1,6 +1,10 @@
 /**
  * Observable receipt, auth behavior, and registered CLI smoke contract tests
  * for `terminal-control rotate <session-id>`.
+ *
+ * The registered CLI cases run the Command in packages/coding-agent/src/commands/terminal-control.ts through
+ * the real cli.ts entry. The rotate success and the absent-session error come from that command's run();
+ * the unknown-action and extra-flag refusals are rejected by argument parsing with exit code 2.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as crypto from "node:crypto";
@@ -11,16 +15,16 @@ import * as path from "node:path";
 import { applyOwnerOnlyWindowsAcl, isRecord } from "@veyyon/utils";
 import { commands, resolveCliArgv } from "../../src/cli-commands";
 import {
+	serveTerminalControl,
+	type TerminalControlTarget,
+	type TerminalOwner,
+} from "../../src/launch/terminal-control";
+import {
 	discoverTerminalOwner,
 	isValidTerminalOwnerRecord,
 	sendTerminalControlRotate,
 	stripSecrets,
 } from "../../src/launch/terminal-control-client";
-import {
-	serveTerminalControl,
-	type TerminalControlTarget,
-	type TerminalOwner,
-} from "../../src/launch/terminal-control";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..");
@@ -350,9 +354,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			const { promise, resolve } = Promise.withResolvers<string>();
 			const nonce = crypto.randomUUID();
 			const endpoint =
-				process.platform === "win32"
-					? `\\\\.\\pipe\\mock-term-${nonce}`
-					: path.join(tempDir, `mock-${nonce}.sock`);
+				process.platform === "win32" ? `\\\\.\\pipe\\mock-term-${nonce}` : path.join(tempDir, `mock-${nonce}.sock`);
 
 			const server = net.createServer(socket => {
 				socket.setEncoding("utf8");
@@ -469,7 +471,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 		it("is registered in top-level commands table", () => {
 			const entry = commands.find(e => e.name === "terminal-control");
 			expect(entry).toBeDefined();
-			expect(entry?.summary?.description).toContain("Rotate");
+			expect(entry?.summary?.description).toBe("Manage and rotate terminal control session credentials");
 		});
 
 		it("rotates credentials through runCli, emitting only redacted receipt, changing token, and enabling new ping", async () => {
