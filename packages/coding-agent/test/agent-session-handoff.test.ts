@@ -1868,14 +1868,57 @@ describe("AgentSession handoff", () => {
 		},
 	);
 
+	const successorBrief =
+		"# COMPACT\n## Goal\nFinish task\n## State\nTool completed\n## Open steps\nContinue\n## Repository\nUnknown\n## Tests\nUnknown\n## Files\nUnknown";
+
+	it("stops the current turn if the new transcript cannot be written after switching", async () => {
+		const id = "handoff-write-failure";
+		const mock = await createContinuingChild({ id });
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(successorBrief);
+		const sourceId = session.sessionId;
+		const ensureOnDisk = sessionManager.ensureOnDisk.bind(sessionManager);
+		vi.spyOn(sessionManager, "ensureOnDisk").mockImplementation(async () => {
+			if (session.sessionId !== sourceId) throw new Error("Successor transcript write failed");
+			await ensureOnDisk();
+		});
+
+		await session.prompt("Perform the tool steps");
+
+		expect(session.sessionId).not.toBe(sourceId);
+		expect(mock.calls).toHaveLength(1);
+		expect(session.agent.state.error).toBe("Successor transcript write failed");
+		expect(JSON.stringify(session.agent.state.messages)).toContain("# COMPACT");
+		expect(JSON.stringify(session.agent.state.messages)).not.toContain("SOURCE_TRANSCRIPT_SENTINEL");
+		expect(AgentRegistry.global().get(id)?.sessionFile).toBe(session.sessionFile);
+	});
+
+	it("cancels automatic summary generation when the live turn aborts", async () => {
+		const mock = await createContinuingChild({ id: "handoff-turn-abort" });
+		const sourceId = session.sessionId;
+		const started = Promise.withResolvers<AbortSignal | undefined>();
+		const generated = Promise.withResolvers<string>();
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockImplementation((_context, _model, options) => {
+			started.resolve(options.streamOptions?.signal);
+			return generated.promise;
+		});
+
+		const prompt = session.prompt("Perform the tool steps");
+		const summarySignal = await started.promise;
+		session.agent.abort();
+		generated.resolve(successorBrief);
+		await prompt;
+
+		expect(summarySignal?.aborted).toBe(true);
+		expect(session.sessionId).toBe(sourceId);
+		expect(mock.calls).toHaveLength(1);
+	});
+
 	it("starts one fresh successor and keeps its routing and accounting through later tool turns", async () => {
 		const mock = await createContinuingChild({ id: "handoff-child" });
-		const brief =
-			"# COMPACT\n## Goal\nFinish task\n## State\nTool completed\n## Open steps\nContinue\n## Repository\nUnknown\n## Tests\nUnknown\n## Files\nUnknown";
 		let streamingDuringSummary = false;
 		const summarySpy = vi.spyOn(compactionModule, "generateHandoffFromContext").mockImplementation(async () => {
 			streamingDuringSummary = session.isStreaming;
-			return brief;
+			return successorBrief;
 		});
 		const sourceId = session.sessionId;
 		await session.prompt("Perform the tool steps");

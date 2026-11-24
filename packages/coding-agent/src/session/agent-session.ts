@@ -1667,7 +1667,8 @@ export class AgentSession {
 			if (automaticHandoffModel) {
 				if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
 				if (signal?.aborted) return;
-				if (await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel)) return;
+				if (await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel, signal)) return;
+				if (signal?.aborted) return;
 			}
 			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
 		});
@@ -5054,29 +5055,41 @@ export class AgentSession {
 		);
 	}
 	/** Hand a spawned expensive agent's transcript to a fresh successor. False keeps the current transcript. */
-	async #maybeHandoffExpensiveAgent(messages: AgentMessage[], summaryModel: Model): Promise<boolean> {
+	async #maybeHandoffExpensiveAgent(
+		messages: AgentMessage[],
+		summaryModel: Model,
+		signal?: AbortSignal,
+	): Promise<boolean> {
 		const agentId = this.#config.agentId;
-		this.#lastLaneHandoffSessionId = this.sessionId;
+		const sourceSessionId = this.sessionId;
+		this.#lastLaneHandoffSessionId = sourceSessionId;
 		try {
 			const result = await this.handoff(undefined, {
 				autoTriggered: true,
 				compactSummary: true,
 				preserveAgentLineage: true,
 				summaryModel,
+				signal,
 			});
-			if (!result) return false;
-			const registry = AgentRegistry.global();
-			if (agentId && registry.get(agentId)?.session === this) {
-				registry.attachSession(agentId, this, this.sessionFile);
-			}
-			messages.splice(0, messages.length, ...this.agent.state.messages);
-			return true;
+			return result !== undefined;
 		} catch (error) {
+			// Once the session manager has switched, stop the turn on failure.
+			// Continuing would send source messages against the successor's transcript.
+			if (this.sessionId !== sourceSessionId) throw error;
+			if (signal?.aborted) return false;
 			logger.warn("Automatic expensive-agent handoff failed; retaining the current transcript", {
 				agentId,
 				error: errorMessage(error),
 			});
 			return false;
+		} finally {
+			if (this.sessionId !== sourceSessionId) {
+				const registry = AgentRegistry.global();
+				if (agentId && registry.get(agentId)?.session === this) {
+					registry.attachSession(agentId, this, this.sessionFile);
+				}
+				messages.splice(0, messages.length, ...this.agent.state.messages);
+			}
 		}
 	}
 	/**

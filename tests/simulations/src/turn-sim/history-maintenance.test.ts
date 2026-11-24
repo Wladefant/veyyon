@@ -213,7 +213,7 @@ async function expectedTextWithRecovery(simulation: Simulation, row: Row, call: 
 				entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === call.id,
 		);
 	expect(branchEntry).toBeDefined();
-	if (!branchEntry || branchEntry.type !== "message" || branchEntry.message.role !== "toolResult") {
+	if (branchEntry?.type !== "message" || branchEntry.message.role !== "toolResult") {
 		throw new Error(`Expected recorded toolResult entry for ${call.id}`);
 	}
 

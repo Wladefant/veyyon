@@ -129,6 +129,7 @@ describe("Compaction summary thinking budget on Anthropic", () => {
 		"keeps a budget-mode thinking budget under the summary cap (reserve %i)",
 		async reserveTokens => {
 			const model = anthropicBudgetModel();
+			if (model.maxTokens === null) throw new Error("Expected a known output cap");
 			const bodies = await captureSummaryBodies(model, reserveTokens, "test-key");
 			expect(bodies.length).toBeGreaterThan(0);
 			for (const body of bodies) {
@@ -146,6 +147,7 @@ describe("Compaction summary thinking budget on Anthropic", () => {
 		"sends adaptive thinking without a budget that could exceed the summary cap (reserve %i)",
 		async reserveTokens => {
 			const model = anthropicAdaptiveModel();
+			if (model.maxTokens === null) throw new Error("Expected a known output cap");
 			const bodies = await captureSummaryBodies(model, reserveTokens, "test-key");
 			expect(bodies.length).toBeGreaterThan(0);
 			for (const body of bodies) {
@@ -164,6 +166,7 @@ describe("Compaction summary thinking budget on Antigravity", () => {
 		"keeps a Claude thinking budget under the summary cap (reserve %i)",
 		async reserveTokens => {
 			const model = antigravityClaudeModel();
+			if (model.maxTokens === null) throw new Error("Expected a known output cap");
 			const apiKey = JSON.stringify({ token: "token", projectId: "proj-123" });
 			const bodies = await captureSummaryBodies(model, reserveTokens, apiKey);
 			expect(bodies.length).toBeGreaterThan(0);

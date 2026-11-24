@@ -299,6 +299,7 @@ export class SessionHandoff {
 			}
 			const sessionManager = session.sessionManager;
 			await sessionManager.flush();
+			if (handoffSignal.aborted) throw new Error("Handoff cancelled");
 			if (!options?.preserveAgentLineage) {
 				host.cancelOwnAsyncJobs();
 			}
@@ -359,17 +360,17 @@ export class SessionHandoff {
 				// same one `/todo` writes, so a reload of the new transcript still finds them.
 				sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: carriedTodoPhases });
 			}
+			// Seed the live successor before persistence, which can fail after the switch.
+			// Its in-memory context must never revert to the source transcript.
+			const sessionContext = session.buildDisplaySessionContext();
+			agent.replaceMessages(sessionContext.messages);
+			host.resetAllAdvisorRuntimes();
+			host.todo.syncFromBranch();
 			await sessionManager.ensureOnDisk();
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && session.settings.get("compaction.handoffSaveToDisk")) {
 				savedPath = await this.#saveDocument(handoffText);
 			}
-
-			// Rebuild agent messages from session
-			const sessionContext = session.buildDisplaySessionContext();
-			agent.replaceMessages(sessionContext.messages);
-			host.resetAllAdvisorRuntimes();
-			host.todo.syncFromBranch();
 			if (extensionRunner) {
 				await extensionRunner.emit({
 					type: "session_switch",

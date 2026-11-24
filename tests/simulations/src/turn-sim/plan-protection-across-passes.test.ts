@@ -152,7 +152,7 @@ describe("every pass that rewrites history leaves the plan alone", () => {
 					entry.message.toolCallId === "control-1",
 			);
 		expect(control1Entry).toBeDefined();
-		if (!control1Entry || control1Entry.type !== "message" || control1Entry.message.role !== "toolResult") {
+		if (control1Entry?.type !== "message" || control1Entry.message.role !== "toolResult") {
 			throw new Error("Expected recorded toolResult entry for control-1");
 		}
 
