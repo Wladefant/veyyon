@@ -72,6 +72,11 @@ const ACTIONS: Record<BrowserParams["action"], true> = {
 };
 
 const KINDS = Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>;
+/**
+ * The kinds main's renderer drew. `extension` came after main froze (0d34d448e), so the oracle has no row
+ * for it; it is drawn against its own expectation in the test after the sweep.
+ */
+const MAIN_KINDS = KINDS.filter(kind => kind !== "extension");
 const EVERY_ACTION = Object.keys(ACTIONS) as Array<BrowserParams["action"]>;
 const WIDTHS = [200, WIDTH, 40];
 const DISCLOSURES = [
@@ -130,7 +135,7 @@ describe("browser tool differential", () => {
 	it("draws the tab row byte for byte, over every action, every browser kind and every outcome", () => {
 		for (const action of EVERY_ACTION) {
 			if (action === "run" || action === "save_state") continue;
-			for (const kind of KINDS) {
+			for (const kind of MAIN_KINDS) {
 				if (action !== "open" && action !== "close") continue;
 				const args: BrowserViewArgs = { action, name: "docs", url: "https://example.com/asked-for" };
 				const settled: BrowserViewResult = {
@@ -221,6 +226,21 @@ describe("browser tool differential", () => {
 			{ action: "close", name: "admin", storageState: "/repo/x.json" },
 		);
 		expect(closed).not.toContain("x.json");
+	});
+
+	/** What main never drew: an `extension` tab names its kind after the tab and before the url. */
+	it("draws an extension tab row in its own words", () => {
+		const args: BrowserViewArgs = { action: "open", name: "docs", url: "https://example.com/asked-for" };
+		const row = (context: ToolViewContext): string => {
+			const result: BrowserViewResult = {
+				content: [],
+				details: { action: "open", name: "landed", url: URL, browser: "extension" },
+			};
+			return stripVTControlCharacters(resultView(result, context, args, 200).join("\n"));
+		};
+		for (const [context] of DISCLOSURES) {
+			expect(row(context)).toContain(`Open tab "landed" extension · ${URL}`);
+		}
 	});
 
 	it("draws every way a close names its tabs byte for byte: all, one, and killed", () => {

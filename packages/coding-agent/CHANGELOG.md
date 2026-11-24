@@ -6,6 +6,8 @@
 
 - Reject invalid browser app routes before launch, cache IRC schemas across launches, and repair tool and trust regression coverage ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep the default and allowed agent types in the shorter task prompt ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Return promptly when a Python eval cell does not acknowledge cancellation. Report that the cell may still be running without stopping the kernel ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep MCP authentication refresh within the request deadline ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
