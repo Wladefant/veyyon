@@ -135,7 +135,7 @@
         "packages/coding-agent/src/utils/zip.ts"
       ],
       "tests": [
-        "packages/utils/test/windows-file-replace.test.ts",
+        "packages/utils/test/a-windows-write-keeps-the-destination-dacl.test.ts",
         "packages/coding-agent/test/writethrough-atomic.test.ts",
         "packages/coding-agent/test/tools/atomic-write-via-write-tool-adversarial.test.ts"
       ],
