@@ -748,7 +748,7 @@ describe("history read bounded regressions", () => {
 					message: { role: "assistant", content: [{ type: "text", text: "X".repeat(1024 * 1024) }] },
 				}) + "\n";
 			let content = sessionFixtureJsonl("disk cancel transcript");
-			while (Buffer.byteLength(content, "utf-8") < STREAM_LOAD_THRESHOLD_BYTES + 1024) {
+			while (Buffer.byteLength(content, "utf-8") < sessionLoaderModule.STREAM_LOAD_THRESHOLD_BYTES + 1024) {
 				content += paddingLine;
 			}
 			await fs.writeFile(sessionFilePath, content);
@@ -1114,12 +1114,14 @@ describe("history directory index", () => {
 		const dir = path.join(root, "artifacts");
 		await fs.mkdir(dir, { recursive: true });
 		await fs.writeFile(path.join(dir, "a.txt"), "a");
+		await fs.utimes(dir, 1_000, 1_000);
 		const first = new HistoryDirectoryIndex([dir]);
 		await first.load();
 		expect((await first.entries(dir)).map(entry => entry.name)).toEqual(["a.txt"]);
 		await first.save();
 
 		await fs.writeFile(path.join(dir, "b.txt"), "b");
+		await fs.utimes(dir, 2_000, 2_000);
 		const second = new HistoryDirectoryIndex([dir]);
 		await second.load();
 		expect((await second.entries(dir)).map(entry => entry.name).sort()).toEqual(["a.txt", "b.txt"]);

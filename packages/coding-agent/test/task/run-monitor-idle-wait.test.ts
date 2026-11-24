@@ -196,12 +196,16 @@ describe("run monitor idle-wait hints", () => {
 
 		const replaced = createMonitor("gpt-6.1-sol");
 		replaced.emit(toolStart("job", { op: "poll" }));
-		const replacement = { emitNotice: vi.fn(), sendUserMessage: vi.fn(async () => {}) } as unknown as AgentSession;
+		const replacementNotice = vi.fn();
+		const replacement = {
+			emitNotice: replacementNotice,
+			sendUserMessage: vi.fn(async () => {}),
+		} as unknown as AgentSession;
 		replaced.monitor.setActiveSession(replacement);
 		vi.advanceTimersByTime(300_001);
 		await flushMicrotasks();
 		expect(replaced.emitNotice.mock.calls).toHaveLength(0);
-		expect(replacement.emitNotice.mock.calls).toHaveLength(0);
+		expect(replacementNotice.mock.calls).toHaveLength(0);
 		detached.monitor.finish();
 		const aborted = createMonitor("gpt-6.1-sol");
 		aborted.emit(toolStart("job", { poll: ["job-1"] }));

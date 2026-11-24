@@ -65,7 +65,7 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		refreshComposerShortcuts: vi.fn(),
 		dismissWelcome: vi.fn(),
 	} as unknown as InteractiveModeContext;
-	return { ctx, state, present, withBtwSessionMove };
+	return { ctx, state, present, requestRender, withBtwSessionMove };
 }
 
 describe("CommandController /move", () => {
@@ -81,7 +81,7 @@ describe("CommandController /move", () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-source-"));
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-target-"));
 		try {
-			const { ctx, state, present } = createMoveContext(sourceDir);
+			const { ctx, state, present, requestRender } = createMoveContext(sourceDir);
 			const controller = new CommandController(ctx);
 
 			await controller.handleMoveCommand(targetDir);
@@ -93,7 +93,7 @@ describe("CommandController /move", () => {
 			expect(ctx.sessionManager.dropSession).not.toHaveBeenCalled();
 			expect(ctx.updateEditorBorderColor).toHaveBeenCalledTimes(1);
 			expect(ctx.reloadTodos).toHaveBeenCalledTimes(1);
-			expect(ctx.ui.requestRender.mock.calls).toHaveLength(1);
+			expect(requestRender.mock.calls).toHaveLength(1);
 			expect(present).toHaveBeenCalled();
 			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {
