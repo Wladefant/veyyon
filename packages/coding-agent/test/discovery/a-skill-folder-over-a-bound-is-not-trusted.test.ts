@@ -24,7 +24,9 @@ import { logger } from "@veyyon/utils";
 import { useTrackedTempDirFactory } from "../helpers/tracked-temp-dir";
 
 const makeTempDir = useTrackedTempDirFactory();
-afterEach(() => { mockOpen?.mockRestore(); });
+afterEach(() => {
+	mockOpen?.mockRestore();
+});
 let mockOpen: { mockRestore(): void } | undefined;
 
 interface Fixture {
@@ -155,7 +157,10 @@ describe("a skill folder over a bound is not trusted", () => {
 		});
 	}
 
-	for (const [change, content] of [["shrinks", ""], ["grows", "longer content"]] as const) {
+	for (const [change, content] of [
+		["shrinks", ""],
+		["grows", "longer content"],
+	] as const) {
 		test(`a file that ${change} after scanning refuses the folder`, async () => {
 			const fixture = await makeFixture();
 			const target = path.join(fixture.skillDir, "asset.txt");

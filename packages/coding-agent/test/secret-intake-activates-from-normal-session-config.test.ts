@@ -38,16 +38,23 @@ async function startSession(configured: boolean): Promise<AgentSession> {
 	await fs.mkdir(agentDir, { recursive: true });
 	await fs.mkdir(cwd, { recursive: true });
 	if (configured) {
-		await fs.writeFile(path.join(agentDir, "secret-intake.json"), JSON.stringify({
-			version: 1,
-			projects: [{
-				projectRoot: cwd,
-				organizationId: "synthetic-organization",
-				collectionId: "synthetic-collection-id",
-				vaultCollection: "synthetic-collection",
-				operations: [{ tool: "bash", purpose: "synthetic-check", command: "true", envKey: "SYNTHETIC_SECRET" }],
-			}],
-		}));
+		await fs.writeFile(
+			path.join(agentDir, "secret-intake.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						projectRoot: cwd,
+						organizationId: "synthetic-organization",
+						collectionId: "synthetic-collection-id",
+						vaultCollection: "synthetic-collection",
+						operations: [
+							{ tool: "bash", purpose: "synthetic-check", command: "true", envKey: "SYNTHETIC_SECRET" },
+						],
+					},
+				],
+			}),
+		);
 	}
 	const authStorage = await AuthStorage.create(root.join("auth.db"));
 	const { session } = await createAgentSession({

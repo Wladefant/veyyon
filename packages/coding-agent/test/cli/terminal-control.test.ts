@@ -15,16 +15,16 @@ import * as path from "node:path";
 import { applyOwnerOnlyWindowsAcl, isRecord } from "@veyyon/utils";
 import { commands, resolveCliArgv } from "../../src/cli-commands";
 import {
+	serveTerminalControl,
+	type TerminalControlTarget,
+	type TerminalOwner,
+} from "../../src/launch/terminal-control";
+import {
 	discoverTerminalOwner,
 	isValidTerminalOwnerRecord,
 	sendTerminalControlRotate,
 	stripSecrets,
 } from "../../src/launch/terminal-control-client";
-import {
-	serveTerminalControl,
-	type TerminalControlTarget,
-	type TerminalOwner,
-} from "../../src/launch/terminal-control";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 
 const repoRoot = path.resolve(import.meta.dir, "..", "..");
@@ -354,9 +354,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			const { promise, resolve } = Promise.withResolvers<string>();
 			const nonce = crypto.randomUUID();
 			const endpoint =
-				process.platform === "win32"
-					? `\\\\.\\pipe\\mock-term-${nonce}`
-					: path.join(tempDir, `mock-${nonce}.sock`);
+				process.platform === "win32" ? `\\\\.\\pipe\\mock-term-${nonce}` : path.join(tempDir, `mock-${nonce}.sock`);
 
 			const server = net.createServer(socket => {
 				socket.setEncoding("utf8");

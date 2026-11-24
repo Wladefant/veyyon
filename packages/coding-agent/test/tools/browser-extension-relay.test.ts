@@ -1157,9 +1157,13 @@ describe("secrets stay out of logs", () => {
 				const rejected = await cdp.send(hostileMethod);
 				expect(rejected.error?.code).toBe(-32601);
 				await cdp.send("Target.createTarget", { url: "about:blank" });
-				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				const sessionId = String(
+					cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+				);
 				ext.failNext("Runtime.evaluate");
-				expect((await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error).toBeDefined();
+				expect(
+					(await cdp.send("Runtime.evaluate", { expression: "private-expression" }, sessionId)).error,
+				).toBeDefined();
 				const joined = lines.join("\n");
 				expect(joined).toContain('"port":');
 				expect(joined).toContain('"cdpMethod":"Runtime.evaluate"');
@@ -1209,7 +1213,9 @@ describe("secrets stay out of logs", () => {
 				await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
 				await cdp.send("Target.createTarget", { url: "about:blank" });
 				await until(() => cdp.events.some(event => event.method === "Target.attachedToTarget"), "session attach");
-				const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+				const sessionId = String(
+					cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
+				);
 				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
 				const method = `Runtime.${token}`;
 				const release = ext.delayNext(method);

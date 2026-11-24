@@ -109,7 +109,9 @@ afterAll(() => {
 });
 
 function testSubprocessEnv(extra: Record<string, string> = {}): Record<string, string> {
-	const nodeOptions = [process.env.NODE_OPTIONS, `--require ${JSON.stringify(mockPreloadPath)}`].filter(Boolean).join(" ");
+	const nodeOptions = [process.env.NODE_OPTIONS, `--require ${JSON.stringify(mockPreloadPath)}`]
+		.filter(Boolean)
+		.join(" ");
 	return {
 		...process.env,
 		NODE_OPTIONS: nodeOptions,

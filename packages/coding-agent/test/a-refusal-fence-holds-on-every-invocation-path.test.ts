@@ -205,9 +205,7 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				"sdk.ts",
 				"session/agent-session.ts",
 				"session/factory-tools.ts",
-			].map(
-				site => `packages/coding-agent/src/${site}`,
-			),
+			].map(site => `packages/coding-agent/src/${site}`),
 		);
 	}, 300_000);
 

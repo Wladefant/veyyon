@@ -257,9 +257,7 @@ test("a lease that expires during path resolution cannot start its child", async
 	});
 	expect(run.mock.calls).toHaveLength(0);
 	expect(result.content).toEqual(
-		expect.arrayContaining([
-			expect.objectContaining({ type: "text", text: expect.stringContaining("expired") }),
-		]),
+		expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("expired") })]),
 	);
 });
 

@@ -7,7 +7,8 @@ import {
 } from "../../src/shared-knowledge/hindsight-reference";
 import type { HindsightReferenceConfig } from "../../src/shared-knowledge/types";
 
-const NOTICE = "Shared Hindsight configuration reference only. Contains no credentials. No database migration is performed.";
+const NOTICE =
+	"Shared Hindsight configuration reference only. Contains no credentials. No database migration is performed.";
 
 function reference(overrides: Record<string, unknown> = {}): HindsightReferenceConfig {
 	return {

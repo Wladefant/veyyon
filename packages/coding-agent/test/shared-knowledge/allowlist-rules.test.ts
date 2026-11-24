@@ -114,12 +114,10 @@ describe("validateSecurityAllowlist", () => {
 	});
 
 	it("names the database, traversal, and secret refusals before the allowlist rule", async () => {
-		expect((await validateSecurityAllowlist("skills/data.db")).reason).toBe(
-			"Database file rejected: skills/data.db",
-		);
+		expect((await validateSecurityAllowlist("skills/data.db")).reason).toBe("Database file rejected: skills/data.db");
 		expect((await validateSecurityAllowlist("../etc/x.md")).reason).toContain("Path traversal segment");
-		expect((await validateSecurityAllowlist("skills/docs/SKILL.md", { content: FAKE_PASSWORD_ASSIGNMENT })).valid).toBe(
-			false,
-		);
+		expect(
+			(await validateSecurityAllowlist("skills/docs/SKILL.md", { content: FAKE_PASSWORD_ASSIGNMENT })).valid,
+		).toBe(false);
 	});
 });

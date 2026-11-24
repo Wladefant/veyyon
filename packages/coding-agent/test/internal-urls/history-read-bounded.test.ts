@@ -19,29 +19,24 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import { InternalUrlRouter, parseInternalUrl } from "@veyyon/coding-agent/internal-urls";
-import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
 import { HistoryDirectoryIndex } from "@veyyon/coding-agent/internal-urls/history-directory-index";
 import { readLiveHistoryEntry, searchLiveHistoryEntries } from "@veyyon/coding-agent/internal-urls/history-exact";
-import {
-	formatSessionHistoryMarkdown,
-	formatSessionHistoryMarkdownAsync,
-} from "@veyyon/coding-agent/session/session-history-format";
+import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
 import {
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
 	sessionFilesFromDisk,
 } from "@veyyon/coding-agent/internal-urls/registry-helpers";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import {
+	formatSessionHistoryMarkdown,
+	formatSessionHistoryMarkdownAsync,
+} from "@veyyon/coding-agent/session/session-history-format";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
-import {
-	STREAM_LOAD_THRESHOLD_BYTES,
-	loadSessionHistoryReadOnly,
-	parseSessionContent,
-} from "@veyyon/kernel/session/session-loader";
 import * as sessionLoaderModule from "@veyyon/kernel/session/session-loader";
-import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import { loadSessionHistoryReadOnly } from "@veyyon/kernel/session/session-loader";
 import { getAgentDir, removeWithRetries, setAgentDir } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
 
@@ -551,7 +546,7 @@ describe("history read bounded regressions", () => {
 		});
 	});
 
-	it("cancels stored history search and destroys read stream promptly when 5s deadline triggers", async () => {
+	it("times out during stored history discovery without opening a transcript", async () => {
 		await withTempDir(async dir => {
 			const artifactsDir = path.join(dir, "artifacts");
 			await fs.mkdir(artifactsDir, { recursive: true });
@@ -571,13 +566,7 @@ describe("history read bounded regressions", () => {
 			registerArtifactsDir(artifactsDir);
 			vi.useFakeTimers();
 			const { promise: blockReadStream, resolve: unblockReadStream } = Promise.withResolvers<void>();
-			let capturedStream: nodeFs.ReadStream | undefined;
-			const origCreateReadStream = nodeFs.createReadStream;
-			const streamSpy = spyOn(nodeFs, "createReadStream").mockImplementation((...args) => {
-				const stream = origCreateReadStream(...args);
-				capturedStream = stream;
-				return stream;
-			});
+			const streamSpy = spyOn(nodeFs, "createReadStream");
 
 			// Make readdir yield to allow resolve() timer to arm, then advance fake timer
 			const origReaddir = fs.readdir;
@@ -607,6 +596,7 @@ describe("history read bounded regressions", () => {
 
 				expect(error).toBeDefined();
 				expect(error?.message).toContain("history:// timed out after 5s");
+				expect(streamSpy.mock.calls).toHaveLength(0);
 			} finally {
 				unblockReadStream();
 				readdirSpy.mockRestore();

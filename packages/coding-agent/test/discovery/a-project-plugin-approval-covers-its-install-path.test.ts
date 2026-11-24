@@ -12,7 +12,11 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { runTrustCommand } from "@veyyon/coding-agent/cli/trust-cli";
-import { canonicalProjectRoot, describeProjectExecutable, ProjectTrust } from "@veyyon/coding-agent/config/project-trust";
+import {
+	canonicalProjectRoot,
+	describeProjectExecutable,
+	ProjectTrust,
+} from "@veyyon/coding-agent/config/project-trust";
 import { listClaudePluginRoots } from "@veyyon/coding-agent/discovery/helpers";
 import { getEnabledPlugins } from "@veyyon/coding-agent/extensibility/plugins/loader";
 import { loadConfig } from "@veyyon/coding-agent/lsp/config";
@@ -53,9 +57,17 @@ async function fixture(scope: "project" | "user" = "project"): Promise<Fixture> 
 		await fs.mkdir(path.dirname(file), { recursive: true });
 		await fs.writeFile(file, content);
 	}
-	await fs.writeFile(registry, JSON.stringify({ version: 2, plugins: {
-		"payload@test": [{ scope, installPath, version: "1.0.0", installedAt: "2026-01-01", lastUpdated: "2026-01-01" }],
-	} }));
+	await fs.writeFile(
+		registry,
+		JSON.stringify({
+			version: 2,
+			plugins: {
+				"payload@test": [
+					{ scope, installPath, version: "1.0.0", installedAt: "2026-01-01", lastUpdated: "2026-01-01" },
+				],
+			},
+		}),
+	);
 	return { root, repo, agentDir, pluginsRoot, home, registry, installPath };
 }
 
@@ -73,14 +85,24 @@ async function assertLoaded(f: Fixture, expected: boolean, agentDir = f.agentDir
 
 test("a project registry cannot claim user scope to load unhashed ancestor LSP commands", async () => {
 	const f = await fixture("user");
-	await fs.writeFile(path.join(f.root, "marketplace.json"), JSON.stringify({
-		plugins: [{
-			name: "payload",
-			lspServers: {
-				"unapproved-ancestor": { command: process.execPath, args: ["unapproved"], fileTypes: ["fixture"], rootMarkers: ["."] },
-			},
-		}],
-	}));
+	await fs.writeFile(
+		path.join(f.root, "marketplace.json"),
+		JSON.stringify({
+			plugins: [
+				{
+					name: "payload",
+					lspServers: {
+						"unapproved-ancestor": {
+							command: process.execPath,
+							args: ["unapproved"],
+							fileTypes: ["fixture"],
+							rootMarkers: ["."],
+						},
+					},
+				},
+			],
+		}),
+	);
 	await decide(f, "approve");
 	const { roots } = await listClaudePluginRoots(f.home, f.repo, f.pluginsRoot, f.agentDir);
 	expect(roots.filter(root => root.id === "payload@test").map(root => root.scope)).toEqual(["project"]);
@@ -91,7 +113,7 @@ async function filesUnder(dir: string): Promise<string[]> {
 	const files: string[] = [];
 	for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
 		const target = path.join(dir, entry.name);
-		if (entry.isDirectory()) files.push(...await filesUnder(target));
+		if (entry.isDirectory()) files.push(...(await filesUnder(target)));
 		else files.push(target);
 	}
 	return files.sort();
@@ -103,7 +125,9 @@ test("approval covers every file found under every named installPath, including 
 	await decide(f, "approve");
 	await assertLoaded(f, true);
 	// Enumerate registry sources and their files rather than maintain a coverage allowlist.
-	const registry: { plugins: Record<string, Array<{ installPath: string }>> } = JSON.parse(await fs.readFile(f.registry, "utf8"));
+	const registry: { plugins: Record<string, Array<{ installPath: string }>> } = JSON.parse(
+		await fs.readFile(f.registry, "utf8"),
+	);
 	for (const entries of Object.values(registry.plugins)) {
 		for (const entry of entries) {
 			for (const file of await filesUnder(entry.installPath)) {
@@ -225,17 +249,40 @@ test("an oversized payload file revokes approval rather than hashing a prefix", 
 async function relativeInstallPathFixture(f: Fixture): Promise<string> {
 	const registryPayload = path.join(path.dirname(f.registry), "payload");
 	await fs.mkdir(registryPayload, { recursive: true });
-	await fs.writeFile(path.join(registryPayload, "package.json"), JSON.stringify({ name: "payload", version: "1.0.0" }));
-	await fs.writeFile(path.join(registryPayload, "lsp.json"), JSON.stringify({
-		servers: { "approved-payload": { command: process.execPath, args: ["approved"], fileTypes: ["fixture"], rootMarkers: ["."] } },
-	}));
+	await fs.writeFile(
+		path.join(registryPayload, "package.json"),
+		JSON.stringify({ name: "payload", version: "1.0.0" }),
+	);
+	await fs.writeFile(
+		path.join(registryPayload, "lsp.json"),
+		JSON.stringify({
+			servers: {
+				"approved-payload": {
+					command: process.execPath,
+					args: ["approved"],
+					fileTypes: ["fixture"],
+					rootMarkers: ["."],
+				},
+			},
+		}),
+	);
 	const registry = JSON.parse(await fs.readFile(f.registry, "utf8"));
 	registry.plugins["payload@test"][0].installPath = "payload";
 	await fs.writeFile(f.registry, JSON.stringify(registry));
 	await fs.mkdir(path.join(f.repo, "payload"), { recursive: true });
-	await fs.writeFile(path.join(f.repo, "payload", "lsp.json"), JSON.stringify({
-		servers: { "cwd-decoy": { command: process.execPath, args: ["unapproved"], fileTypes: ["fixture"], rootMarkers: ["."] } },
-	}));
+	await fs.writeFile(
+		path.join(f.repo, "payload", "lsp.json"),
+		JSON.stringify({
+			servers: {
+				"cwd-decoy": {
+					command: process.execPath,
+					args: ["unapproved"],
+					fileTypes: ["fixture"],
+					rootMarkers: ["."],
+				},
+			},
+		}),
+	);
 	return registryPayload;
 }
 
@@ -271,20 +318,23 @@ test("project-scope LSP loading reads the approved path, not the cwd-relative de
 	}
 });
 
-test.skipIf(process.platform === "win32")("a relative installPath uses the registry's loader path, not its symlink target directory", async () => {
-	const f = await fixture();
-	const relativePath = path.relative(path.dirname(f.registry), f.installPath);
-	const bytes = await fs.readFile(f.registry, "utf8");
-	const stored = path.join(f.repo, "registry-store", "installed_plugins.json");
-	await fs.mkdir(path.dirname(stored), { recursive: true });
-	await fs.writeFile(stored, bytes.replace(JSON.stringify(f.installPath), JSON.stringify(relativePath)));
-	await fs.unlink(f.registry);
-	await fs.symlink(stored, f.registry, "file");
-	await decide(f, "approve");
-	await assertLoaded(f, true);
-	await fs.writeFile(path.join(f.installPath, "extension.ts"), "export default () => ({ changed: true });\n");
-	await assertLoaded(f, false);
-});
+test.skipIf(process.platform === "win32")(
+	"a relative installPath uses the registry's loader path, not its symlink target directory",
+	async () => {
+		const f = await fixture();
+		const relativePath = path.relative(path.dirname(f.registry), f.installPath);
+		const bytes = await fs.readFile(f.registry, "utf8");
+		const stored = path.join(f.repo, "registry-store", "installed_plugins.json");
+		await fs.mkdir(path.dirname(stored), { recursive: true });
+		await fs.writeFile(stored, bytes.replace(JSON.stringify(f.installPath), JSON.stringify(relativePath)));
+		await fs.unlink(f.registry);
+		await fs.symlink(stored, f.registry, "file");
+		await decide(f, "approve");
+		await assertLoaded(f, true);
+		await fs.writeFile(path.join(f.installPath, "extension.ts"), "export default () => ({ changed: true });\n");
+		await assertLoaded(f, false);
+	},
+);
 
 test("approval covers disabled entries before they can be enabled", async () => {
 	const f = await fixture();
@@ -292,8 +342,9 @@ test("approval covers disabled entries before they can be enabled", async () => 
 	await fs.mkdir(disabled, { recursive: true });
 	const code = path.join(disabled, "code.js");
 	await fs.writeFile(code, "old code\n");
-	const registry: { plugins: Record<string, Array<{ installPath: string; enabled?: boolean }>> } =
-		JSON.parse(await fs.readFile(f.registry, "utf8"));
+	const registry: { plugins: Record<string, Array<{ installPath: string; enabled?: boolean }>> } = JSON.parse(
+		await fs.readFile(f.registry, "utf8"),
+	);
 	registry.plugins["disabled@test"] = [{ installPath: disabled, enabled: false }];
 	await fs.writeFile(f.registry, JSON.stringify(registry));
 	await decide(f, "approve");

@@ -632,7 +632,7 @@ it("does not republish a removed MCP peer when another server stalls startup cac
 			response
 				.writeHead(200, {
 					"content-type": "application/json",
-					...(message.method === "initialize" ? { "Mcp-Session-Id": "retired-peer-" + route } : {}),
+					...(message.method === "initialize" ? { "Mcp-Session-Id": `retired-peer-${route}` } : {}),
 				})
 				.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 		} catch {

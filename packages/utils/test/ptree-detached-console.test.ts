@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { $which } from "../src/which";
 import { detachedSpawnOptions, exec } from "../src/ptree";
+import { $which } from "../src/which";
 
 // On Windows, Bun maps `detached: true` to DETACHED_PROCESS (no console), so every console
 // grandchild allocates its own conhost and flashes a visible window. detachedSpawnOptions()

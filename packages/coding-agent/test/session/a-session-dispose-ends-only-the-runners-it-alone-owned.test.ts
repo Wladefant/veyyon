@@ -33,7 +33,7 @@ import * as pythonKernel from "@veyyon/coding-agent/eval/py/kernel";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { setAgentDir, Snowflake, TempDir } from "@veyyon/utils";
+import { Snowflake, setAgentDir, TempDir } from "@veyyon/utils";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
