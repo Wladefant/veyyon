@@ -2431,17 +2431,23 @@ async function startChildSession(
  * the spawner cannot match the declared names: it forwards them as a `deferred` plan and they are
  * judged present or missing against the tree the child was pointed at.
  */
-async function autoloadChildSkills(session: AgentSession, options: ExecutorOptions): Promise<void> {
+async function autoloadChildSkills(ctx: ChildSessionContext, session: AgentSession): Promise<void> {
+	const { options, monitor, awaitAbortable } = ctx;
+	const abortSignal = monitor.abortSignal;
 	for (const skill of settleAutoloadSkills(options.autoloadSkills, session.skills, options.agent.name)) {
-		const { message } = await buildSkillPromptMessage(skill, "", "autoload");
-		await session.sendCustomMessage(
-			{
-				customType: SKILL_PROMPT_MESSAGE_TYPE,
-				content: message,
-				display: false,
-				details: { name: skill.name, path: skill.filePath },
-			},
-			{ triggerTurn: false },
+		throwIfRunAborted(abortSignal);
+		const { message } = await awaitAbortable(buildSkillPromptMessage(skill, "", "autoload"));
+		throwIfRunAborted(abortSignal);
+		await awaitAbortable(
+			session.sendCustomMessage(
+				{
+					customType: SKILL_PROMPT_MESSAGE_TYPE,
+					content: message,
+					display: false,
+					details: { name: skill.name, path: skill.filePath },
+				},
+				{ triggerTurn: false },
+			),
 		);
 	}
 }
@@ -2585,7 +2591,8 @@ async function driveChildRun(
 		unsubscribe = monitor.attach(opened.session);
 		throwIfRunAborted(abortSignal);
 		ctx.setupPhase = "autoload-skills";
-		await autoloadChildSkills(opened.session, options);
+		await autoloadChildSkills(ctx, opened.session);
+		throwIfRunAborted(abortSignal);
 		ctx.marks.readyAt = performance.now();
 		ctx.setupPhase = undefined;
 		driveStarted = true;
