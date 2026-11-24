@@ -71,18 +71,18 @@ import {
 } from "./session-entries";
 import { SessionEntryIndex } from "./session-entry-index";
 import {
+	hasDuplicateJsonMemberNames,
+	parseSubagentLaunchGrantLine,
+	serializeSubagentLaunchGrant,
+	validateSubagentLaunchGrant,
+} from "./session-launch-grants";
+import {
 	findMostRecentSession,
 	foreignSessionFileProfile,
 	listAllSessions,
 	listSessions,
 	type SessionInfo,
 } from "./session-listing";
-import {
-	hasDuplicateJsonMemberNames,
-	parseSubagentLaunchGrantLine,
-	serializeSubagentLaunchGrant,
-	validateSubagentLaunchGrant,
-} from "./session-launch-grants";
 import {
 	forEachFileLine,
 	type LoadedSessionFile,
@@ -103,8 +103,8 @@ import {
 } from "./session-paths";
 import { prepareEntryForPersistence } from "./session-persistence";
 import {
-	fileObjectIdentity,
 	FileSessionStorage,
+	fileObjectIdentity,
 	type JournalSnapshot,
 	MemorySessionStorage,
 	type PinnedSessionReader,
@@ -208,61 +208,67 @@ const NATIVE_MOVE_TARGET_GATE_OPTIONS = {
 };
 const NATIVE_OWNER_LOCK_OPTIONS = { retries: 1, queueWaitMs: 1 };
 
-interface NativeOwnerRequest {
-	name: string;
-	resolve(handle: FileLockHandle): void;
+interface GrantRequest {
+	record: SubagentLaunchGrant;
+	resolve(): void;
 	reject(error: unknown): void;
 }
 
-// Only opens awaiting the same gate acquisition share a batch. Arrivals during
-// publication take a new turn, so a queued move does not wait for a growing batch.
-const pendingNativeOwnerBatches = new Map<string, NativeOwnerRequest[]>();
-
-function reserveNativeOwner(transcript: string): Promise<FileLockHandle> {
-	const directory = path.dirname(transcript);
-	const { promise, resolve, reject } = Promise.withResolvers<FileLockHandle>();
-	const request = { name: path.basename(transcript), resolve, reject };
-	const pending = pendingNativeOwnerBatches.get(directory);
-	if (pending) {
-		pending.push(request);
-	} else {
-		const batch = [request];
-		pendingNativeOwnerBatches.set(directory, batch);
-		void publishNativeOwners(directory, batch);
-	}
-	return promise;
+interface NativeOwnerBatch {
+	gate: Promise<FileLockHandle>;
+	directory?: Promise<fs.BigIntStats | undefined>;
+	released: PromiseWithResolvers<void>;
+	pending: number;
 }
 
-async function publishNativeOwners(directory: string, batch: NativeOwnerRequest[]): Promise<void> {
-	let outcomes: PromiseSettledResult<FileLockHandle>[] | undefined;
-	try {
-		const gate = await acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS);
-		pendingNativeOwnerBatches.delete(directory);
-		try {
-			// Publish under the same gate that protects a move's owner scan and rename.
-			const owners = nativeOwnerDirectory(directory);
-			await fs.promises.mkdir(owners, { recursive: true });
-			outcomes = await Promise.allSettled(
-				batch.map(({ name }) => acquireFileLock(path.join(owners, name), NATIVE_OWNER_LOCK_OPTIONS)),
-			);
-		} finally {
-			await gate.release();
-		}
-	} catch (error) {
-		if (pendingNativeOwnerBatches.get(directory) === batch) pendingNativeOwnerBatches.delete(directory);
-		if (outcomes) {
-			// If returning the gate failed, no caller received these leases.
-			await Promise.allSettled(
-				outcomes.flatMap(result => (result.status === "fulfilled" ? [result.value.release()] : [])),
-			);
-		}
-		for (const request of batch) request.reject(error);
-		return;
+// Only ready publications awaiting the same gate acquisition share a batch.
+// Arrivals during publication take a new turn and do not delay a queued move.
+const pendingNativeOwnerBatches = new Map<string, NativeOwnerBatch>();
+
+async function publishNativeOwner<T>(
+	directory: string,
+	expected: fs.BigIntStats,
+	publish: () => Promise<T>,
+): Promise<T> {
+	let batch = pendingNativeOwnerBatches.get(directory);
+	if (!batch) {
+		const gate = acquireFileLock(nativeRelocationGate(directory), NATIVE_OPEN_GATE_OPTIONS).finally(() => {
+			pendingNativeOwnerBatches.delete(directory);
+		});
+		batch = { gate, released: Promise.withResolvers<void>(), pending: 0 };
+		pendingNativeOwnerBatches.set(directory, batch);
 	}
-	for (const [index, result] of outcomes.entries()) {
-		const request = batch[index]!;
-		if (result.status === "fulfilled") request.resolve(result.value);
-		else request.reject(result.reason);
+	batch.pending++;
+	let gate: FileLockHandle | undefined;
+	try {
+		gate = await batch.gate;
+		// A move can replace the artifact directory while the sibling owner directory stays in place.
+		// Check the live directory once under the gate, against each opener's pre-sync snapshot.
+		batch.directory ??= fs.promises.lstat(directory, { bigint: true }).catch(error => {
+			if (!isEnoent(error)) throw error;
+			return undefined;
+		});
+		const current = await batch.directory;
+		if (
+			!current?.isDirectory() ||
+			current.dev !== expected.dev ||
+			current.ino !== expected.ino ||
+			current.birthtimeNs !== expected.birthtimeNs
+		) {
+			throw new Error("Cannot open native transcript: artifact directory changed before owner publication");
+		}
+		return await publish();
+	} finally {
+		if (--batch.pending === 0) {
+			try {
+				await gate?.release();
+				batch.released.resolve();
+			} catch (error) {
+				batch.released.reject(error);
+			}
+		}
+		// The opener cannot load or write its transcript before the batch returns the gate.
+		await batch.released.promise;
 	}
 }
 
@@ -625,6 +631,7 @@ export class SessionManager {
 	#grantsAmbiguous: string | undefined;
 	/** Serialize grant publication and rollback, independently of other entry writers. */
 	#grantTail = Promise.resolve();
+	#pendingGrants?: { file: string | undefined; requests: GrantRequest[] };
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
@@ -1183,7 +1190,12 @@ export class SessionManager {
 				(bytes, start, end) => {
 					if (firstLine) {
 						firstLine = false;
-						if (end - start >= 3 && bytes[start] === 0xef && bytes[start + 1] === 0xbb && bytes[start + 2] === 0xbf) {
+						if (
+							end - start >= 3 &&
+							bytes[start] === 0xef &&
+							bytes[start + 1] === 0xbb &&
+							bytes[start + 2] === 0xbf
+						) {
 							start += 3;
 						}
 					}
@@ -4311,21 +4323,37 @@ export class SessionManager {
 	 * the receipt is published to this root's journal. Rejects, and keeps nothing in memory, when the receipt
 	 * is invalid, names another root, collides with this root's own identities, repeats an identity already
 	 * recorded, or the journal's receipts are unverified.
+	 * Sibling requests already waiting on the same root share one durable publication.
 	 */
-	async appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
+	appendSubagentLaunchGrant(record: SubagentLaunchGrant): Promise<void> {
 		const sessionFile = this.#sessionFile;
-		const publish = this.#grantTail.then(() => this.#publishSubagentLaunchGrant(record, sessionFile));
-		this.#grantTail = publish.catch(() => {});
-		return publish;
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		const request = { record, resolve, reject };
+		const pending = this.#pendingGrants;
+		if (pending && pending.file === sessionFile) {
+			pending.requests.push(request);
+		} else {
+			const batch = { file: sessionFile, requests: [request] };
+			this.#pendingGrants = batch;
+			this.#grantTail = this.#grantTail.then(async () => {
+				// Freeze membership before I/O. Later requests queue for the next durable publication.
+				if (this.#pendingGrants === batch) this.#pendingGrants = undefined;
+				try {
+					await this.#publishSubagentLaunchGrants(batch.requests, sessionFile);
+				} catch (error) {
+					for (const member of batch.requests) member.reject(error);
+				}
+			});
+		}
+		return promise;
 	}
 
-	async #publishSubagentLaunchGrant(record: SubagentLaunchGrant, sessionFile: string | undefined): Promise<void> {
-		if (!this.#persist || !sessionFile || this.#sessionFile !== sessionFile) {
-			throw new Error("Cannot record a subagent launch grant in a non-persistent session");
-		}
-		if (this.#grantsAmbiguous !== undefined) {
-			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
-		}
+	#checkLaunchGrant(
+		record: SubagentLaunchGrant,
+		sessionFile: string,
+		rootDir: string,
+		heldGrants: readonly SubagentLaunchGrant[],
+	): SubagentLaunchGrant {
 		const checked = validateSubagentLaunchGrant(record);
 		if (!checked.ok) throw new Error(`Invalid subagent launch grant: ${checked.problem}`);
 		const grant = checked.grant;
@@ -4333,10 +4361,8 @@ export class SessionManager {
 			throw new Error("Subagent launch grant names a different root session");
 		}
 		const rootName = path.basename(sessionFile);
-		const rootDir = await fs.promises.realpath(path.dirname(sessionFile));
 		if (
 			this.#sessionFile !== sessionFile ||
-			this.#sessionId !== grant.rootSessionId ||
 			path.basename(path.dirname(rootDir)).toLowerCase() !== "sessions" ||
 			!rootName.endsWith(`_${grant.rootSessionId}.jsonl`) ||
 			path.dirname(grant.sessionFile) !== path.join(rootDir, sessionFileStem(rootName))
@@ -4346,11 +4372,11 @@ export class SessionManager {
 		if (
 			grant.childSessionId === this.#sessionId ||
 			grant.agentId === this.#sessionId ||
-			path.resolve(grant.sessionFile) === path.resolve(this.#sessionFile)
+			path.resolve(grant.sessionFile) === path.resolve(sessionFile)
 		) {
 			throw new Error("Subagent launch grant identity collides with the root session");
 		}
-		for (const held of this.#grants) {
+		for (const held of heldGrants) {
 			if (
 				held.agentId === grant.agentId ||
 				held.childSessionId === grant.childSessionId ||
@@ -4359,11 +4385,37 @@ export class SessionManager {
 				throw new Error("Subagent launch grant repeats an identity already recorded for this root");
 			}
 		}
+		return grant;
+	}
+
+	async #publishSubagentLaunchGrants(requests: GrantRequest[], sessionFile: string | undefined): Promise<void> {
+		if (!this.#persist || !sessionFile || this.#sessionFile !== sessionFile) {
+			throw new Error("Cannot record a subagent launch grant in a non-persistent session");
+		}
+		const rootDir = await fs.promises.realpath(path.dirname(sessionFile));
+		if (this.#grantsAmbiguous !== undefined) {
+			throw new Error(`Subagent launch grants are unverified: ${this.#grantsAmbiguous}`);
+		}
+		const rootId = this.#sessionId;
 		const epoch = this.#diskEpoch;
 		const previousLines = this.#receiptLines;
 		const previousGrants = this.#grants;
-		this.#receiptLines = [...previousLines, serializeSubagentLaunchGrant(grant)];
-		this.#grants = [...previousGrants, grant];
+		const nextLines = [...previousLines];
+		const nextGrants = [...previousGrants];
+		const accepted: GrantRequest[] = [];
+		for (const request of requests) {
+			try {
+				const grant = this.#checkLaunchGrant(request.record, sessionFile, rootDir, nextGrants);
+				nextLines.push(serializeSubagentLaunchGrant(grant));
+				nextGrants.push(grant);
+				accepted.push(request);
+			} catch (error) {
+				request.reject(error);
+			}
+		}
+		if (accepted.length === 0) return;
+		this.#receiptLines = nextLines;
+		this.#grants = nextGrants;
 		this.#forceFileCreation = true;
 		try {
 			// The file backend waits for the replacement to be durable before we acknowledge the receipt.
@@ -4371,14 +4423,16 @@ export class SessionManager {
 			if (
 				this.#diskEpoch !== epoch ||
 				this.#sessionFile !== sessionFile ||
-				this.#sessionId !== grant.rootSessionId ||
+				this.#sessionId !== rootId ||
+				this.#grantsAmbiguous !== undefined ||
 				!this.#fileIsCurrent ||
 				this.#rewriteRequired
 			) {
 				throw new Error("Subagent launch grant was not published to the session journal");
 			}
+			for (const request of accepted) request.resolve();
 		} catch (error) {
-			if (this.#sessionFile === sessionFile && this.#sessionId === grant.rootSessionId) {
+			if (this.#sessionFile === sessionFile && this.#sessionId === rootId) {
 				this.#receiptLines = previousLines;
 				this.#grants = previousGrants;
 			}
@@ -4997,7 +5051,16 @@ export class SessionManager {
 			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
 			throw error;
 		});
-		const handle = await reserveNativeOwner(transcript);
+		const directory = path.dirname(transcript);
+		const expectedDirectory = await fs.promises.lstat(directory, { bigint: true });
+		const owners = nativeOwnerDirectory(directory);
+		await fs.promises.mkdir(owners, { recursive: true });
+		// Stage and sync each candidate independently. A move scans only published
+		// leases and their transitions, and publication still takes the move gate.
+		const handle = await acquireFileLock(path.join(owners, path.basename(transcript)), {
+			...NATIVE_OWNER_LOCK_OPTIONS,
+			publishUnder: publish => publishNativeOwner(directory, expectedDirectory, publish),
+		});
 		try {
 			if (options.requireNew && storage.existsStateSync(transcript) !== "absent") {
 				throw new Error("A new launch grant requires a fresh child transcript");

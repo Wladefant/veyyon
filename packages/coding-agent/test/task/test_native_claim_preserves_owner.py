@@ -37,8 +37,8 @@ class NativeClaimOwner(unittest.TestCase):
         self.assertIn(result.returncode, (0, 1), result.stderr)
         return json.loads(result.stdout)
 
-    def claim(self):
-        result = self.run_bridge("claim", "--worker-id", "dispatcher")
+    def claim(self, *args):
+        result = self.run_bridge("claim", "--worker-id", "dispatcher", *args)
         self.assertTrue(result["claimed"], result)
         return result["ticket"]["runId"]
 
@@ -61,16 +61,25 @@ class NativeClaimOwner(unittest.TestCase):
     def test_claim_dispatch_rollback_preserve_owner_and_allow_retry(self):
         run = self.claim()
         req = self.assert_accountable()
-        self.assertEqual(req["native_claim"], {"version": 1, "state": "active", "worker_id": "dispatcher", "run_id": run, "task_handle": None})
+        self.assertEqual(req["native_claim"], {
+            "version": 1, "state": "active", "worker_id": "dispatcher", "run_id": run, "task_handle": None,
+            "fence": {"state": "implementation", "stage": "qa", "epoch": 0, "head": None},
+        })
         self.dispatch(run)
         self.assertEqual(self.assert_accountable()["native_claim"]["task_handle"], "agent://worker")
-        result = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run, "--previous-state", "pending")
+        unbound = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run, "--previous-state", "pending")
+        self.assertFalse(unbound["rolled_back"])
+        result = self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", run,
+                                 "--task-handle", "agent://worker", "--previous-state", "pending")
         self.assertTrue(result["rolled_back"])
         self.assertEqual(self.assert_accountable()["native_claim"], RETRYABLE)
         self.assertNotEqual(self.claim(), run)
 
     def test_recovery_keeps_live_claim_and_reclaims_only_absent_worker(self):
-        self.active()
+        self.dispatch(self.claim("--host-pid", str(os.getpid())))
+        data = self.data()
+        data["requests"]["ticket"]["native_claim"]["host"]["started"] += ":exited-owner"
+        self.ledger.write_text(json.dumps(data), encoding="utf-8")
         before = self.ledger.read_bytes()
         self.assertEqual(self.run_bridge("recover", "--running-worker-ids", "worker")["recovered"], [])
         self.assertEqual(self.ledger.read_bytes(), before)
@@ -115,7 +124,8 @@ class NativeClaimOwner(unittest.TestCase):
         variants = [None, {}, {**active, "version": 2}, {**active, "state": "unknown"},
                     {**RETRYABLE, "run_id": run}, {**active, "worker_id": "foreign"},
                     {**active, "worker_id": ""}, {**active, "run_id": ""}, {**active, "task_handle": ""}]
-        variants += [{k: v for k, v in active.items() if k != omitted} for omitted in active]
+        variants += [{k: v for k, v in active.items() if k != omitted} for omitted in active if omitted != "fence"]
+        variants.extend([{**active, "fence": {}}, {**active, "claim_id": "orphaned-generation"}])
         for claim in variants:
             with self.subTest(claim=claim):
                 req = copy.deepcopy(base)
@@ -151,7 +161,8 @@ class NativeClaimOwner(unittest.TestCase):
 
     def test_retryable_claim_refuses_a_delayed_old_completion_after_a_new_run(self):
         old_run = self.active()
-        self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", old_run, "--previous-state", "pending")
+        self.run_bridge("rollback", "--ticket-id", "ticket", "--run-id", old_run,
+                        "--task-handle", "agent://worker", "--previous-state", "pending")
         new_run = self.active()
         self.assertNotEqual(new_run, old_run)
         before = self.ledger.read_bytes()

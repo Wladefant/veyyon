@@ -107,8 +107,19 @@ export async function runCli(args = process.argv.slice(2), env = process.env) {
 	const target = manifest.metadata.target_shard_duration_ms;
 	const unknownDuration = manifest.metadata.default_unknown_duration_ms;
 	if (typeof unknownDuration !== "number" || !Number.isFinite(unknownDuration) || unknownDuration < 0) throw new Error("duration manifest has invalid unknown fallback");
+	// In #1202, 295s estimates exhausted a 720s deadline. Budget the full
+	// isolated invocation, not just the historical test duration.
+	const scaleIsolatedMs = rawMs => Math.max(1500, rawMs * 2);
+	const scaledUnknownDuration = scaleIsolatedMs(unknownDuration);
 	const files = parseSelectedLines(await readFile(input, "utf8"));
-	const durations = Object.fromEntries(files.map(file => [file, Object.hasOwn(manifest.durations, file) ? manifest.durations[file] : unknownDuration]));
+	const durations = Object.fromEntries(files.map(file => {
+		if (!Object.hasOwn(manifest.durations, file)) return [file, scaledUnknownDuration];
+		const rawDuration = manifest.durations[file];
+		if (typeof rawDuration !== "number" || !Number.isFinite(rawDuration) || rawDuration < 0) {
+			throw new TypeError(`invalid duration for ${file}`);
+		}
+		return [file, scaleIsolatedMs(rawDuration)];
+	}));
 	const plan = planShards(files, durations, target);
 	await mkdir(output, { recursive: true });
 	for (const shard of plan.shards) await atomicWrite(path.join(output, `shard-${shard.index}.txt`), shard.files.join("\n") + (shard.files.length ? "\n" : ""));

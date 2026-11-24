@@ -135,6 +135,8 @@ export interface AsyncJobRegisterOptions {
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
+	/** Invoked once the job settles and transitions out of `running`. */
+	onSettled?: (job: AsyncJob) => void | Promise<void>;
 }
 
 /**
@@ -305,6 +307,17 @@ export class AsyncJobManager {
 				this.#enqueueDelivery(id, errorText);
 				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0 || this.#released.has(id)) {
 					this.#scheduleEviction(id);
+				}
+			} finally {
+				if (!this.#disposed && options?.onSettled) {
+					try {
+						await options.onSettled(job);
+					} catch (error) {
+						logger.warn("Async job settlement callback failed", {
+							jobId: id,
+							error: errorMessage(error),
+						});
+					}
 				}
 			}
 		})();

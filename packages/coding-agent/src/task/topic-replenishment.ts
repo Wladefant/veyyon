@@ -18,7 +18,9 @@
  *    Missing executor fails immediately before claiming or incrementing counts.
  * 7. On worker dispatch error, claimed tickets are rolled back to pending with audit history.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -228,7 +230,14 @@ export interface LedgerRequestHistoryItem {
 }
 
 export type NativeClaim =
-	| { version: 1; state: "active"; worker_id: string; run_id: string; task_handle: string | null }
+	| {
+			version: 1;
+			state: "active";
+			worker_id: string;
+			run_id: string;
+			task_handle: string | null;
+			host?: { name: string; pid: number; started?: string };
+	  }
 	| { version: 1; state: "retryable"; worker_id: null; run_id: null; task_handle: null };
 
 export interface LedgerRequestItem {
@@ -271,6 +280,9 @@ export interface ClaimTicketOptions {
 	authorizedProject?: string;
 	lockTimeoutMs?: number;
 	workerId?: string;
+	/** PID of the deploying SDK process; recovery treats its live state as keep-live evidence on this host. */
+	hostPid?: number;
+	claimId?: string;
 	customFilter?: (ticket: LedgerRequestItem) => boolean;
 }
 
@@ -301,12 +313,19 @@ export interface VerificationWorkerStart {
 	agentName: string;
 	runId?: string;
 	ticketId?: string;
+	taskHandle?: string;
+	reason?: string;
 }
 
 export interface ReplenishmentCycleOptions {
 	onCleanup?: () => Promise<void> | void;
 	dispatchWorker?: (ticket: ClaimedTicket) => Promise<unknown>;
 	memoryProvider?: MemoryMeasurementProvider;
+}
+
+export interface WorkerCompleteOptions extends ReplenishmentCycleOptions {
+	/** Skip synchronous replenishment while an outer async-manager job slot is still held. */
+	deferReplenish?: boolean;
 }
 
 export interface BlockedTopicInfo {
@@ -320,6 +339,7 @@ export interface ClaimTicketResult {
 	claimed: boolean;
 	ticket?: ClaimedTicket;
 	reason?: string;
+	replyUnconfirmed?: boolean;
 	blockedTopics?: BlockedTopicInfo[];
 	uncoveredTopics?: string[];
 }
@@ -772,6 +792,15 @@ export async function runLedgerBridge<T = unknown>(
 	return promise;
 }
 
+async function replayLedgerBridge<T>(args: string[]): Promise<T> {
+	try {
+		return await runLedgerBridge<T>(args);
+	} catch {
+		// The first process may have committed before losing its reply.
+		return await runLedgerBridge<T>(args);
+	}
+}
+
 /**
  * Cross-process OS-level advisory file lock backed by native-ledger-bridge / Python FileLock.
  * Uses msvcrt.locking on Windows and fcntl.flock on POSIX.
@@ -871,6 +900,8 @@ export async function claimNextAuthorizedTicket(
 	if (options?.workerId) {
 		args.push("--worker-id", options.workerId);
 	}
+	if (options?.hostPid !== undefined) args.push("--host-pid", String(options.hostPid));
+	if (options?.claimId !== undefined) args.push("--claim-id", options.claimId);
 	if (options?.coveredTopics && options.coveredTopics.length > 0) {
 		args.push("--covered-topics", options.coveredTopics.join(","));
 	}
@@ -878,7 +909,8 @@ export async function claimNextAuthorizedTicket(
 		args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
 	try {
-		const result = await runLedgerBridge<ClaimTicketResult & { blocked_topics?: BlockedTopicInfo[] }>(args);
+		const call = options?.claimId === undefined ? runLedgerBridge : replayLedgerBridge;
+		const result = await call<ClaimTicketResult & { blocked_topics?: BlockedTopicInfo[] }>(args);
 		if (!result.blockedTopics && result.blocked_topics) {
 			result.blockedTopics = result.blocked_topics;
 		}
@@ -887,6 +919,7 @@ export async function claimNextAuthorizedTicket(
 		return {
 			claimed: false,
 			reason: `Bridge execution failed: ${err}`,
+			replyUnconfirmed: options?.claimId !== undefined,
 		};
 	}
 }
@@ -899,7 +932,7 @@ export async function rollbackClaimedTicket(
 	ledgerPath: string,
 	ticketId: string,
 	reason: string,
-	options: { lockTimeoutMs?: number; runId: string; previousState: string },
+	options: { lockTimeoutMs?: number; runId: string; previousState?: string; taskHandle?: string },
 ): Promise<{ rolled_back: boolean; error?: string }> {
 	const args = [
 		"rollback",
@@ -912,8 +945,11 @@ export async function rollbackClaimedTicket(
 		"--run-id",
 		options.runId,
 		"--previous-state",
-		options.previousState,
+		options.previousState ?? "auto",
 	];
+	if (options.taskHandle) {
+		args.push("--task-handle", options.taskHandle);
+	}
 	if (options.lockTimeoutMs) {
 		args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
@@ -939,7 +975,39 @@ export async function recordNativeDispatch(
 		taskHandle,
 	];
 	args.push("--ledger", ledgerPath, "--ticket-id", ticketId);
-	await runLedgerBridge(args);
+	const result = await replayLedgerBridge<{ recorded: boolean; run_id: string; task_handle: string }>(args);
+	if (!result.recorded || result.run_id !== runId || result.task_handle !== taskHandle) {
+		throw new Error("Native dispatch reply did not confirm the requested run and handle");
+	}
+}
+
+/**
+ * Confirm the bridge admits a bound native dispatch for this process: the active claim must match the run,
+ * task handle and host PID, and the backend must still show the dispatch as background-dispatched. Throws
+ * with the bridge's reason otherwise, so the caller never starts a worker it cannot prove is owned.
+ */
+export async function assertNativeDispatchAdmitted(
+	runId: string,
+	taskHandle: string,
+	ledgerPath: string,
+	ticketId: string,
+): Promise<void> {
+	const result = await runLedgerBridge<{ admitted: boolean; error?: string }>([
+		"admit",
+		"--ledger",
+		ledgerPath,
+		"--ticket-id",
+		ticketId,
+		"--run-id",
+		runId,
+		"--task-handle",
+		taskHandle,
+		"--host-pid",
+		String(process.pid),
+	]);
+	if (result.admitted === true) return;
+	const reason = result.error || "bridge did not admit the dispatch";
+	throw new Error(`Native dispatch not admitted for ${ticketId} (run ${runId}): ${reason}`);
 }
 
 /**
@@ -996,8 +1064,14 @@ export async function recoverOrphanedClaims(
 
 // --- Native Dispatch Engine ---
 
+interface ActiveLeaseFrame {
+	readonly keys: ReadonlySet<string>;
+	readonly postLeaseCallbacks: Map<string, Array<() => void>>;
+}
+
 const replenishmentTails = new Map<string, Promise<void>>();
-const replenishmentReservations = new Map<string, Set<string>>();
+const replenishmentReservations = new Map<string, Map<string, string>>();
+const activeReplenishmentLeases = new AsyncLocalStorage<ActiveLeaseFrame>();
 
 async function withReplenishmentLease<T>(key: string, run: () => Promise<T>): Promise<T> {
 	const previous = replenishmentTails.get(key) ?? Promise.resolve();
@@ -1008,12 +1082,26 @@ async function withReplenishmentLease<T>(key: string, run: () => Promise<T>): Pr
 	const tail = previous.then(() => reservation);
 	replenishmentTails.set(key, tail);
 	await previous;
+	const parentFrame = activeReplenishmentLeases.getStore();
+	const keys = new Set(parentFrame?.keys);
+	keys.add(key);
+	const postLeaseCallbacks = new Map(parentFrame?.postLeaseCallbacks);
+	postLeaseCallbacks.set(key, []);
+	const frame: ActiveLeaseFrame = { keys, postLeaseCallbacks };
+	let result: T;
 	try {
-		return await run();
+		result = await activeReplenishmentLeases.run(frame, run);
 	} finally {
 		release();
 		if (replenishmentTails.get(key) === tail) replenishmentTails.delete(key);
 	}
+	const callbacks = frame.postLeaseCallbacks.get(key);
+	if (callbacks && callbacks.length > 0) {
+		for (const callback of callbacks) {
+			callback();
+		}
+	}
+	return result;
 }
 
 export class TopicReplenishmentEngine {
@@ -1027,6 +1115,15 @@ export class TopicReplenishmentEngine {
 	readonly memoryProvider?: MemoryMeasurementProvider;
 	#verificationWorkers = new Map<string, VerificationWorkerStart>();
 	#cycleOptions?: ReplenishmentCycleOptions;
+	#claimedPreviousStates = new Map<string, string>();
+	#rolledBackRuns = new Set<string>();
+	#pendingClaimId?: string;
+	#pendingPostLease: {
+		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[];
+		options?: ReplenishmentCycleOptions;
+	} | null = null;
+	#postLeaseScheduled = false;
+	#pendingReplenishPromise: Promise<void> | null = null;
 
 	constructor(options?: TopicReplenishmentEngineOptions) {
 		this.ledgerPath = options?.ledgerPath ?? getDefaultLedgerPath();
@@ -1050,8 +1147,108 @@ export class TopicReplenishmentEngine {
 		this.#verificationWorkers.set(key, event);
 	}
 
-	onWorkerStartFailed(event: VerificationWorkerStart): void {
+	async onWorkerStartFailed(event: VerificationWorkerStart): Promise<{ rolledBack: boolean }> {
 		this.#removeVerificationWorker(event);
+		this.#releaseReservation(event.ticketId, event.runId);
+		if (!event.ticketId || !event.runId || !fs.existsSync(this.ledgerPath)) {
+			return { rolledBack: false };
+		}
+		const claimKey = `${event.ticketId}\0${event.runId}`;
+		const previousState = this.#claimedPreviousStates.get(claimKey);
+		const rollback = await this.rollbackClaimedTicket(
+			event.ticketId,
+			event.reason || "Subagent failed before completion",
+			event.runId,
+			previousState,
+			event.taskHandle,
+		);
+		if (rollback.rolled_back) {
+			this.#claimedPreviousStates.delete(claimKey);
+			this.#rolledBackRuns.add(claimKey);
+			if (this.#rolledBackRuns.size > 1000) {
+				const oldest = this.#rolledBackRuns.values().next().value;
+				if (oldest !== undefined) this.#rolledBackRuns.delete(oldest);
+			}
+		}
+		return { rolledBack: rollback.rolled_back };
+	}
+
+	#releaseReservation(ticketId?: string, runId?: string): void {
+		if (!ticketId) return;
+		const reservations = replenishmentReservations.get(this.ledgerPath);
+		if (!reservations) return;
+		if (runId !== undefined) {
+			if (reservations.get(ticketId) === runId) {
+				reservations.delete(ticketId);
+			}
+			return;
+		}
+		reservations.delete(ticketId);
+	}
+
+	#deferredReplenishOutcome(
+		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
+		reason: string,
+	): ReplenishmentOutcome {
+		const reconciliation = reconcileRunningTopics(roster, {
+			minFloor: this.minFloor,
+			targetCount: this.targetCount,
+		});
+		return {
+			reconciliation,
+			memoryAdmission: { admitted: true, usedPct: 0, freeMb: 0, totalMb: 0 },
+			dispatchedTickets: [],
+			dispatchedCount: 0,
+			blockedTopics: [],
+			status: this.#verificationBlocked() ? "verification_blocked" : "floor_satisfied",
+			reason,
+		};
+	}
+
+	#schedulePostLeaseReplenish(
+		frame: ActiveLeaseFrame,
+		roster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
+		options?: ReplenishmentCycleOptions,
+	): void {
+		this.#pendingPostLease = { roster, options };
+		if (this.#postLeaseScheduled) return;
+		this.#postLeaseScheduled = true;
+		const callbacks = frame.postLeaseCallbacks.get(this.ledgerPath);
+		const runFollowUp = () => {
+			this.#postLeaseScheduled = false;
+			const pending = this.#pendingPostLease;
+			this.#pendingPostLease = null;
+			if (!pending) return;
+			const previous = this.#pendingReplenishPromise ?? Promise.resolve();
+			const next = previous
+				.then(() => this.replenish(pending.roster, pending.options))
+				.then(
+					() => undefined,
+					err => {
+						logger.warn("TopicReplenishmentEngine: post-settlement replenishment failed", {
+							error: errorMessage(err),
+						});
+					},
+				)
+				.finally(() => {
+					if (this.#pendingReplenishPromise === next) {
+						this.#pendingReplenishPromise = null;
+					}
+				});
+			this.#pendingReplenishPromise = next;
+		};
+		if (callbacks) {
+			callbacks.push(runFollowUp);
+		} else {
+			queueMicrotask(runFollowUp);
+		}
+	}
+
+	/** Wait for any post-lease replenishment cycles scheduled after inline completion. */
+	async waitForPendingReplenishment(): Promise<void> {
+		while (this.#pendingReplenishPromise) {
+			await this.#pendingReplenishPromise;
+		}
 	}
 
 	#reconcileVerificationWorkers(currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[]): void {
@@ -1115,9 +1312,14 @@ export class TopicReplenishmentEngine {
 		ticketId: string,
 		reason: string,
 		runId: string,
-		previousState: string,
+		previousState?: string,
+		taskHandle?: string,
 	): Promise<{ rolled_back: boolean }> {
-		return await rollbackClaimedTicket(this.ledgerPath, ticketId, reason, { runId, previousState });
+		return await rollbackClaimedTicket(this.ledgerPath, ticketId, reason, {
+			runId,
+			previousState,
+			taskHandle,
+		});
 	}
 
 	async completeClaimedTicket(
@@ -1188,7 +1390,7 @@ export class TopicReplenishmentEngine {
 			return this.#verificationBlockedOutcome(reconciliation, memoryAdmission);
 		}
 
-		const reservations = replenishmentReservations.get(this.ledgerPath) ?? new Set<string>();
+		const reservations = replenishmentReservations.get(this.ledgerPath) ?? new Map<string, string>();
 		replenishmentReservations.set(this.ledgerPath, reservations);
 		const effectiveActiveCount = reconciliation.activeUsefulCount + reservations.size;
 		if (effectiveActiveCount >= this.targetCount || effectiveActiveCount >= this.maxCeiling) {
@@ -1223,11 +1425,26 @@ export class TopicReplenishmentEngine {
 			}
 			if (!stepMem.admitted) break;
 
+			this.#pendingClaimId ??= randomUUID();
 			const claimResult = await claimNextAuthorizedTicket(this.ledgerPath, {
 				coveredTopics: Array.from(covered),
 				activeUsefulCount: currentRunning,
 				targetCapacity: this.targetCount,
+				hostPid: process.pid,
+				claimId: this.#pendingClaimId,
 			});
+			if (claimResult.replyUnconfirmed) {
+				return {
+					reconciliation,
+					memoryAdmission,
+					dispatchedTickets,
+					dispatchedCount: dispatchedTickets.length,
+					blockedTopics: allBlockedTopics,
+					status: "error",
+					reason: claimResult.reason,
+				};
+			}
+			this.#pendingClaimId = undefined;
 			if (this.#verificationBlocked()) {
 				if (claimResult.claimed && claimResult.ticket) {
 					const rollback = await this.rollbackClaimedTicket(
@@ -1267,20 +1484,25 @@ export class TopicReplenishmentEngine {
 			if (!claimResult.claimed || !claimResult.ticket) break;
 
 			const ticket = claimResult.ticket;
+			const claimKey = `${ticket.id}\0${ticket.runId}`;
 			dispatchedTickets.push(ticket);
 			covered.add(ticket.topic);
 			currentRunning++;
+			reservations.set(ticket.id, ticket.runId);
+			this.#claimedPreviousStates.set(claimKey, ticket.previousState);
+			this.#rolledBackRuns.delete(claimKey);
 
 			try {
 				await activeExecutor(ticket);
-				reservations.add(ticket.id);
 			} catch (err) {
-				const rollback = await this.rollbackClaimedTicket(
-					ticket.id,
-					String(err),
-					ticket.runId,
-					ticket.previousState,
-				);
+				if (reservations.get(ticket.id) === ticket.runId) {
+					reservations.delete(ticket.id);
+				}
+				this.#claimedPreviousStates.delete(claimKey);
+				const alreadyRolledBack = this.#rolledBackRuns.delete(claimKey);
+				const rollback = alreadyRolledBack
+					? { rolled_back: true }
+					: await this.rollbackClaimedTicket(ticket.id, String(err), ticket.runId, ticket.previousState);
 				return {
 					reconciliation,
 					memoryAdmission,
@@ -1289,8 +1511,8 @@ export class TopicReplenishmentEngine {
 					blockedTopics: allBlockedTopics,
 					status: "error",
 					reason: rollback.rolled_back
-						? `Failed to dispatch ticket ${ticket.id}: ${err} (claimed ticket rolled back to ${ticket.previousState ?? "pending"})`
-						: `Failed to dispatch ticket ${ticket.id}: ${err} (claim was already reassigned and remains intact)`,
+						? `Failed to dispatch ticket ${ticket.id}: ${err} (claim released)`
+						: `Failed to dispatch ticket ${ticket.id}: ${err} (claim release not confirmed)`,
 				};
 			}
 		}
@@ -1316,10 +1538,12 @@ export class TopicReplenishmentEngine {
 	async onWorkerComplete(
 		event: SubagentCompleteEvent,
 		currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[],
-		options?: ReplenishmentCycleOptions,
+		options?: WorkerCompleteOptions,
 	): Promise<ReplenishmentOutcome> {
-		const reservations = replenishmentReservations.get(this.ledgerPath);
-		if (event.ticketId) reservations?.delete(event.ticketId);
+		this.#releaseReservation(event.ticketId, event.runId);
+		if (event.ticketId && event.runId) {
+			this.#claimedPreviousStates.delete(`${event.ticketId}\0${event.runId}`);
+		}
 		if (event.ticketId && fs.existsSync(this.ledgerPath)) {
 			try {
 				const completion = await completeClaimedTicket(this.ledgerPath, event.ticketId, {
@@ -1352,7 +1576,22 @@ export class TopicReplenishmentEngine {
 			return true;
 		});
 
-		return this.replenish(updatedRoster, options ?? this.#cycleOptions);
+		const cycleOptions = options ?? this.#cycleOptions;
+		if (options?.deferReplenish) {
+			return this.#deferredReplenishOutcome(
+				updatedRoster,
+				"Replenishment deferred until background job slot releases.",
+			);
+		}
+		const activeFrame = activeReplenishmentLeases.getStore();
+		if (activeFrame?.keys.has(this.ledgerPath)) {
+			this.#schedulePostLeaseReplenish(activeFrame, updatedRoster, cycleOptions);
+			return this.#deferredReplenishOutcome(
+				updatedRoster,
+				"Replenishment deferred until active replenishment lease releases.",
+			);
+		}
+		return this.replenish(updatedRoster, cycleOptions);
 	}
 
 	/**
