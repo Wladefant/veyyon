@@ -1,5 +1,5 @@
-import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { setImmediate } from "node:timers/promises";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { BuiltSkillPromptMessage, Skill } from "@veyyon/coding-agent/extensibility/skills";
