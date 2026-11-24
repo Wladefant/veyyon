@@ -125,7 +125,7 @@ describe("AgentSession retry fallback", () => {
 		{ name: "direct Anthropic DNS", wrapped: false, failures: 1, retries: 1 },
 		{ name: "sidecar-wrapped Cloud Code DNS", wrapped: true, failures: 1, retries: 1 },
 		{ name: "persistent DNS", wrapped: true, failures: 2, retries: 1 },
-		{ name: "persistent Cloud Code DNS without a fallback", wrapped: true, failures: 2, retries: 2, noFallback: true },
+		{ name: "Cloud Code DNS with no fallback", wrapped: true, failures: 2, retries: 2, noFallback: true },
 		{ name: "unknown hostname", wrapped: false, failures: 1, retries: 0, unknownHost: true },
 	])("retries the current selector before fallback only for known endpoints: $name", async test => {
 		const primary = test.wrapped
