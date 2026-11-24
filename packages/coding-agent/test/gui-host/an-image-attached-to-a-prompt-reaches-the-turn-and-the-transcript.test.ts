@@ -335,15 +335,18 @@ describe("an image attached to a prompt reaches the turn and the transcript", ()
 		expect(new Set(Object.keys(IMAGES))).toEqual(new Set(SUPPORTED_IMAGE_MIME_TYPES));
 	});
 
-	test.each(Object.entries(IMAGES))("%s arrives as the same image in the transcript and model request", async (mediaType, bytes) => {
-		// Use a fresh host connection per format. A previous session can still
-		// finish side requests after its stream clears.
-		const session = await createSession(1);
-		const { appended } = await submitAttached(session, mediaType, bytes);
-		const prompt = appended.find(entry => entry.role === "User");
-		const drawn = await imageOf(prompt?.content.at(-1));
-		expect(imagesAskedFor(contexts)).toEqual([drawn]);
-	});
+	test.each(Object.entries(IMAGES))(
+		"%s arrives as the same image in the transcript and model request",
+		async (mediaType, bytes) => {
+			// Use a fresh host connection per format. A previous session can still
+			// finish side requests after its stream clears.
+			const session = await createSession(1);
+			const { appended } = await submitAttached(session, mediaType, bytes);
+			const prompt = appended.find(entry => entry.role === "User");
+			const drawn = await imageOf(prompt?.content.at(-1));
+			expect(imagesAskedFor(contexts)).toEqual([drawn]);
+		},
+	);
 
 	test("UTF-8 attachment names and contents remain untrusted data in the provider prompt and transcript", async () => {
 		const session = await createSession(1);

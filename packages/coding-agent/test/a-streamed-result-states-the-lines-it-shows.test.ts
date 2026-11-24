@@ -387,9 +387,6 @@ describe("a streaming tool returns one window under one notice", () => {
 	 */
 	it("bash cut to a threshold lowered mid-run points at the one artifact it saved", async () => {
 		const { session, allocated } = artifactSession(makeArtifactDir());
-		// The command exits 3, and the shell minimizer rewrites failing output and saves its original as a second
-		// artifact by design. This test is about the sink's cut, so the minimizer stays off here.
-		session.settings.set("shellMinimizer.enabled", false);
 		const tool = wrapToolWithMetaNotice(new BashTool(session));
 		let lowered = false;
 		const result = await tool.execute(
