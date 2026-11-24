@@ -118,6 +118,9 @@ describe("OVH related-test selector", () => {
 					compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext" },
 				}),
 				"CHANGELOG.md": "# Changelog\n",
+				"docs/CHANGELOG.md": "# Documentation history\n",
+				"scripts/docs-history.test.ts":
+					'import { readFileSync } from "node:fs";\nexport const history = readFileSync("docs/CHANGELOG.md", "utf8");\n',
 				"packages/pkg-a/CHANGELOG.md": "# Package changelog\n",
 				"packages/pkg-a/src/doc-references.ts":
 					'export const paths = ["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md"];\n',
@@ -156,6 +159,11 @@ describe("OVH related-test selector", () => {
 				expect(parseSelectedTests(runSelector([file], { cwd: fixtureDir }))).toEqual([]);
 			},
 		);
+
+		it("keeps ordinary readers for a changelog outside a package", () => {
+			const output = runSelector(["docs/CHANGELOG.md"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual(["scripts/docs-history.test.ts"]);
+		});
 
 		it("retains consumer when importing a value re-exported by a barrel from changed module", () => {
 			const output = runSelector(["packages/pkg-a/src/mod-a.ts"], { cwd: fixtureDir });

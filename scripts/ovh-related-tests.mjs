@@ -349,9 +349,11 @@ const reverse = new Map();
 for (const graph of [ordinaryReverse, symbolReverse, conservativeReverse, refReverse, cliReverse]) for (const [dependency, consumers] of graph) for (const consumer of consumers) edge(reverse, dependency, consumer);
 
 function changelogReaders(file) {
+  if (path.posix.basename(file).toLowerCase() !== 'changelog.md') return null;
   const dir = path.posix.dirname(file);
   // The root changelog is generated. These tests read member changelogs, not the root copy.
-  if (dir === '.' || !packageRecords.some(record => record.dir === dir)) return [];
+  if (dir === '.') return [];
+  if (!packageRecords.some(record => record.dir === dir)) return null;
   const readers = [
     'scripts/changelog-version-headings-are-unique.test.ts',
     'scripts/release-changelog.test.ts',
@@ -365,9 +367,8 @@ function changelogReaders(file) {
 
 function reachableFrom(rootFile) {
   // Filename mentions in commit and release code are not dependencies on release-note content.
-  if (path.posix.basename(rootFile).toLowerCase() === 'changelog.md') {
-    return new Map(changelogReaders(rootFile).map(test => [test, 1]));
-  }
+  const readers = changelogReaders(rootFile);
+  if (readers !== null) return new Map(readers.map(test => [test, 1]));
   const distances = new Map([[rootFile, 0]]);
   const queue = [rootFile];
   for (let i = 0; i < queue.length; i++) {
