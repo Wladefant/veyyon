@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { atomicWriteFile } from "@veyyon/utils";
 import { getAgentDir } from "@veyyon/utils/dirs";
 import { isMissingPath } from "@veyyon/utils/fs-error";
 
@@ -115,17 +116,12 @@ export class HistoryDirectoryIndex {
 		if (count > MAX_CACHE_ENTRIES) return;
 		const content = JSON.stringify({ version: 1, rows: [...this.#visited] });
 		if (Buffer.byteLength(content, "utf8") > MAX_CACHE_BYTES) return;
-		const temporary = `${this.#cachePath}.${randomUUID()}.tmp`;
 		try {
-			await fs.mkdir(path.dirname(this.#cachePath), { recursive: true });
-			await fs.writeFile(temporary, content, { signal: this.#signal });
+			await atomicWriteFile(this.#cachePath, content, { mode: 0o666, fsync: false, requireAtomicReplace: true });
 			this.#signal?.throwIfAborted();
-			await fs.rename(temporary, this.#cachePath);
 		} catch {
 			// A cache is optional; an unwritable cache never hides a readable transcript.
 			this.#signal?.throwIfAborted();
-		} finally {
-			await fs.unlink(temporary).catch(() => undefined);
 		}
 	}
 }

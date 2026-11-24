@@ -4,6 +4,7 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import { type FileHandle, lstat, mkdir, open, opendir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
+import { atomicWriteFile } from "@veyyon/utils";
 import { blobsDirForSessionDir } from "../../../../kernel/src/session/blob-store";
 import { assertNotTerminalOwned } from "../../../../kernel/src/session/terminal-ownership";
 import { type CheckpointFile, filterCheckpointFiles } from "./cloud-checkpoints";
@@ -317,12 +318,9 @@ export async function persistNativeHandoffIdentity(
 	if (next.equals(Buffer.from(original))) return;
 	if (!Buffer.from(await readStable(journalPath, original.byteLength)).equals(Buffer.from(original)))
 		throw new Error("Native session changed while persisting its handoff identity");
-	const temporary = `${journalPath}.${randomUUID()}.tmp`;
-	await writeFile(temporary, next, { flag: "wx", mode: 0o600 });
 	try {
-		await rename(temporary, journalPath);
+		await atomicWriteFile(journalPath, next, { mode: 0o600, requireAtomicReplace: true });
 	} catch (error) {
-		await rm(temporary, { force: true });
 		throw new Error("Could not persist the native session handoff identity", { cause: error });
 	}
 }

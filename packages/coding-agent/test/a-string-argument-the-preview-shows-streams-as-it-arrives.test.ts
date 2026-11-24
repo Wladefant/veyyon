@@ -253,7 +253,8 @@ describe("a string argument the preview shows streams as it arrives", () => {
 
 	it("builds every tool the registry declares", () => {
 		expect(sweep.unconstructable).toEqual([]);
-		const expectedNotRegistered = git.github.available() ? [] : ["github"];
+		// The sweep constructs the registry twice, once for each task tool shape.
+		const expectedNotRegistered = git.github.available() ? [] : ["github", "github"];
 		expect(sweep.notRegistered).toEqual(expectedNotRegistered);
 	});
 

@@ -111,7 +111,7 @@ const HARNESSES: Record<string, () => Harness> = {
 			ui,
 			btwContainer: container,
 			session: heldSession(turns),
-			sessionManager: { getLeafId: () => "leaf-1" },
+			sessionManager: { getLeafId: () => "leaf-1", getSessionId: () => "session-1" },
 			showStatus() {},
 			showError() {},
 		} as unknown as InteractiveModeContext;
