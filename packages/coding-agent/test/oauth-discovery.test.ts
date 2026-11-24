@@ -229,6 +229,39 @@ describe("WWW-Authenticate scopes", () => {
 		expect(extractOAuthChallengeScopes(error)).toBe(expected);
 		expect(extractMcpAuthServerUrl(error)).toBe("https://[::1]/issuer");
 	});
+
+	it("uses the complete Bearer challenge without borrowing hints from an earlier realm", async () => {
+		const error = await mcpHttpFailure(
+			"https://mcp.example.com",
+			new Response(null, {
+				status: 401,
+				headers: {
+					"WWW-Authenticate":
+						'Bearer realm="MCP", scope=old, resource_metadata="https://mcp.example.com/old", Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=read, resource_metadata="https://mcp.example.com/current"',
+				},
+			}),
+		);
+		expect(extractOAuthChallengeScopes(error)).toBe("read");
+		expect(analyzeAuthError(error)).toMatchObject({
+			scopes: "read",
+			resourceMetadataUrl: "https://mcp.example.com/current",
+			oauth: {
+				authorizationUrl: "https://auth.example.com/authorize",
+				tokenUrl: "https://auth.example.com/token",
+				scopes: "read",
+				explicitScopes: true,
+			},
+		});
+	});
+
+	it("does not assemble an endpoint pair from two incomplete challenges", () => {
+		const error = new Error(
+			'HTTP 401: Bearer authorization_uri="https://auth.example.com/authorize", scope=read, Bearer token_url="https://other.example.com/token"',
+		);
+		const result = analyzeAuthError(error);
+		expect(result.oauth).toBeUndefined();
+		expect(result.scopes).toBe("read");
+	});
 });
 
 describe("resource_metadata chain", () => {

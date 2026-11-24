@@ -75,10 +75,8 @@ function leadingAuthChallenge(message: string): string | undefined {
 	return prefix ? message.slice(prefix[0].length) : undefined;
 }
 
-function readBearerParams(error: Error): ReadonlyMap<string, string> {
-	const header = error instanceof MCPHttpFailure ? error.wwwAuthenticate : leadingAuthChallenge(error.message);
-	const params = new Map<string, string>();
-	if (!header) return params;
+function readAuthChallenges(header: string): { scheme: string; params: ReadonlyMap<string, string> }[] {
+	const challenges: { scheme: string; params: ReadonlyMap<string, string> }[] = [];
 
 	// RFC 9110 sections 5.6 and 11: consume tokens at the current position.
 	// After a comma, a token without '=' starts a new challenge.
@@ -95,38 +93,63 @@ function readBearerParams(error: Error): ReadonlyMap<string, string> {
 		scheme.lastIndex = pos;
 		const challenge = scheme.exec(header);
 		if (!challenge) break;
-		const isBearer = challenge[0].toLowerCase() === "bearer";
+		const params = new Map<string, string>();
+		challenges.push({ scheme: challenge[0].toLowerCase(), params });
 		pos = scheme.lastIndex;
 		let first = true;
 		while (pos < header.length) {
 			separator.lastIndex = pos;
 			const gap = separator.exec(header)?.[0] ?? "";
 			pos = separator.lastIndex;
-			if (!gap) return params;
+			if (!gap) return challenges;
 
 			param.lastIndex = pos;
 			const entry = param.exec(header);
 			if (entry) {
-				if (isBearer) {
-					const key = entry[1].toLowerCase();
-					const value = entry[2]?.replace(/\\([^\r\n])/g, "$1") ?? entry[3];
-					if (value.trim() && !params.has(key)) params.set(key, value);
-				}
+				const key = entry[1].toLowerCase();
+				const value = entry[2]?.replace(/\\([^\r\n])/g, "$1") ?? entry[3];
+				if (value.trim() && !params.has(key)) params.set(key, value);
 				pos = param.lastIndex;
 				first = false;
 			} else if (gap.includes(",")) {
 				break;
 			} else {
 				token68.lastIndex = pos;
-				if (!first || !token68.test(header)) return params;
+				if (!first || !token68.test(header)) return challenges;
 				separator.lastIndex = token68.lastIndex;
-				if (!separator.exec(header)?.[0].includes(",")) return params;
+				if (!separator.exec(header)?.[0].includes(",")) return challenges;
 				pos = separator.lastIndex;
 				break;
 			}
 		}
 	}
-	return params;
+	return challenges;
+}
+
+function challengeEndpoints(params: ReadonlyMap<string, string>) {
+	return {
+		authorizationUrl:
+			params.get("authorization_uri") ??
+			params.get("authorization_url") ??
+			params.get("authorization_endpoint") ??
+			params.get("authorize_url") ??
+			params.get("realm"),
+		tokenUrl: params.get("token_url") ?? params.get("token_uri") ?? params.get("token_endpoint"),
+	};
+}
+
+function readBearerParams(error: Error): ReadonlyMap<string, string> {
+	const header = error instanceof MCPHttpFailure ? error.wwwAuthenticate : leadingAuthChallenge(error.message);
+	let fallback: ReadonlyMap<string, string> | undefined;
+	for (const { scheme, params } of header ? readAuthChallenges(header) : []) {
+		if (scheme !== "bearer") continue;
+		const { authorizationUrl, tokenUrl } = challengeEndpoints(params);
+		if (authorizationUrl && tokenUrl && URL.canParse(authorizationUrl) && URL.canParse(tokenUrl)) return params;
+		if (!fallback && (params.has("resource_metadata") || params.has("scope") || params.has("scopes"))) {
+			fallback = params;
+		}
+	}
+	return fallback ?? new Map();
 }
 
 /** Read the OAuth scope requested by a Bearer challenge, not the response body. */
@@ -239,15 +262,8 @@ function readOAuthEndpoints(error: Error, challengeValues: ReadonlyMap<string, s
 		// Not JSON, continue with other detection methods
 	}
 
-	const authorizationUrl =
-		challengeValues.get("authorization_uri") ||
-		challengeValues.get("authorization_url") ||
-		challengeValues.get("authorization_endpoint") ||
-		challengeValues.get("authorize_url") ||
-		challengeValues.get("realm");
-	const tokenUrl =
-		challengeValues.get("token_url") || challengeValues.get("token_uri") || challengeValues.get("token_endpoint");
-	if (authorizationUrl && tokenUrl) {
+	const { authorizationUrl, tokenUrl } = challengeEndpoints(challengeValues);
+	if (authorizationUrl && tokenUrl && URL.canParse(authorizationUrl) && URL.canParse(tokenUrl)) {
 		const scope = mergeRequestedScopes(
 			challengeValues.get("scope") ?? challengeValues.get("scopes"),
 			scopeFromAuthUrl(authorizationUrl),
