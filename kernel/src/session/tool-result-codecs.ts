@@ -32,13 +32,16 @@ export function registerToolResultCodecs(contributed: readonly ToolResultCodec[]
 	}
 }
 
-/** The tool result an entry holds with its tool's codec, or undefined when either is missing. */
-function codedResult(entry: FileEntry): { message: ToolResultMessage; codec: ToolResultCodec } | undefined {
+/** Check codec support before reading the result's potentially cold details. */
+function codedResult(
+	entry: FileEntry,
+	method?: "needsMigration" | "migrate",
+): { message: ToolResultMessage; codec: ToolResultCodec } | undefined {
 	if (entry.type !== "message" || entry.message.role !== "toolResult") return undefined;
 	const message = entry.message;
-	if (message.details === undefined) return undefined;
 	const codec = codecs.get(message.toolName);
-	return codec === undefined ? undefined : { message, codec };
+	if (!codec || (method && !codec[method]) || message.details === undefined) return undefined;
+	return { message, codec };
 }
 
 /**
@@ -69,7 +72,7 @@ export function restoreToolResultEntries(entries: readonly FileEntry[]): void {
 /** Read-only loads can inspect this without allocating artifacts or replacing payloads. */
 export function hasPendingToolResultMigrations(entries: readonly FileEntry[]): boolean {
 	return entries.some(entry => {
-		const coded = codedResult(entry);
+		const coded = codedResult(entry, "needsMigration");
 		return coded?.codec.needsMigration?.(coded.message.details) === true;
 	});
 }
@@ -81,7 +84,7 @@ export async function migrateToolResultEntries(
 ): Promise<boolean> {
 	const staged: { message: ToolResultMessage; details: unknown }[] = [];
 	for (const entry of entries) {
-		const coded = codedResult(entry);
+		const coded = codedResult(entry, "migrate");
 		if (!coded?.codec.migrate) continue;
 		if (coded.codec.needsMigration?.(coded.message.details) === false) continue;
 		const details = structuredClone(coded.message.details);

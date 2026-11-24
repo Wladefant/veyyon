@@ -174,6 +174,7 @@ import { formatAdvisorStatus } from "./advisor-stats";
 import { throwIfExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage } from "./agent-session-message-shapes";
+import { compactionModelCandidates } from "./agent-session-model-targets";
 import { isAdvisorCard, isTerminalTextAssistantAnswer, type RestoredQueuedMessage } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
@@ -633,6 +634,9 @@ export class AgentSession {
 		whileDisconnectedFromAgent: run => this.#whileDisconnectedFromAgent(run),
 		phaseChanged: () => this.#heartbeat?.update(),
 	});
+
+	/** Set once an automatic expensive-agent handoff has run for this session id, so it runs at most once. */
+	#lastLaneHandoffSessionId: string | undefined;
 
 	/** The end-of-turn context check and the recovery each of its cases runs. */
 	readonly #contextCheck = new TurnContextCheck(this, {
@@ -1660,6 +1664,16 @@ export class AgentSession {
 			}
 			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
+			if (signal?.aborted) return;
+			const automaticHandoffModel = this.#automaticHandoffSummaryModel(context);
+			if (automaticHandoffModel) {
+				if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
+				signal?.throwIfAborted();
+				const switched = await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel, signal);
+				// This hook runs between provider calls. Unwind the turn on abort rather than sampling again.
+				signal?.throwIfAborted();
+				if (switched) return;
+			}
 			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
 		});
 		this.yieldQueue = new YieldQueue({
@@ -2164,7 +2178,11 @@ export class AgentSession {
 			effectiveServiceTier: model => this.#tiers.effective(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
-			endConversation: () => this.#conversation.release(),
+			endConversation: async preserveAgentLineage => {
+				const id = this.#config.agentId;
+				if (preserveAgentLineage && id) AgentRegistry.global().publishSessionFile(id, this, this.sessionFile);
+				await this.#conversation.release({ preserveAgentLineage });
+			},
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
@@ -5001,6 +5019,84 @@ export class AgentSession {
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		return this.#sessionHandoff.run(customInstructions, options);
+	}
+	/**
+	 * The summary model for an automatic expensive-agent handoff at this turn end, or undefined when the turn
+	 * is not eligible. Cheap guards run first; the context count and candidate search run only after them.
+	 */
+	#automaticHandoffSummaryModel(
+		context: { willContinue?: boolean; message: AgentMessage } | undefined,
+	): Model | undefined {
+		const message = context?.message;
+		if (
+			this.#isDisposed ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			!context?.willContinue ||
+			message?.role !== "assistant" ||
+			message.stopReason === "aborted" ||
+			message.stopReason === "error"
+		) {
+			return undefined;
+		}
+		const agentId = this.#config.agentId;
+		const threshold = this.settings.get("compaction.laneHandoffThresholdTokens");
+		const model = this.model;
+		if (
+			!this.#isSpawned ||
+			!agentId ||
+			AgentRegistry.global().get(agentId)?.kind !== "sub" ||
+			this.#lastLaneHandoffSessionId === this.sessionManager.getSessionId() ||
+			threshold <= 0 ||
+			!model ||
+			!/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(model.id)
+		) {
+			return undefined;
+		}
+		const contextTokens = this.getContextBreakdown()?.usedTokens ?? 0;
+		if (contextTokens < threshold) return undefined;
+		return compactionModelCandidates(this.settings, model, this.modelRegistry.getAvailable()).find(
+			candidate =>
+				candidate.contextWindow !== null &&
+				candidate.maxTokens !== null &&
+				candidate.contextWindow >= contextTokens + 8_000 + candidate.maxTokens &&
+				this.modelRegistry.hasConfiguredAuth(candidate),
+		);
+	}
+	/** Hand a spawned expensive agent's transcript to a fresh successor. False keeps the current transcript. */
+	async #maybeHandoffExpensiveAgent(
+		messages: AgentMessage[],
+		summaryModel: Model,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		const agentId = this.#config.agentId;
+		const sourceSessionId = this.sessionManager.getSessionId();
+		this.#lastLaneHandoffSessionId = sourceSessionId;
+		try {
+			const result = await this.handoff(undefined, {
+				autoTriggered: true,
+				compactSummary: true,
+				preserveAgentLineage: true,
+				summaryModel,
+				signal,
+			});
+			return result !== undefined;
+		} catch (error) {
+			// Once the session manager has switched, stop the turn on failure.
+			// Continuing would send source messages against the successor's transcript.
+			if (this.sessionManager.getSessionId() !== sourceSessionId) throw error;
+			if (signal?.aborted) return false;
+			logger.warn("Automatic expensive-agent handoff failed; retaining the current transcript", {
+				agentId,
+				error: errorMessage(error),
+			});
+			return false;
+		} finally {
+			if (this.sessionManager.getSessionId() !== sourceSessionId) {
+				if (agentId) AgentRegistry.global().publishSessionFile(agentId, this, this.sessionFile);
+				messages.splice(0, messages.length, ...this.agent.state.messages);
+			}
+		}
 	}
 	/**
 	 * Drop an assistant turn from BOTH the live agent context and the persisted

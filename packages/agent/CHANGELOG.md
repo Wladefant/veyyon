@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Exclude restated session blocks from the retained-history budget so manual compaction leaves genuinely small conversations alone ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+
 ## [1.9.2] - 2026-11-12
 
 ### Fixed

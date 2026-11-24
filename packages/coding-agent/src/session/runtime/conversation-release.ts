@@ -38,6 +38,9 @@ export class ConversationRelease {
 	 * Release what the conversation the session just left holds: its spawned agents and registry
 	 * scope, then its eval kernels.
 	 *
+	 * A lineage-preserving handoff replaces the transcript without ending the agent's
+	 * registry scope or IRC history. Transcript-scoped decisions and eval kernels still end.
+	 *
 	 * A kernel is keyed by the transcript's eval session id, so no cell of the next conversation
 	 * reaches the previous one's kernel, and it kept its interpreter's memory until the session
 	 * ended: a window open for days held one kernel per conversation. The release runs the registry
@@ -46,8 +49,12 @@ export class ConversationRelease {
 	 * no longer holds its session, so it is not retried into a fresh kernel. A release that fails is
 	 * logged and does not fail the switch.
 	 */
-	async release(): Promise<void> {
-		await this.#rescope();
+	async release({ preserveAgentLineage = false }: { preserveAgentLineage?: boolean } = {}): Promise<void> {
+		if (preserveAgentLineage) {
+			this.#host.forgetToolDecisions();
+		} else {
+			await this.#rescope();
+		}
 		try {
 			await disposeOwnedResources("eval-kernel-owner", this.#evalKernelOwnerId);
 		} catch (error) {
