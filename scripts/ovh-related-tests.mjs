@@ -38,7 +38,7 @@ const exportLeafCache = new Map();
 const moduleResolutionCaches = new WeakMap();
 const moduleLeafCache = new Map();
 
-for (const file of allTracked.filter(file => file.endsWith('package.json'))) {
+for (const file of allTracked.filter(file => file === 'package.json' || file.endsWith('/package.json'))) {
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -347,7 +347,28 @@ for (const consumer of allTracked) {
 
 const reverse = new Map();
 for (const graph of [ordinaryReverse, symbolReverse, conservativeReverse, refReverse, cliReverse]) for (const [dependency, consumers] of graph) for (const consumer of consumers) edge(reverse, dependency, consumer);
+
+function changelogReaders(file) {
+  if (path.posix.basename(file).toLowerCase() !== 'changelog.md') return null;
+  const dir = path.posix.dirname(file);
+  // The root changelog is generated. These tests read member changelogs, not the root copy.
+  if (dir === '.') return [];
+  if (!packageRecords.some(record => record.dir === dir)) return null;
+  const readers = [
+    'scripts/changelog-version-headings-are-unique.test.ts',
+    'scripts/release-changelog.test.ts',
+    'scripts/rolling-a-changelog-entry-into-a-version-is-not-deleting-it.test.ts',
+    'scripts/sync-root-changelog.test.ts',
+    'scripts/write-root-changelog-refuses-to-delete-entries.test.ts',
+  ];
+  if (dir === 'packages/coding-agent') readers.push('apps/site/deploy.test.ts');
+  return readers.filter(test => tests.has(test));
+}
+
 function reachableFrom(rootFile) {
+  // Filename mentions in commit and release code are not dependencies on release-note content.
+  const readers = changelogReaders(rootFile);
+  if (readers !== null) return new Map(readers.map(test => [test, 1]));
   const distances = new Map([[rootFile, 0]]);
   const queue = [rootFile];
   for (let i = 0; i < queue.length; i++) {
