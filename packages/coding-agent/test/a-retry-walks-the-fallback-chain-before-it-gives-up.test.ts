@@ -10,10 +10,11 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, ProviderSessionState } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { parseModelPattern, parseModelString } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -117,6 +118,79 @@ describe("AgentSession retry fallback", () => {
 			session = undefined;
 		}
 		vi.restoreAllMocks();
+	});
+
+	it.each([
+		{ name: "direct Anthropic DNS", wrapped: false, failures: 1, retries: 1 },
+		{ name: "sidecar-wrapped Cloud Code DNS", wrapped: true, failures: 1, retries: 1 },
+		{ name: "persistent DNS", wrapped: true, failures: 2, retries: 1 },
+		{ name: "unknown hostname", wrapped: false, failures: 1, retries: 0, unknownHost: true },
+	])("retries the current selector before fallback only for known endpoints: $name", async test => {
+		const primary = test.wrapped
+			? requireBundledModel("google-antigravity", "gemini-3.8-flash")
+			: requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = requireBundledModel("openai", "gpt-4o-mini");
+		const fallbackSelector = `${fallback.provider}/${fallback.id}`;
+		const requests: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requests.push(model.id);
+				if (model.id !== primary.id || requests.length > test.failures) {
+					mock.push({ content: ["Recovered"] });
+					return mock.stream(model, context, options);
+				}
+				const host = test.wrapped
+					? "daily-cloudcode-pa.googleapis.com"
+					: test.unknownHost
+						? "api.anthorpic.invalid"
+						: "api.anthropic.com";
+				const error: AssistantMessage = {
+					role: "assistant",
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					content: [],
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: `${test.wrapped ? "502 upstream request failed: " : ""}getaddrinfo ENOTFOUND ${host}`,
+					errorStatus: test.wrapped ? 502 : undefined,
+					timestamp: Date.now(),
+				};
+				const stream = new AssistantMessageEventStream();
+				stream.push({ type: "error", reason: "error", error });
+				stream.end(error);
+				return stream;
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.fallbackChains": { [`${primary.provider}/*`]: [fallbackSelector] },
+			}),
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+		await session.prompt("Retry a failed provider lookup");
+		await session.waitForIdle();
+
+		const switched = test.failures > test.retries;
+		expect(requests).toEqual([
+			primary.id,
+			...(test.retries ? [primary.id] : []),
+			...(switched ? [fallback.id] : []),
+		]);
+		expect(retryStartEvents.map(event => event.delayMs)).toEqual([
+			...(test.retries ? [5] : []),
+			...(switched ? [0] : []),
+		]);
+		expect(retryEndEvents.map(event => event.success)).toEqual([true]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 	});
 
 	it("advances through a role-keyed fallback chain across retries", async () => {
