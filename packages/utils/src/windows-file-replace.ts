@@ -113,15 +113,19 @@ function openRelative(
 	options: number,
 	descriptor: Pointer | null = null,
 ): { status: number; handle: bigint } {
-	const name = Buffer.from(leaf, "utf16le");
-	const unicode = Buffer.alloc(16); // UNICODE_STRING
-	unicode.writeUInt16LE(name.length, 0);
-	unicode.writeUInt16LE(name.length, 2);
-	unicode.writeBigUInt64LE(BigInt(ptr(name)), 8);
-	const attributes = Buffer.alloc(48); // OBJECT_ATTRIBUTES
-	attributes.writeUInt32LE(attributes.length, 0);
+	// Keep both nested pointers in the allocation passed directly to the synchronous FFI call.
+	const unicodeOffset = 48; // After OBJECT_ATTRIBUTES, on an 8-byte boundary.
+	const nameOffset = unicodeOffset + 16; // After UNICODE_STRING.
+	const nameLength = Buffer.byteLength(leaf, "utf16le");
+	const attributes = Buffer.alloc(nameOffset + nameLength);
+	const base = BigInt(ptr(attributes));
+	attributes.write(leaf, nameOffset, nameLength, "utf16le");
+	attributes.writeUInt16LE(nameLength, unicodeOffset);
+	attributes.writeUInt16LE(nameLength, unicodeOffset + 2);
+	attributes.writeBigUInt64LE(base + BigInt(nameOffset), unicodeOffset + 8);
+	attributes.writeUInt32LE(unicodeOffset, 0);
 	attributes.writeBigUInt64LE(root, 8);
-	attributes.writeBigUInt64LE(BigInt(ptr(unicode)), 16);
+	attributes.writeBigUInt64LE(base + BigInt(unicodeOffset), 16);
 	attributes.writeUInt32LE(OBJ_CASE_INSENSITIVE, 24);
 	attributes.writeBigUInt64LE(descriptor ? BigInt(descriptor) : 0n, 32);
 	const handle = new BigUint64Array(1);
