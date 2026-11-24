@@ -174,6 +174,7 @@ import { formatAdvisorStatus } from "./advisor-stats";
 import { throwIfExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage } from "./agent-session-message-shapes";
+import { compactionModelCandidates } from "./agent-session-model-targets";
 import { isAdvisorCard, isTerminalTextAssistantAnswer, type RestoredQueuedMessage } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
@@ -204,7 +205,6 @@ import {
 	type SteerOptions,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
-import { compactionModelCandidates } from "./agent-session-model-targets";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
@@ -5014,7 +5014,9 @@ export class AgentSession {
 	 * The summary model for an automatic expensive-agent handoff at this turn end, or undefined when the turn
 	 * is not eligible. Cheap guards run first; the context count and candidate search run only after them.
 	 */
-	#automaticHandoffSummaryModel(context: { willContinue?: boolean; message: AgentMessage } | undefined): Model | undefined {
+	#automaticHandoffSummaryModel(
+		context: { willContinue?: boolean; message: AgentMessage } | undefined,
+	): Model | undefined {
 		const message = context?.message;
 		if (
 			this.#isDisposed ||

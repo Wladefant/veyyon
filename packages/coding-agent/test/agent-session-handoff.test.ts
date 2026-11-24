@@ -26,7 +26,7 @@ import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
-import { requireBundledModel } from "../../agent/test/helpers"
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 

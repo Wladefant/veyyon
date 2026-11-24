@@ -161,7 +161,9 @@ describe("every pass that rewrites history leaves the plan alone", () => {
 		expect(match).not.toBeNull();
 		const artifactId = match?.[1] ?? "";
 		expect(match?.[2]).toBe(control1Entry.id);
-		expect(control1Text).toBe(`${SUPERSEDED_NOTICE}\n[recover: artifact://${artifactId} (entry ${control1Entry.id})]`);
+		expect(control1Text).toBe(
+			`${SUPERSEDED_NOTICE}\n[recover: artifact://${artifactId} (entry ${control1Entry.id})]`,
+		);
 
 		const artifactPath = await simulation.sessionManager.getArtifactPath(artifactId);
 		expect(artifactPath).toBeTruthy();
@@ -188,7 +190,11 @@ describe("every pass that rewrites history leaves the plan alone", () => {
 			.map(block => block.text ?? "")
 			.join("");
 		expect(archivedControlText).toBe(bodyFor(CONTROL_PATH));
-		expect(archive.entries.some(entry => entry.message?.toolCallId === "plan-1" || entry.message?.toolCallId === "plan-2")).toBe(false);
+		expect(
+			archive.entries.some(
+				entry => entry.message?.toolCallId === "plan-1" || entry.message?.toolCallId === "plan-2",
+			),
+		).toBe(false);
 
 		expect(textOfResult(simulation, "control-2")).toBe(bodyFor(CONTROL_PATH));
 		expect(textOfResult(simulation, "plan-1")).toBe(bodyFor(PLAN_NAMED));

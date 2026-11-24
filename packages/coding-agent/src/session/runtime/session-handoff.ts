@@ -30,8 +30,8 @@ import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner, SessionBeforeSwitchResult } from "../../extensibility/extensions";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/agent/todo";
-import type { HandoffResult, SessionHandoffOptions } from "../agent-session-types";
 import { configuredCompactionEfforts } from "../agent-session-model-targets";
+import type { HandoffResult, SessionHandoffOptions } from "../agent-session-types";
 import type { CheckpointRuntime } from "./checkpoint-runtime";
 import type { ProviderSessions } from "./provider-sessions";
 import type { SessionSecrets } from "./session-secrets";
@@ -207,7 +207,9 @@ export class SessionHandoff {
 			const handoffPromptCacheKey = agent.promptCacheKey ?? agent.sessionId;
 			const focus = host.secrets.obfuscateTextForProvider(customInstructions);
 			const handoffPromptText = options?.compactSummary
-				? (focus ? `${COMPACT_HANDOFF_PROMPT}\n\nAdditional focus: ${focus}` : COMPACT_HANDOFF_PROMPT)
+				? focus
+					? `${COMPACT_HANDOFF_PROMPT}\n\nAdditional focus: ${focus}`
+					: COMPACT_HANDOFF_PROMPT
 				: renderHandoffPrompt(focus);
 			const handoffSnapshot: AgentMessage[] = [
 				...agent.state.messages,

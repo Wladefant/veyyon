@@ -200,12 +200,7 @@ function originalBodyFor(call: Call): string {
 	return bodyFor(`search backend refused ${String(call.args.pattern)}`);
 }
 
-async function expectedTextWithRecovery(
-	simulation: Simulation,
-	row: Row,
-	call: Call,
-	gated: boolean,
-): Promise<string> {
+async function expectedTextWithRecovery(simulation: Simulation, row: Row, call: Call, gated: boolean): Promise<string> {
 	const outcome = gated ? row.whenOn[call.id] : "intact";
 	const originalBody = originalBodyFor(call);
 	if (outcome === "intact") return originalBody;
@@ -215,9 +210,7 @@ async function expectedTextWithRecovery(
 		.getBranch()
 		.find(
 			entry =>
-				entry.type === "message" &&
-				entry.message.role === "toolResult" &&
-				entry.message.toolCallId === call.id,
+				entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === call.id,
 		);
 	expect(branchEntry).toBeDefined();
 	if (!branchEntry || branchEntry.type !== "message" || branchEntry.message.role !== "toolResult") {
