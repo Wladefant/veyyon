@@ -24,8 +24,8 @@ import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
-import { createCodexTestToken } from "../../ai/test/helpers";
 import { requireBundledModel } from "../../agent/test/helpers";
+import { createCodexTestToken } from "../../ai/test/helpers";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 
