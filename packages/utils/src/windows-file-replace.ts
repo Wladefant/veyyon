@@ -465,7 +465,9 @@ export function publishWindowsWriteStage(write: WindowsWriteStage): void {
 				throw new Error(`Refusing to replace ${target}: the destination changed while the write was staged.`);
 			}
 			if (replaceableAttributes(current.handle, target) !== write.attributes) {
-				throw new Error(`Refusing to replace ${target}: its Windows attributes changed while the write was staged.`);
+				throw new Error(
+					`Refusing to replace ${target}: its Windows attributes changed while the write was staged.`,
+				);
 			}
 			assertSameSecurity(current.handle, stage, target, "its Windows security changed while the write was staged");
 			// The final rename is by leaf name, not expected FileId. See #1157.

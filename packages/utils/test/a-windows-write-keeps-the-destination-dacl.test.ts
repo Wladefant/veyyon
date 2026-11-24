@@ -320,9 +320,9 @@ process.exit(23);
 		const target = path.join(dir, "destination");
 		fs.mkdirSync(target);
 		fs.writeFileSync(path.join(target, "entry.txt"), "keep\n");
-		await expect(atomicWriteFilePreservingMode(target, "replacement\n", { preserveWindowsDacl: true })).rejects.toThrow(
-			/it is a directory, and an atomic write would replace it with a regular file/,
-		);
+		await expect(
+			atomicWriteFilePreservingMode(target, "replacement\n", { preserveWindowsDacl: true }),
+		).rejects.toThrow(/it is a directory, and an atomic write would replace it with a regular file/);
 		expect(() => reserveWindowsWriteStage(target)).toThrow(/NtCreateFile.*Win32 error/);
 		expect(fs.readdirSync(target)).toEqual(["entry.txt"]);
 		expect(fs.readFileSync(path.join(target, "entry.txt"), "utf8")).toBe("keep\n");
