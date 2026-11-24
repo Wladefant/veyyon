@@ -182,10 +182,10 @@ describe("an agent's re-root leaves the process where it is", () => {
 	 * unchanged while updating the session's own working directory.
 	 */
 	it("treats a session with no isSpawned flag as session-scoped", async () => {
-		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const originDir = makeDir("origin-project");
 		const destinationDir = makeDir("destination-project");
 		setProjectDir(originDir);
+		const initialProcessCwd = fs.realpathSync(process.cwd());
 		const initialProjectDir = getProjectDir();
 		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
