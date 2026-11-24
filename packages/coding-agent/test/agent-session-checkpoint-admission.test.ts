@@ -109,6 +109,8 @@ async function createCheckpointHarness(
 			if (action === "claim")
 				return Response.json({
 					ownerNode,
+					targetNode: identity.targetNode,
+					transferId: identity.transferId,
 					epoch: 8,
 					expiresAt: "2099-01-01T00:00:00Z",
 					headSequence: 0,

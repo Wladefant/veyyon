@@ -40,6 +40,15 @@ test("separate CLI invocations on one host use independent lease owners", async 
 		}
 		if (path.includes("/objects/")) return new Response(null, { status: 201 });
 		if (path.endsWith("/head")) return Response.json(null);
+		if (path.endsWith("/commit")) {
+			// Mirror the authority commit receipt: it echoes the exact manifest it stored.
+			const { manifest } = JSON.parse(String(init?.body)) as { manifest: { sequence: number } };
+			return Response.json({
+				sequence: manifest.sequence,
+				manifestHash: new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex"),
+				manifest,
+			});
+		}
 		return Response.json({ committed: true });
 	};
 	globalThis.fetch = Object.assign(fakeFetch, { preconnect: previousFetch.preconnect });
@@ -128,6 +137,8 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 			leaseEpoch++;
 			return Response.json({
 				ownerNode: leaseOwner,
+				targetNode: request.targetNode,
+				transferId: request.transferId,
 				epoch: leaseEpoch,
 				expiresAt: "2099-01-01T00:00:00Z",
 				headSequence: head?.sequence ?? 0,

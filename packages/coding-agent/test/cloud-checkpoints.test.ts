@@ -140,9 +140,9 @@ describe("cloud checkpoints", () => {
 			});
 			const earlier = client.acquireLease("s", "owner-old");
 			const later = await client.acquireLease("s", "owner-new");
-			const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
+			// Release the deferred response before asking Bun to settle the rejection matcher.
 			releaseOld(Response.json(grant(staleReply === "valid" ? "owner-old" : "foreign-owner", 1)));
-			await rejection;
+			await expect(earlier).rejects.toThrow(/admission superseded/);
 			expect(later).toMatchObject({ ownerNode: "owner-new", epoch: 9 });
 			await expect(client.assertWritable("s", 9, "owner-new")).resolves.toBeUndefined();
 			await expect(client.assertWritable("s", 1, "owner-old")).rejects.toThrow(/lease lost/);
@@ -215,9 +215,8 @@ describe("cloud checkpoints", () => {
 			const winner = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000b");
 			const firstAdmission = old.admit();
 			await winner.admit();
-			const rejection = expect(firstAdmission).rejects.toThrow(/admission superseded/);
 			releaseOld(Response.json(grant(staleReply === "valid" ? "00000000-0000-4000-8000-00000000000a" : "foreign", 1)));
-			await rejection;
+			await expect(firstAdmission).rejects.toThrow(/admission superseded/);
 			await client.assertWritable("s", 2, "00000000-0000-4000-8000-00000000000b");
 			await winner.admit();
 			await old.close();
@@ -229,13 +228,13 @@ describe("cloud checkpoints", () => {
 		}
 	});
 
-	test("a late transfer-claim reply cannot overwrite or invalidate a newer lease", async () => {
+	test("a late transfer-claim reply settles only its own grant while competing admissions are refused", async () => {
 		for (const staleReply of ["valid", "wrong-transfer"] as const) {
-			let releaseOld!: (response: Response) => void;
-			const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+			let releaseClaim!: (response: Response) => void;
+			const pendingClaim = new Promise<Response>(resolve => { releaseClaim = resolve; });
 			const fake: CheckpointFetch = async input => {
 				const path = new URL(String(input)).pathname;
-				if (path.endsWith("/claim")) return pendingOld;
+				if (path.endsWith("/claim")) return pendingClaim;
 				if (path.endsWith("/lease")) return Response.json({
 					ownerNode: "owner-new", epoch: 9, expiresAt: "2099-01-01T00:00:00Z",
 					headSequence: 0, manifestHash: "",
@@ -246,17 +245,27 @@ describe("cloud checkpoints", () => {
 				baseUrl: "https://checkpoint.invalid", token: "test",
 				key: new Uint8Array(32), fetch: fake,
 			});
-			const earlier = client.claimTransfer("s", "target-node", "transfer-id", "c".repeat(16), 4, "owner-old");
-			await client.acquireLease("s", "owner-new");
-			const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
-			releaseOld(Response.json({
+			const claim = client.claimTransfer("s", "target-node", "transfer-id", "c".repeat(16), 4, "owner-old");
+			// An unresolved one-use claim is not superseded: a competing admission is refused before dispatch.
+			await expect(client.acquireLease("s", "owner-new")).rejects.toThrow(/transfer admission already in flight/);
+			releaseClaim(Response.json({
 				ownerNode: "owner-old", targetNode: "target-node",
 				transferId: staleReply === "valid" ? "transfer-id" : "different-transfer",
 				resumeToken: "r".repeat(16), epoch: 5,
 				expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
 			}));
-			await rejection;
+			if (staleReply === "valid") {
+				await expect(claim).resolves.toMatchObject({
+					lease: { ownerNode: "owner-old", epoch: 5 },
+					resumeToken: "r".repeat(16),
+				});
+			} else {
+				await expect(claim).rejects.toThrow(/transfer grant identity mismatch/);
+			}
+			// Only after the claim settles can an ordinary admission take the fence.
+			await expect(client.acquireLease("s", "owner-new")).resolves.toMatchObject({ ownerNode: "owner-new", epoch: 9 });
 			await expect(client.assertWritable("s", 9, "owner-new")).resolves.toBeUndefined();
+			await expect(client.assertWritable("s", 5, "owner-old")).rejects.toThrow(/lease lost/);
 		}
 	});
 
@@ -269,12 +278,11 @@ describe("cloud checkpoints", () => {
 		});
 		const earlier = client.acquireLease("s", "owner-old");
 		client.loseLease("s");
-		const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
 		releaseOld(Response.json({
 			ownerNode: "owner-old", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0, manifestHash: "",
 		}));
-		await rejection;
+		await expect(earlier).rejects.toThrow(/admission superseded/);
 		await expect(client.assertWritable("s", 1, "owner-old")).rejects.toThrow(/lease lost/);
 	});
 

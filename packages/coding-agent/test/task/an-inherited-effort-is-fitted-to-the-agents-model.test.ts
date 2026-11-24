@@ -62,6 +62,7 @@ function registryFor(model: Model<Api>): ModelRegistry {
 		authStorage: {},
 		refresh: async () => {},
 		getAvailable: () => [model],
+		getAll: () => [model],
 		getApiKey: async () => "test-key",
 	} as unknown as ModelRegistry;
 }
