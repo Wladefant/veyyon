@@ -11,6 +11,7 @@ import { scheduler } from "node:timers/promises";
 import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { ANTHROPIC_API_ENDPOINT, ANTIGRAVITY_ENDPOINTS, CLOUD_CODE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	calculateRetryBackoffDelayMs,
@@ -21,6 +22,7 @@ import {
 } from "@veyyon/kernel/session/retry-policy";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { errorMessage, extractRetryHint, formatDuration, logger } from "@veyyon/utils";
+import { isUnexpectedSocketCloseMessage } from "@veyyon/utils/fetch-retry";
 import type { RecoveredRetryError } from "../../extensibility/shared-events";
 import { turnControlPrompts } from "../../prompts/turn-control/rows";
 import { isEmptyAssistantStop, isSameAssistantMessage } from "../agent-session-message-shapes";
@@ -45,6 +47,31 @@ import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
 
 // Match the exact socket-close error that the Codex transport emits.
 const CODEX_RETRYABLE_CLOSE = /^websocket closed \((?:1000|1006|1012)\)$/;
+const DNS_LOOKUP_FAILURE = /\bENOTFOUND[\s"']+([a-z0-9.-]+)/i;
+const ANTHROPIC_DNS_HOST = new URL(ANTHROPIC_API_ENDPOINT).hostname;
+const CLOUD_CODE_DNS_HOSTS = [CLOUD_CODE_ENDPOINT, ...ANTIGRAVITY_ENDPOINTS].map(
+	endpoint => new URL(endpoint).hostname,
+);
+
+function isKnownEndpointDnsFailure(message: AssistantMessage, model: Model): boolean {
+	const text = message.errorMessage ?? "";
+	const host = DNS_LOOKUP_FAILURE.exec(text)?.[1]?.toLowerCase();
+	if (!host) return false;
+	const status = message.errorStatus ?? AIError.status({ message: text });
+	if (model.api === "anthropic-messages") {
+		return (
+			status === undefined &&
+			host === ANTHROPIC_DNS_HOST &&
+			URL.parse(model.baseUrl || ANTHROPIC_API_ENDPOINT)?.origin === ANTHROPIC_API_ENDPOINT
+		);
+	}
+	// The Cloud Code Assist sidecar reports the upstream lookup failure in an HTTP 502.
+	return (
+		(model.provider === "google-antigravity" || model.provider === "google-gemini-cli") &&
+		(status === undefined || status === 502) &&
+		CLOUD_CODE_DNS_HOSTS.includes(host)
+	);
+}
 
 /** How a failed turn entered retry handling: which switches the recovery may make. */
 interface RetryEntryOptions {
@@ -52,6 +79,7 @@ interface RetryEntryOptions {
 	fireworksFastFallback?: boolean;
 	hardErrorFallback?: boolean;
 	preserveFailedTurn?: boolean;
+	knownEndpointDns?: boolean;
 }
 
 /** One retry attempt: the failure it answers, and the wait and switches decided for it. */
@@ -71,6 +99,7 @@ interface RetryAttempt {
 	delayMs: number;
 	switchedCredential: boolean;
 	switchedModel: boolean;
+	retryingDnsSelector?: boolean;
 	/** Set when a usage limit pinned the wait to credential availability; the retry-after bump then stays off. */
 	usageLimitWaitMs: number | undefined;
 	quotaMessage?: string;
@@ -93,6 +122,8 @@ export interface RetryHost {
 	 * message rather than for the session, because the settle runs after `abort()` has returned.
 	 */
 	abortIsDeliberate(message: AssistantMessage): boolean;
+	/** Check and retract the live draft synchronously; false if its rows cannot be removed. */
+	tryRetractRetryDraft(persistenceKey: string): boolean;
 	/** Switch the active model and reset the provider sessions the switch invalidates. */
 	setModelWithProviderSessionReset(model: Model): void;
 	resetCurrentResponsesProviderSession(reason: string): void;
@@ -110,6 +141,7 @@ export class RetryRuntime {
 	#abortController: AbortController | undefined = undefined;
 	#attempt = 0;
 	#retriedCodexClose = false;
+	readonly #retriedDnsSelectors = new Set<string>();
 	/** Continuations spent on transport deaths inside an unreplayable tool batch;
 	 *  charged against the same budget as a retry, and restored both by a turn that
 	 *  lands and by a new prompt, which is a new incident. */
@@ -156,6 +188,7 @@ export class RetryRuntime {
 		// provider that dies every attempt.
 		this.#batchContinues = 0;
 		this.#retriedCodexClose = false;
+		this.#retriedDnsSelectors.clear();
 	}
 
 	/**
@@ -227,6 +260,25 @@ export class RetryRuntime {
 	}
 
 	/**
+	 * A socket reset leaves a draft, not an answer. Restart only plain assistant
+	 * output, whose interrupted draft we can retract. Never take this path on a
+	 * tool turn or when a remote agent may have done work inside the request.
+	 */
+	#canRestartSocketResetDraft(message: AssistantMessage): boolean {
+		const api = this.#session.model?.api ?? message.api;
+		if (api.endsWith("-agent") || message.api.endsWith("-agent")) return false;
+		const error = message.errorMessage ?? "";
+		return (
+			message.stopReason === "error" &&
+			(isUnexpectedSocketCloseMessage(error) || /\bECONNRESET\b/.test(error)) &&
+			!message.incompleteToolCalls?.length &&
+			message.content.every(block => block.type === "text" || block.type === "thinking") &&
+			message.content.some(block => block.type === "text" && block.text.trim().length > 0) &&
+			!this.#host.abortIsDeliberate(message)
+		);
+	}
+
+	/**
 	 * Check if an error is retryable (transient errors or usage limits).
 	 * Context overflow is NOT retryable (handled by compaction instead).
 	 * Usage-limit errors are retryable because the retry handler performs credential switching.
@@ -241,7 +293,9 @@ export class RetryRuntime {
 
 		if (isProviderRefusalMessage(message)) return true;
 		return AIError.retriable(id, {
-			replayUnsafe: hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
+			replayUnsafe:
+				!this.#canRestartSocketResetDraft(message) &&
+				hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
 		});
 	}
 
@@ -402,7 +456,23 @@ export class RetryRuntime {
 		) {
 			return true;
 		}
-		if (this.#isRetryableError(msg)) {
+		const model = this.#session.model;
+		let knownEndpointDns = false;
+		if (
+			model &&
+			msg.stopReason === "error" &&
+			isKnownEndpointDnsFailure(msg, model) &&
+			!this.#host.abortIsDeliberate(msg) &&
+			!isProviderRefusalMessage(msg) &&
+			!AIError.isContextOverflow(msg, model.contextWindow ?? 0) &&
+			!hasReplayUnsafeOutput(msg, this.#session.agent.state.messages)
+		) {
+			const id = this.#classify(msg);
+			knownEndpointDns = (id === 0 || AIError.retriable(id)) && !AIError.is(id, AIError.Flag.UsageLimit);
+		}
+		if (knownEndpointDns) {
+			if (await this.#handleRetryableError(msg, { knownEndpointDns })) return true;
+		} else if (this.#isRetryableError(msg)) {
 			if (await this.#handleRetryableError(msg)) return true;
 		} else if (
 			// A non-retryable hard error on a model covered by a configured fallback chain: retrying
@@ -479,14 +549,15 @@ export class RetryRuntime {
 		// Create the retry gate on the first attempt so waitForRetry() can await it.
 		this.#ensureGate();
 
-		const errorMessage = message.errorMessage || "Unknown error";
+		const originalError = message.errorMessage || "Unknown error";
 		const id = this.#classify(message);
 		const staleReplay = AIError.is(id, AIError.Flag.StaleResponsesItem);
+		const discardDraft = this.#canRestartSocketResetDraft(message);
 		const attempt: RetryAttempt = {
 			message,
 			id,
-			errorMessage,
-			parsedRetryAfterMs: extractRetryHint(undefined, errorMessage),
+			errorMessage: originalError,
+			parsedRetryAfterMs: extractRetryHint(undefined, originalError),
 			// All attempts on the current model are spent. Don't fail yet: the
 			// fallback chain gets one last consult. Credential rotation can
 			// consume the entire budget without the fallback branch ever running
@@ -496,7 +567,7 @@ export class RetryRuntime {
 			budgetExhausted: this.#attempt > policy.maxRetries,
 			classifierRefusal: isProviderRefusalMessage(message),
 			modelNotInPlan: AIError.is(id, AIError.Flag.ModelNotInPlan),
-			options,
+			options: discardDraft ? { ...options, allowModelFallback: false } : options,
 			delayMs: staleReplay ? 0 : calculateRetryBackoffDelayMs(policy.baseDelayMs, this.#attempt),
 			switchedCredential: false,
 			switchedModel: false,
@@ -512,9 +583,38 @@ export class RetryRuntime {
 			}
 			if (!attempt.switchedCredential) await this.#switchModel(attempt, policy.maxDelayMs);
 		}
-		if (await this.#closeUnrecoverable(attempt, policy.maxDelayMs)) return false;
+		const attemptNumber = this.#attempt;
+		const unrecoverable = await this.#closeUnrecoverable(attempt, policy.maxDelayMs);
+		if (options?.knownEndpointDns) {
+			logger.debug("Known endpoint DNS recovery", {
+				sessionId: this.#session.sessionId,
+				generation,
+				attempt: attemptNumber,
+				kind: AIError.stringify(id),
+				policySource: describeRetryPolicySource(policy),
+				maxAttempts: policy.maxRetries,
+				delayMs: attempt.delayMs,
+				selection: unrecoverable ? "surface" : attempt.switchedModel ? "fallback" : "same-selector",
+			});
+		}
+		if (unrecoverable) return false;
 
-		await this.#recordPendingRecoveredError(message, id, attempt);
+		const recorded = await this.#recordPendingRecoveredError(
+			message,
+			id,
+			attempt,
+			discardDraft ? generation : undefined,
+		);
+		if (!recorded) {
+			const retriesSpent = this.#attempt - 1;
+			if (retriesSpent > 0) {
+				await this.#endWithFailure(message, retriesSpent, message.errorMessage);
+			} else {
+				this.#attempt = 0;
+				this.resolve();
+			}
+			return false;
+		}
 
 		await this.#host.emitSessionEvent({
 			type: "auto_retry_start",
@@ -572,10 +672,24 @@ export class RetryRuntime {
 		// continuation that still fails locally must close the retry saga —
 		// otherwise auto_retry_end never fires, retryPromise stays pending, and
 		// the in-flight prompt() (and the TUI retry indicator) hang forever.
+		const gate = this.#gate;
+		const failScheduledRetry = (error: unknown) => {
+			if (!gate || this.#gate !== gate) return;
+			void this.#failRetryAfterLocalContinueError(message, error).catch(failure => {
+				logger.warn("Could not report retry continuation failure", { error: errorMessage(failure) });
+			});
+		};
+		logger.debug("Retry continuation scheduled", {
+			sessionId: this.#session.sessionId,
+			generation,
+			attempt: this.#attempt,
+			model: this.#session.model?.id,
+		});
 		this.#host.scheduleAgentContinue({
 			delayMs: 1,
 			generation,
-			onError: error => void this.#failRetryAfterLocalContinueError(message, error),
+			onError: failScheduledRetry,
+			onSkip: reason => failScheduledRetry(new Error(`Retry continuation skipped: ${reason}`)),
 		});
 
 		return true;
@@ -622,6 +736,19 @@ export class RetryRuntime {
 		const activeModel = this.#session.model;
 		if (!activeModel) return;
 		const currentSelector = formatRetryFallbackSelector(activeModel, this.#session.thinkingLevel);
+		if (
+			attempt.options?.knownEndpointDns &&
+			!attempt.budgetExhausted &&
+			!this.#retriedDnsSelectors.has(currentSelector)
+		) {
+			const delayMs = Math.max(1, attempt.delayMs, attempt.parsedRetryAfterMs ?? 0);
+			if (maxDelayMs <= 0 || delayMs <= maxDelayMs) {
+				attempt.delayMs = delayMs;
+				this.#retriedDnsSelectors.add(currentSelector);
+				attempt.retryingDnsSelector = true;
+				return;
+			}
+		}
 		const allowModelFallback = attempt.options?.allowModelFallback !== false;
 		// A refusal chain stops at the retry budget: the exhausted-attempt
 		// last resort is for provider failures, not classifier decisions.
@@ -681,6 +808,14 @@ export class RetryRuntime {
 			// The fallback model gets a fresh retry budget — leaving the spent
 			// counter in place would exhaust it again on its first error.
 			this.#attempt = 1;
+		}
+		if (
+			attempt.options?.knownEndpointDns &&
+			!switchedModel &&
+			!attempt.retryingDnsSelector &&
+			!AIError.retriable(attempt.id)
+		) {
+			return this.#endWithFailure(message, this.#attempt, attempt.errorMessage);
 		}
 		if (attempt.classifierRefusal && !switchedModel) {
 			this.#attempt = 0;
@@ -815,17 +950,21 @@ export class RetryRuntime {
 	async #failRetryAfterLocalContinueError(message: AssistantMessage, error: unknown): Promise<void> {
 		if (this.#attempt === 0) return;
 		const attempt = this.#attempt;
+		const gate = this.#gate;
 		this.#attempt = 0;
 		const localError = errorMessage(error);
-		await this.#host.persistLifecycleErrorMessage(message);
-		await this.#host.emitSessionEvent({
-			type: "auto_retry_end",
-			success: false,
-			attempt,
-			finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
-		});
 		this.#pendingRecoveredErrors = [];
-		this.resolve();
+		try {
+			await this.#host.persistLifecycleErrorMessage(message);
+			await this.#host.emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt,
+				finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
+			});
+		} finally {
+			if (this.#gate === gate) this.resolve();
+		}
 	}
 
 	/** Cancel an in-progress retry wait and release the gate. */
@@ -854,6 +993,7 @@ export class RetryRuntime {
 		// Reset retry budget for a fresh attempt
 		this.#attempt = 0;
 		this.#retriedCodexClose = false;
+		this.#retriedDnsSelectors.clear();
 
 		// Re-attempt the turn
 		this.#host.scheduleAgentContinue({ delayMs: 1 });
@@ -982,10 +1122,11 @@ export class RetryRuntime {
 		message: AssistantMessage,
 		id: number,
 		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
-	): Promise<void> {
+		draftGeneration: number | undefined,
+	): Promise<boolean> {
 		await this.#host.persistLifecycleErrorMessage(message);
 		const persistenceKey = sessionMessagePersistenceKey(message);
-		if (!persistenceKey) return;
+		if (!persistenceKey) return draftGeneration === undefined;
 		let branchEntry: SessionEntry | undefined;
 		for (const entry of this.#session.sessionManager.getBranch().slice().reverse()) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
@@ -996,8 +1137,31 @@ export class RetryRuntime {
 			branchEntry = entry;
 			break;
 		}
-		if (!branchEntry) return;
-		if (this.#pendingRecoveredErrors.some(error => error.entryId === branchEntry.id)) return;
+		if (draftGeneration !== undefined) {
+			// A check without retraction would race terminal rendering during
+			// the journal write. Refuse before changing the journal or context.
+			if (
+				this.#host.promptGeneration() !== draftGeneration ||
+				this.#host.abortIsDeliberate(message) ||
+				!this.#host.tryRetractRetryDraft(persistenceKey)
+			) {
+				return false;
+			}
+		}
+		if (branchEntry?.type !== "message" || branchEntry.message.role !== "assistant") return true;
+		if (draftGeneration !== undefined) {
+			// Keep the diagnostic, not the draft. On reload the transcript must
+			// show the same replacement as the live display.
+			const previous = branchEntry.message;
+			branchEntry.message = { ...previous, content: [] };
+			try {
+				await this.#session.sessionManager.rewriteEntries([branchEntry]);
+			} catch (error) {
+				branchEntry.message = previous;
+				throw error;
+			}
+		}
+		if (this.#pendingRecoveredErrors.some(error => error.entryId === branchEntry.id)) return true;
 		const rateLimited = AIError.is(id, AIError.Flag.UsageLimit);
 		const recovery = retryRecoveryKind(id, options.switchedCredential, options.switchedModel, options.delayMs);
 		const note = retryRecoveryNote(recovery, rateLimited);
@@ -1008,6 +1172,7 @@ export class RetryRuntime {
 			attempt: this.#attempt,
 			note,
 		});
+		return true;
 	}
 
 	async #markPendingRecoveredErrors(supersedingMessage: AssistantMessage): Promise<RecoveredRetryError[]> {

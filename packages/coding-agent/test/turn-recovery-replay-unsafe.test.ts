@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
-import type { Api, AssistantMessage, Model, Provider, Usage } from "@veyyon/ai";
+import type { Api, AssistantMessage, Model, Provider, ToolCall, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { streamOpenAIAnthropicShim } from "@veyyon/ai/providers/openai-anthropic-shim";
+import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -279,6 +281,170 @@ describe("AgentSession transient-error recovery replay safety", () => {
 	afterAll(() => {
 		authStorage.close();
 		tempDir.removeSync();
+	});
+
+	const socketReset = "ECONNRESET: The socket connection was closed unexpectedly.";
+	const draft = "The answer starts here";
+	const answer = `${draft} and finishes here.`;
+
+	async function runSocketReset(
+		model: Model,
+		outcome: "recover" | "exhaust" | "unknown-tool" | "committed-draft" | "append-only",
+	) {
+		const failure = { content: [draft], stopReason: "error", errorMessage: socketReset } as const;
+		const mock = createMockModel({
+			responses: [failure, outcome === "recover" ? { content: [answer] } : failure],
+		});
+		const sessionDir = tempDir.join(`sessions-${outcome}`);
+		const sessionManager = SessionManager.create(tempDir.path(), sessionDir);
+		let streamCalls = 0;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, options) => {
+				streamCalls++;
+				if (outcome !== "unknown-tool") return mock.stream(requestedModel, context, options);
+
+				const stream = new AssistantMessageEventStream();
+				const call: ToolCall & CursorExecResolvedCarrier = {
+					type: "toolCall",
+					id: "already-dispatched",
+					name: "write",
+					arguments: { path: "report.md", content: "draft" },
+					[kCursorExecResolved]: true,
+				};
+				const partial = {
+					...makeMessage([{ type: "text", text: draft }, call]),
+					api: requestedModel.api,
+					provider: requestedModel.provider,
+					model: requestedModel.id,
+					stopReason: "stop",
+				} satisfies AssistantMessage;
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: draft, partial });
+					stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: call, partial });
+					// The provider dispatched the call, but its result never reached the loop.
+					stream.push({
+						type: "error",
+						reason: "error",
+						error: { ...partial, stopReason: "error", errorMessage: socketReset },
+					});
+				});
+				return stream;
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": true,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		const session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		if (outcome !== "append-only") {
+			session.setRetryDraftRetraction(() => outcome !== "committed-draft");
+		}
+		const events = trackSessionEvents(session);
+		try {
+			await session.prompt("test prompt");
+			await session.waitForIdle();
+			expect(session.isRetrying).toBe(false);
+		} finally {
+			await session.dispose();
+		}
+		const file = sessionManager.getSessionFile();
+		if (!file) throw new Error("Expected a persisted session");
+		const reopened = await SessionManager.open(file, sessionDir, undefined, { suppressBreadcrumb: true });
+		try {
+			return {
+				streamCalls,
+				messages: session.messages,
+				entries: reopened.getBranch(),
+				calls: mock.calls,
+				...events,
+			};
+		} finally {
+			await reopened.close();
+		}
+	}
+
+	it("restarts a text-only draft cut off by a socket reset without keeping duplicate text", async () => {
+		const result = await runSocketReset(gptModel, "recover");
+
+		expect(result.streamCalls).toBe(2);
+		const roleSequence = result.calls[0]?.context.messages.map(message => message.role);
+		expect(result.calls[1]?.context.messages.map(message => message.role)).toEqual(roleSequence);
+		expect(roleSequence).toContain("user");
+		expect(roleSequence).not.toContain("assistant");
+		expect(result.retryStartEvents).toHaveLength(1);
+		expect(result.retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
+		expect(result.messages.at(-1)).toMatchObject({ stopReason: "stop", content: [{ type: "text", text: answer }] });
+		const transcriptText = result.entries.flatMap(entry =>
+			entry.type === "message" && entry.message.role === "assistant"
+				? entry.message.content.flatMap(block => (block.type === "text" ? [block.text] : []))
+				: [],
+		);
+		expect(result.entries).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: socketReset,
+					content: [],
+					retryRecovery: expect.objectContaining({ status: "recovered" }),
+				}),
+			}),
+		);
+		expect(transcriptText).toEqual([answer]);
+	});
+
+	it("ends a draft interrupted by repeated socket resets at the retry cap", async () => {
+		const result = await runSocketReset(gptModel, "exhaust");
+
+		expect(result.streamCalls).toBe(2);
+		expect(result.retryStartEvents).toHaveLength(1);
+		expect(result.retryEndEvents).toEqual([
+			expect.objectContaining({ success: false, attempt: 1, finalError: socketReset }),
+		]);
+		expect(result.messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: socketReset });
+	});
+
+	it.each(["committed-draft", "append-only"] as const)(
+		"leaves the draft and terminal error intact for %s display",
+		async outcome => {
+			const result = await runSocketReset(gptModel, outcome);
+
+			expect(result.streamCalls).toBe(1);
+			expect(result.retryStartEvents).toEqual([]);
+			const failure = {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: socketReset,
+				content: [{ type: "text", text: draft }],
+			};
+			expect(result.messages.at(-1)).toMatchObject(failure);
+			const persistedAssistant = result.entries.findLast(
+				entry => entry.type === "message" && entry.message.role === "assistant",
+			);
+			expect(persistedAssistant).toMatchObject({ type: "message", message: failure });
+		},
+	);
+
+	it("settles a socket reset without replaying an already dispatched tool with no result", async () => {
+		const result = await runSocketReset(gptModel, "unknown-tool");
+
+		expect(result.streamCalls).toBe(1);
+		expect(result.retryStartEvents).toEqual([]);
+		expect(result.messages).toContainEqual(
+			expect.objectContaining({
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: socketReset,
+				content: expect.arrayContaining([expect.objectContaining({ id: "already-dispatched" })]),
+			}),
+		);
 	});
 
 	it("disallows retry when a failed turn streamed partial visible text on transient error", async () => {

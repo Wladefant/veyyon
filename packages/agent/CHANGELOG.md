@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Let the retry ladder move past a Codex fallback when credential lookup stalls ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
 - Exclude restated session blocks from the retained-history budget so manual compaction leaves genuinely small conversations alone ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ## [1.9.2] - 2026-11-12

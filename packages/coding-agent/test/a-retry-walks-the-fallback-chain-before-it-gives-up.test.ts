@@ -10,10 +10,11 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Model, ProviderSessionState } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { parseModelPattern, parseModelString } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -93,6 +94,7 @@ describe("AgentSession retry fallback", () => {
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 		authStorage.setRuntimeApiKey("google", "google-test-key");
+		authStorage.setRuntimeApiKey("google-antigravity", "antigravity-test-key");
 		authStorage.setRuntimeApiKey("google-vertex", "google-vertex-test-key");
 		authStorage.setRuntimeApiKey("openrouter", "openrouter-test-key");
 		sharedRegistry = new ModelRegistry(authStorage);
@@ -117,6 +119,83 @@ describe("AgentSession retry fallback", () => {
 			session = undefined;
 		}
 		vi.restoreAllMocks();
+	});
+
+	it.each([
+		{ name: "direct Anthropic DNS", wrapped: false, failures: 1, retries: 1 },
+		{ name: "sidecar-wrapped Cloud Code DNS", wrapped: true, failures: 1, retries: 1 },
+		{ name: "persistent DNS", wrapped: true, failures: 2, retries: 1 },
+		{ name: "Cloud Code DNS with no fallback", wrapped: true, failures: 2, retries: 2, noFallback: true },
+		{ name: "unknown hostname", wrapped: false, failures: 1, retries: 0, unknownHost: true },
+	])("retries the current selector before fallback only for known endpoints: $name", async test => {
+		const primary = test.wrapped
+			? requireBundledModel("google-antigravity", "gemini-3.8-flash")
+			: requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = requireBundledModel("openai", "gpt-4o-mini");
+		const fallbackSelector = `${fallback.provider}/${fallback.id}`;
+		const requests: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requests.push(model.id);
+				if (model.id !== primary.id || requests.length > test.failures) {
+					mock.push({ content: ["Recovered"] });
+					return mock.stream(model, context, options);
+				}
+				const host = test.wrapped
+					? "daily-cloudcode-pa.googleapis.com"
+					: test.unknownHost
+						? "api.anthorpic.invalid"
+						: "api.anthropic.com";
+				const error: AssistantMessage = {
+					role: "assistant",
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					content: [],
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: `${test.wrapped ? "502 upstream request failed: " : ""}getaddrinfo ENOTFOUND ${host}`,
+					errorStatus: test.wrapped ? 502 : undefined,
+					timestamp: Date.now(),
+				};
+				const stream = new AssistantMessageEventStream();
+				stream.push({ type: "error", reason: "error", error });
+				stream.end(error);
+				return stream;
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.maxRetries": 2,
+				"retry.fallbackChains": test.noFallback ? {} : { [`${primary.provider}/*`]: [fallbackSelector] },
+			}),
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+		await session.prompt("Retry a failed provider lookup");
+		await session.waitForIdle();
+
+		const switched = !test.noFallback && test.failures > test.retries;
+		expect(requests).toEqual([
+			...Array<string>(test.retries + 1).fill(primary.id),
+			...(switched ? [fallback.id] : []),
+		]);
+		expect(retryStartEvents).toHaveLength(test.retries + Number(switched));
+		for (let index = 0; index < test.retries; index++) {
+			const maxDelayMs = 5 * 2 ** index;
+			expect(retryStartEvents[index]?.delayMs).toBeGreaterThanOrEqual(maxDelayMs * 0.75);
+			expect(retryStartEvents[index]?.delayMs).toBeLessThanOrEqual(maxDelayMs);
+		}
+		if (switched) expect(retryStartEvents.at(-1)?.delayMs).toBe(0);
+		expect(retryEndEvents.map(event => event.success)).toEqual([true]);
+		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 	});
 
 	it("advances through a role-keyed fallback chain across retries", async () => {
@@ -591,7 +670,10 @@ describe("AgentSession retry fallback", () => {
 	 * error on the same batch switches when no call in it ran, and surfaces without a switch once a
 	 * call carries a real result, because re-sending that batch could apply the call twice.
 	 */
-	it("switches models on a hard error only while no call in the failed batch has run", async () => {
+	it.each([
+		{ name: "hard error", message: "unrecoverable model quirk", dnsRetry: false },
+		{ name: "known DNS error", message: "getaddrinfo ENOTFOUND api.anthropic.com", dnsRetry: true },
+	])("does not replay an executed tool after a $name", async failure => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
 		if (!primaryModel || !fallbackModel) {
@@ -615,7 +697,7 @@ describe("AgentSession retry fallback", () => {
 								{ type: "toolCall", id: "tc-write", name: "write", arguments: { path: "doc/report.md" } },
 							],
 							stopReason: "error",
-							errorMessage: "unrecoverable model quirk",
+							errorMessage: failure.message,
 						});
 					} else {
 						mock.push({ content: ["Recovered on fallback"] });
@@ -658,7 +740,7 @@ describe("AgentSession retry fallback", () => {
 		};
 
 		expect(await hardErrorOnBatch(false)).toEqual({
-			requestedModels: [primary, fallback],
+			requestedModels: [primary, ...(failure.dnsRetry ? [primary] : []), fallback],
 			switches: [`${primary} -> ${fallback}`],
 			stopReason: "stop",
 		});
