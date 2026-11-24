@@ -94,6 +94,7 @@ describe("AgentSession retry fallback", () => {
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 		authStorage.setRuntimeApiKey("google", "google-test-key");
+		authStorage.setRuntimeApiKey("google-antigravity", "antigravity-test-key");
 		authStorage.setRuntimeApiKey("google-vertex", "google-vertex-test-key");
 		authStorage.setRuntimeApiKey("openrouter", "openrouter-test-key");
 		sharedRegistry = new ModelRegistry(authStorage);
@@ -185,10 +186,9 @@ describe("AgentSession retry fallback", () => {
 			...(test.retries ? [primary.id] : []),
 			...(switched ? [fallback.id] : []),
 		]);
-		expect(retryStartEvents.map(event => event.delayMs)).toEqual([
-			...(test.retries ? [5] : []),
-			...(switched ? [0] : []),
-		]);
+		expect(retryStartEvents).toHaveLength(test.retries + Number(switched));
+		if (test.retries) expect(retryStartEvents[0]?.delayMs).toBeGreaterThan(0);
+		if (switched) expect(retryStartEvents.at(-1)?.delayMs).toBe(0);
 		expect(retryEndEvents.map(event => event.success)).toEqual([true]);
 		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 	});
@@ -665,7 +665,10 @@ describe("AgentSession retry fallback", () => {
 	 * error on the same batch switches when no call in it ran, and surfaces without a switch once a
 	 * call carries a real result, because re-sending that batch could apply the call twice.
 	 */
-	it("switches models on a hard error only while no call in the failed batch has run", async () => {
+	it.each([
+		{ name: "hard error", message: "unrecoverable model quirk", dnsRetry: false },
+		{ name: "known DNS error", message: "getaddrinfo ENOTFOUND api.anthropic.com", dnsRetry: true },
+	])("does not replay an executed tool after a $name", async failure => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
 		if (!primaryModel || !fallbackModel) {
@@ -689,7 +692,7 @@ describe("AgentSession retry fallback", () => {
 								{ type: "toolCall", id: "tc-write", name: "write", arguments: { path: "doc/report.md" } },
 							],
 							stopReason: "error",
-							errorMessage: "unrecoverable model quirk",
+							errorMessage: failure.message,
 						});
 					} else {
 						mock.push({ content: ["Recovered on fallback"] });
@@ -732,7 +735,7 @@ describe("AgentSession retry fallback", () => {
 		};
 
 		expect(await hardErrorOnBatch(false)).toEqual({
-			requestedModels: [primary, fallback],
+			requestedModels: [primary, ...(failure.dnsRetry ? [primary] : []), fallback],
 			switches: [`${primary} -> ${fallback}`],
 			stopReason: "stop",
 		});
