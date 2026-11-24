@@ -503,15 +503,15 @@ export class RetryRuntime {
 		// Create the retry gate on the first attempt so waitForRetry() can await it.
 		this.#ensureGate();
 
-		const errorMessage = message.errorMessage || "Unknown error";
+		const originalError = message.errorMessage || "Unknown error";
 		const id = this.#classify(message);
 		const staleReplay = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const discardDraft = this.#canRestartSocketResetDraft(message);
 		const attempt: RetryAttempt = {
 			message,
 			id,
-			errorMessage,
-			parsedRetryAfterMs: extractRetryHint(undefined, errorMessage),
+			errorMessage: originalError,
+			parsedRetryAfterMs: extractRetryHint(undefined, originalError),
 			// All attempts on the current model are spent. Don't fail yet: the
 			// fallback chain gets one last consult. Credential rotation can
 			// consume the entire budget without the fallback branch ever running
@@ -612,10 +612,24 @@ export class RetryRuntime {
 		// continuation that still fails locally must close the retry saga —
 		// otherwise auto_retry_end never fires, retryPromise stays pending, and
 		// the in-flight prompt() (and the TUI retry indicator) hang forever.
+		const gate = this.#gate;
+		const failScheduledRetry = (error: unknown) => {
+			if (!gate || this.#gate !== gate) return;
+			void this.#failRetryAfterLocalContinueError(message, error).catch(failure => {
+				logger.warn("Could not report retry continuation failure", { error: errorMessage(failure) });
+			});
+		};
+		logger.debug("Retry continuation scheduled", {
+			sessionId: this.#session.sessionId,
+			generation,
+			attempt: this.#attempt,
+			model: this.#session.model?.id,
+		});
 		this.#host.scheduleAgentContinue({
 			delayMs: 1,
 			generation,
-			onError: error => void this.#failRetryAfterLocalContinueError(message, error),
+			onError: failScheduledRetry,
+			onSkip: reason => failScheduledRetry(new Error(`Retry continuation skipped: ${reason}`)),
 		});
 
 		return true;
@@ -855,17 +869,21 @@ export class RetryRuntime {
 	async #failRetryAfterLocalContinueError(message: AssistantMessage, error: unknown): Promise<void> {
 		if (this.#attempt === 0) return;
 		const attempt = this.#attempt;
+		const gate = this.#gate;
 		this.#attempt = 0;
 		const localError = errorMessage(error);
-		await this.#host.persistLifecycleErrorMessage(message);
-		await this.#host.emitSessionEvent({
-			type: "auto_retry_end",
-			success: false,
-			attempt,
-			finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
-		});
 		this.#pendingRecoveredErrors = [];
-		this.resolve();
+		try {
+			await this.#host.persistLifecycleErrorMessage(message);
+			await this.#host.emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt,
+				finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
+			});
+		} finally {
+			if (this.#gate === gate) this.resolve();
+		}
 	}
 
 	/** Cancel an in-progress retry wait and release the gate. */

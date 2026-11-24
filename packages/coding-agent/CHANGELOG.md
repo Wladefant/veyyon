@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Settle failed turns when the scheduler skips their automatic retry continuation ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
 - Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Stop MCP HTTP responses from starting a JSON body read after cancellation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
