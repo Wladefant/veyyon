@@ -114,35 +114,21 @@ function countSchedulerWakes(): { count: () => number; restore: () => void } {
 	return { count: () => spy.mock.calls.length, restore: () => spy.mockRestore() };
 }
 
-/** Advance the clock and let the manager's async park/prune work settle. */
+/** Advance the fake clock without waiting for I/O to nonexistent orphan transcripts. */
 async function advance(ms: number): Promise<void> {
-	vi.advanceTimersByTime(ms);
-	// The expiry handler runs its stages in an async drain, so the microtask queue
-	// has to turn over before the registry reflects them.
-	await drainMicrotasks(8);
+	const open = vi.spyOn(SessionManager, "open").mockResolvedValue({
+		appendCustomMessageEntry: () => "entry",
+		flush: async () => {},
+		close: async () => {},
+	} as unknown as SessionManager);
+	try {
+		vi.advanceTimersByTime(ms);
+		// Park and prune settle on the microtask queue, not on the fake clock.
+		await drainMicrotasks(8);
+	} finally {
+		open.mockRestore();
+	}
 }
-
-/**
- * An unparented prune persists its stalled outcome by opening the agent's transcript. These fixtures name
- * transcripts that do not exist, and a real open is file I/O the fake clock cannot wait on, so the prune
- * stalls and rechecks on the 30s orphan cadence instead of its budget. An in-memory transcript keeps the
- * stalled write observable and flushed, so the durability contract still holds, and it settles in microtasks.
- */
-function inMemoryTranscript(): SessionManager {
-	return {
-		appendCustomMessageEntry: (): string => "entry",
-		flush: async (): Promise<void> => {},
-		close: async (): Promise<void> => {},
-	} as unknown as SessionManager;
-}
-
-beforeEach(() => {
-	vi.spyOn(SessionManager, "open").mockImplementation(async () => inMemoryTranscript());
-});
-
-afterEach(() => {
-	vi.restoreAllMocks();
-});
 
 /**
  * The WIRING from the operator's setting to the prune stage, which nothing else covers.
