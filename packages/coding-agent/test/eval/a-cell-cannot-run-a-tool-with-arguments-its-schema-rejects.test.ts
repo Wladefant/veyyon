@@ -325,6 +325,7 @@ const CHECKED_BY_THE_SWEEP: string[] = [
 	"rewind",
 	"search",
 	"search_tool_bm25",
+	"secret_request",
 	"set_cwd",
 	"ssh",
 	"task",

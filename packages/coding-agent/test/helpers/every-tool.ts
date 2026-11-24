@@ -9,9 +9,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AgentTool } from "@veyyon/agent-core";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@veyyon/coding-agent/tools/index";
+import { SecretRequestTool } from "@veyyon/coding-agent/tools/agent/secret-request";
+import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolSession } from "@veyyon/coding-agent/tools/index";
+import { GithubTool } from "@veyyon/coding-agent/tools/web/gh";
 import { ArgotSession } from "argot";
 import { makeToolSession } from "./tool-session";
 
@@ -33,9 +34,19 @@ const SWEEP_SETTINGS: Record<string, unknown> = {
 	"tools.discoveryMode": "all",
 };
 
+/**
+ * Constructs the two tools whose factories can return null without a `gh` CLI or a secret intake
+ * broker. The sweep reads their schemas without making a GitHub call or opening a broker.
+ * A factory that throws still counts as a construction failure.
+ */
+const CONSTRUCTOR_FALLBACKS: Partial<Record<string, (session: ToolSession) => Tool>> = {
+	github: session => new GithubTool(session),
+	secret_request: session => new SecretRequestTool(session),
+};
+
 export interface EveryToolSweep {
 	/** Every tool a factory returned, in factory order. */
-	tools: AgentTool[];
+	tools: Tool[];
 	/** Factory names that threw. */
 	unconstructable: string[];
 	/** Factory names that returned null for this session. */
@@ -71,13 +82,14 @@ export async function constructEveryTool(profileDir: string): Promise<EveryToolS
 	});
 	const sweep: EveryToolSweep = { tools: [], unconstructable: [], notRegistered: [] };
 	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
-		let tool: AgentTool | null;
+		let tool: Tool | null;
 		try {
 			tool = await factory(session);
 		} catch {
 			sweep.unconstructable.push(name);
 			continue;
 		}
+		if (!tool && Object.hasOwn(CONSTRUCTOR_FALLBACKS, name)) tool = CONSTRUCTOR_FALLBACKS[name]!(session);
 		if (tool) sweep.tools.push(tool);
 		else sweep.notRegistered.push(name);
 	}
