@@ -7,6 +7,8 @@
 import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseEvents, readSseJson, Snowflake, untilAborted } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { describeJsonRpcError } from "../incoming-message";
+import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import {
 	createMCPTimeout,
 	getNeverAbortSignal,
@@ -14,13 +16,6 @@ import {
 	type MCPTimeoutOperation,
 	resolveMCPTimeoutMs,
 } from "../timeout";
-import {
-	describeJsonRpcError,
-	type IncomingMessageRoutes,
-	reportUnattributableError,
-	routeIncomingMessage,
-} from "../incoming-message";
-import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import type {
 	JsonRpcMessage,
 	JsonRpcNotification,
@@ -128,12 +123,14 @@ export async function postJsonRpc(
 	let response = await sendJsonRpc(target, url, body, signal);
 	const refresh = response.status === 401 || response.status === 403 ? target.authRefresh() : undefined;
 	if (refresh) {
-		const refreshed = await refresh();
+		const refreshed = await untilAborted(signal, refresh);
 		if (refreshed) {
-			await response.body?.cancel();
+			await untilAborted(signal, () => response.body?.cancel() ?? Promise.resolve());
 			target.adoptHeaders(refreshed);
 			const retryBody =
-				"params" in body ? { ...body, params: await rebuildMCPToolCallParamsForAttempt(body.params) } : body;
+				"params" in body
+					? { ...body, params: await untilAborted(signal, () => rebuildMCPToolCallParamsForAttempt(body.params)) }
+					: body;
 			response = await sendJsonRpc(target, url, retryBody, signal);
 		}
 	}
@@ -195,11 +192,7 @@ function isStreamMessage(value: unknown): value is JsonRpcMessage {
 	if (value.id !== null && typeof value.id !== "string" && typeof value.id !== "number") return false;
 	if ("result" in value === "error" in value) return false;
 	if ("error" in value) {
-		return (
-			isRecord(value.error) &&
-			Number.isSafeInteger(value.error.code) &&
-			typeof value.error.message === "string"
-		);
+		return isRecord(value.error) && Number.isSafeInteger(value.error.code) && typeof value.error.message === "string";
 	}
 	return "result" in value;
 }
@@ -234,27 +227,6 @@ export class HttpTransport implements MCPTransport {
 			const sessionId = response.headers.get("Mcp-Session-Id");
 			if (sessionId) this.#sessionId = sessionId;
 		},
-	};
-
-	/** Messages on the GET stream, and those a request's response stream does not take for itself. */
-	readonly #incoming: IncomingMessageRoutes = {
-		server: () => this.config.url,
-		// A response travels on the stream of the POST that sent its request; one arriving anywhere
-		// else answers nothing this client is waiting on.
-		response: () => {},
-		serverRequest: request => {
-			void answerServerRequest(this.onRequest, request).then(answer => {
-				if (!this.#connected) return;
-				return deliverServerResponse(
-					this.#postTarget,
-					this.config.url,
-					answer,
-					resolveMCPTimeoutMs(this.config.timeout),
-				);
-			});
-		},
-		notification: (method, params) => this.onNotification?.(method, params),
-		unattributableError: error => this.onError?.(reportUnattributableError(this.config.url, error, 0)),
 	};
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
@@ -391,9 +363,7 @@ export class HttpTransport implements MCPTransport {
 				// readSseJson may include untrusted SSE frame bytes in the
 				// JSON.parse SyntaxError. Never send them to logs or onError.
 				const diagnostic =
-					error instanceof SyntaxError
-						? new Error("MCP HTTP SSE stream received malformed JSON")
-						: error;
+					error instanceof SyntaxError ? new Error("MCP HTTP SSE stream received malformed JSON") : error;
 				logger.debug("HTTP SSE stream error", { url: this.config.url, error: diagnostic.message });
 				this.onError?.(diagnostic);
 			}
@@ -683,34 +653,6 @@ export class HttpTransport implements MCPTransport {
 
 		const { promise, resolve, reject } = Promise.withResolvers<T>();
 		let captured = false;
-		const settle = (outcome: () => void): void => {
-			captured = true;
-			operation.clear();
-			outcome();
-		};
-		// This stream carries the answer to one request. An error that names no request answers that
-		// one, as the same error in a JSON body does; every other message goes where the GET stream's
-		// would, while this client is still connected.
-		const routes: IncomingMessageRoutes = {
-			server: this.#incoming.server,
-			response: response => {
-				if (captured || response.id !== expectedId) return;
-				settle(() =>
-					response.error ? reject(new Error(describeJsonRpcError(response.error))) : resolve(response.result as T),
-				);
-			},
-			serverRequest: request => {
-				if (this.#connected) this.#incoming.serverRequest(request);
-			},
-			notification: (method, params) => {
-				if (this.#connected) this.#incoming.notification(method, params);
-			},
-			unattributableError: error => {
-				if (!captured) settle(() => reject(new Error(describeJsonRpcError(error))));
-				else if (this.#connected) this.#incoming.unattributableError(error);
-			},
-		};
-
 		// Drain the SSE stream from a single iterator. We resolve the deferred
 		// promise as soon as the matching response arrives, then keep iterating
 		// in the background to pick up piggybacked notifications/requests.
