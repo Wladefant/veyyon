@@ -64,9 +64,9 @@ export function commandText(workflowYaml: string): string {
 	return JSON.stringify(Bun.YAML.parse(workflowYaml));
 }
 
-/** Every workflow's commands, plus the root `package.json`. */
+/** Every workflow's commands, plus literal root-package test commands. */
 export function runnerSources(): string[] {
-	const sources = [readFileSync(path.join(repoRoot, "package.json"), "utf8")];
+	const sources = rootScriptTestPaths();
 	for (const workflow of workflowFiles()) {
 		sources.push(commandText(readFileSync(path.join(repoRoot, workflow), "utf8")));
 	}
@@ -88,12 +88,17 @@ export function workflowTestPaths(): string[] {
 	return found;
 }
 
-/** The Windows guest probe runs only inside the sandbox launched by this proof script. */
-export function dedicatedRunnerTestPaths(): string[] {
-	const suite = "scripts/test-sandbox/windows-guest-sentinel-proof.test.ts";
-	const proof = readFileSync(path.join(repoRoot, "scripts/test-sandbox/leak-proof.ps1"), "utf8");
-	return proof.includes(`$probeFile = Join-Path $scriptDir "${path.basename(suite)}"`) &&
-		proof.includes('bun test `"$probeFile`"')
-		? [suite]
-		: [];
+/** Paths passed to a direct Bun test command or to Bun inside the Windows guest. */
+export function rootScriptTestPaths(manifest = readFileSync(path.join(repoRoot, "package.json"), "utf8")): string[] {
+	const { scripts = {} } = JSON.parse(manifest) as { scripts?: Record<string, string> };
+	const paths: string[] = [];
+	for (const command of Object.values(scripts)) {
+		const args =
+			/^(?:powershell\.exe -NoProfile -NonInteractive -File scripts\/test-sandbox\/run\.ps1 -- )?bun test (.+)$/
+				.exec(command)?.[1]
+				.trim()
+				.split(/\s+/);
+		if (args?.every(arg => /^[\w./-]+\.test\.ts$/.test(arg))) paths.push(...args);
+	}
+	return paths;
 }

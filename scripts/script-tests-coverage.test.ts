@@ -26,7 +26,7 @@ import { describe, expect, it } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { repoScriptTests } from "./ci-test-ts";
-import { commandText, dedicatedRunnerTestPaths, workflowFiles, workflowTestPaths } from "./runner-references";
+import { commandText, rootScriptTestPaths, workflowFiles, workflowTestPaths } from "./runner-references";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
 
@@ -56,7 +56,7 @@ function findTestFiles(dir: string, acc: string[] = []): string[] {
 
 const onDisk = ROOTS.flatMap(root => findTestFiles(root)).sort();
 const listed = [...repoScriptTests].sort();
-const covered = new Set([...listed, ...workflowTestPaths(), ...dedicatedRunnerTestPaths()]);
+const covered = new Set([...listed, ...workflowTestPaths(), ...rootScriptTestPaths()]);
 
 describe("the repo-level test list", () => {
 	/** Proves the walk found something. Without this, an empty walk would make the
@@ -144,6 +144,23 @@ describe("what counts as a runner reference", () => {
 
 		expect(commands).toContain("scripts/really-run.test.ts");
 		expect(commands).not.toContain("scripts/commented-out.test.ts");
+	});
+
+	it("credits executable root scripts, not mentions of a test command", () => {
+		const guest = "scripts/test-sandbox/windows-guest-sentinel-proof.test.ts";
+		const sandbox = "powershell.exe -NoProfile -NonInteractive -File scripts/test-sandbox/run.ps1";
+		const paths = rootScriptTestPaths(
+			JSON.stringify({
+				description: `${sandbox} -- bun test scripts/described.test.ts`,
+				scripts: {
+					direct: "bun test scripts/first.test.ts scripts/second.test.ts",
+					guest: `${sandbox} -- bun test ${guest}`,
+					comment: `# ${sandbox} -- bun test scripts/commented-out.test.ts`,
+					echo: `echo ${sandbox} -- bun test scripts/echoed.test.ts`,
+				},
+			}),
+		);
+		expect(paths).toEqual(["scripts/first.test.ts", "scripts/second.test.ts", guest]);
 	});
 
 	/**
