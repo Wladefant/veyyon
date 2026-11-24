@@ -21,6 +21,7 @@ import {
 } from "@veyyon/kernel/session/retry-policy";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { errorMessage, extractRetryHint, formatDuration, logger } from "@veyyon/utils";
+import { isUnexpectedSocketCloseMessage } from "@veyyon/utils/fetch-retry";
 import type { RecoveredRetryError } from "../../extensibility/shared-events";
 import { turnControlPrompts } from "../../prompts/turn-control/rows";
 import { isEmptyAssistantStop, isSameAssistantMessage } from "../agent-session-message-shapes";
@@ -227,6 +228,25 @@ export class RetryRuntime {
 	}
 
 	/**
+	 * A socket reset leaves a draft, not an answer. Restart only plain assistant
+	 * output, whose interrupted draft we can retract. Never take this path on a
+	 * tool turn or when a remote agent may have done work inside the request.
+	 */
+	#canRestartSocketResetDraft(message: AssistantMessage): boolean {
+		const api = this.#session.model?.api ?? message.api;
+		if (api.endsWith("-agent") || message.api.endsWith("-agent")) return false;
+		const error = message.errorMessage ?? "";
+		return (
+			message.stopReason === "error" &&
+			(isUnexpectedSocketCloseMessage(error) || /\bECONNRESET\b/.test(error)) &&
+			!message.incompleteToolCalls?.length &&
+			message.content.every(block => block.type === "text" || block.type === "thinking") &&
+			message.content.some(block => block.type === "text" && block.text.trim().length > 0) &&
+			!this.#host.abortIsDeliberate(message)
+		);
+	}
+
+	/**
 	 * Check if an error is retryable (transient errors or usage limits).
 	 * Context overflow is NOT retryable (handled by compaction instead).
 	 * Usage-limit errors are retryable because the retry handler performs credential switching.
@@ -241,7 +261,9 @@ export class RetryRuntime {
 
 		if (isProviderRefusalMessage(message)) return true;
 		return AIError.retriable(id, {
-			replayUnsafe: hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
+			replayUnsafe:
+				!this.#canRestartSocketResetDraft(message) &&
+				hasReplayUnsafeOutput(message, this.#session.agent.state.messages),
 		});
 	}
 
@@ -482,6 +504,7 @@ export class RetryRuntime {
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classify(message);
 		const staleReplay = AIError.is(id, AIError.Flag.StaleResponsesItem);
+		const discardDraft = this.#canRestartSocketResetDraft(message);
 		const attempt: RetryAttempt = {
 			message,
 			id,
@@ -514,7 +537,7 @@ export class RetryRuntime {
 		}
 		if (await this.#closeUnrecoverable(attempt, policy.maxDelayMs)) return false;
 
-		await this.#recordPendingRecoveredError(message, id, attempt);
+		const discardedDraftKey = await this.#recordPendingRecoveredError(message, id, attempt, discardDraft);
 
 		await this.#host.emitSessionEvent({
 			type: "auto_retry_start",
@@ -526,6 +549,7 @@ export class RetryRuntime {
 				? `${attempt.errorMessage} (${attempt.quotaMessage})`
 				: attempt.errorMessage,
 			errorId: message.errorId,
+			...(discardedDraftKey ? { discardedDraftKey } : {}),
 		});
 
 		// Remove the failed assistant message from active context before retrying.
@@ -982,7 +1006,8 @@ export class RetryRuntime {
 		message: AssistantMessage,
 		id: number,
 		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
-	): Promise<void> {
+		discardDraft: boolean,
+	): Promise<string | undefined> {
 		await this.#host.persistLifecycleErrorMessage(message);
 		const persistenceKey = sessionMessagePersistenceKey(message);
 		if (!persistenceKey) return;
@@ -996,8 +1021,24 @@ export class RetryRuntime {
 			branchEntry = entry;
 			break;
 		}
-		if (!branchEntry) return;
-		if (this.#pendingRecoveredErrors.some(error => error.entryId === branchEntry.id)) return;
+		if (branchEntry?.type !== "message" || branchEntry.message.role !== "assistant") {
+			return discardDraft ? persistenceKey : undefined;
+		}
+		if (discardDraft) {
+			// Keep the diagnostic, not the draft. On reload the transcript must
+			// show the same replacement as the live display.
+			const previous = branchEntry.message;
+			branchEntry.message = { ...previous, content: [] };
+			try {
+				await this.#session.sessionManager.rewriteEntries([branchEntry]);
+			} catch (error) {
+				branchEntry.message = previous;
+				throw error;
+			}
+		}
+		if (this.#pendingRecoveredErrors.some(error => error.entryId === branchEntry.id)) {
+			return discardDraft ? persistenceKey : undefined;
+		}
 		const rateLimited = AIError.is(id, AIError.Flag.UsageLimit);
 		const recovery = retryRecoveryKind(id, options.switchedCredential, options.switchedModel, options.delayMs);
 		const note = retryRecoveryNote(recovery, rateLimited);
@@ -1008,6 +1049,7 @@ export class RetryRuntime {
 			attempt: this.#attempt,
 			note,
 		});
+		return discardDraft ? persistenceKey : undefined;
 	}
 
 	async #markPendingRecoveredErrors(supersedingMessage: AssistantMessage): Promise<RecoveredRetryError[]> {

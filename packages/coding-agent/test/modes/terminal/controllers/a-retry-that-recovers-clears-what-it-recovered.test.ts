@@ -263,4 +263,57 @@ describe("an auto-retry", () => {
 		await idle.recovery.retryEnded({ type: "auto_retry_end", success: true, attempt: 1 } as RetryEnd);
 		expect(idle.log).not.toContain("working:show");
 	});
+
+	it("clears a retracted draft's segments on retry start while keeping recovery and pinned behavior intact", async () => {
+		const { log, recovery } = createRig();
+		const block = erroredBlock();
+		recovery.pinTurnError(block, ERROR_TEXT);
+		expect(rendered(block)).toContain("running the migration");
+		expect(block.isTranscriptBlockFinalized()).toBe(true);
+
+		const versionBefore = block.getTranscriptBlockVersion();
+		const key = block.messagePersistenceKey();
+		expect(key).toBeDefined();
+
+		await recovery.retryStarted({ ...RETRY_START, discardedDraftKey: key }, block);
+		expect(rendered(block)).not.toContain("running the migration");
+		expect(block.getTranscriptBlockVersion()).toBeGreaterThan(versionBefore);
+		expect(block.messagePersistenceKey()).toBe(key);
+		expect(log).not.toContain("banner:clear");
+
+		await recovery.retryEnded({
+			type: "auto_retry_end",
+			success: true,
+			attempt: 1,
+			recoveredErrors: [recovered(key)],
+		} as RetryEnd);
+
+		expect(log).toContain("banner:clear");
+		expect(rendered(block)).toContain(RECOVERY_NOTE);
+		expect(rendered(block)).not.toContain("running the migration");
+		expect(rendered(block)).not.toContain(ERROR_TEXT);
+	});
+
+	it("clears only the block matching discardedDraftKey when last and pinned components differ", async () => {
+		const { recovery } = createRig();
+		const pinned = erroredBlock();
+		const other = new AssistantMessageComponent(
+			toAssistantMessageView({
+				role: "assistant",
+				content: [{ type: "text", text: "earlier completed draft" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "error",
+				errorMessage: ERROR_TEXT,
+				usage: emptyUsage(),
+				timestamp: 1_700_000_000_100,
+			}),
+		);
+		recovery.pinTurnError(pinned, ERROR_TEXT);
+
+		await recovery.retryStarted({ ...RETRY_START, discardedDraftKey: pinned.messagePersistenceKey() }, other);
+		expect(rendered(pinned)).not.toContain("running the migration");
+		expect(rendered(other)).toContain("earlier completed draft");
+	});
 });

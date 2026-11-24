@@ -287,10 +287,7 @@ describe("AgentSession transient-error recovery replay safety", () => {
 	const draft = "The answer starts here";
 	const answer = `${draft} and finishes here.`;
 
-	async function runSocketReset(
-		model: Model,
-		outcome: "recover" | "exhaust" | "unknown-tool",
-	) {
+	async function runSocketReset(model: Model, outcome: "recover" | "exhaust" | "unknown-tool") {
 		const failure = { content: [draft], stopReason: "error", errorMessage: socketReset } as const;
 		const mock = createMockModel({
 			responses: [failure, outcome === "recover" ? { content: [answer] } : failure],
@@ -346,7 +343,13 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			await session.prompt("test prompt");
 			await session.waitForIdle();
 			expect(session.isRetrying).toBe(false);
-			return { streamCalls, messages: session.messages, entries: sessionManager.getBranch(), calls: mock.calls, ...events };
+			return {
+				streamCalls,
+				messages: session.messages,
+				entries: sessionManager.getBranch(),
+				calls: mock.calls,
+				...events,
+			};
 		} finally {
 			await session.dispose();
 		}

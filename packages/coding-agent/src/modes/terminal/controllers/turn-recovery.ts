@@ -179,6 +179,9 @@ export class TurnRecovery {
 	): Promise<void> {
 		this.#trackSuperseded(lastAssistant);
 		this.#trackSuperseded(this.#pinnedErrorComponent);
+		if (event.discardedDraftKey) {
+			this.#discardDraftByKey(event.discardedDraftKey, lastAssistant);
+		}
 		this.ctx.clearWorkingLoader();
 		setShimmerActivity("error");
 		this.ctx.statusContainer.disposeChildren();
@@ -280,5 +283,24 @@ export class TurnRecovery {
 	#clearSuperseded(): void {
 		this.#supersededByKey.clear();
 		this.#supersededQueue = [];
+	}
+
+	#discardDraftByKey(key: string, lastAssistant: AssistantMessageComponent | undefined): void {
+		let cleared = false;
+		if (lastAssistant?.messagePersistenceKey() === key) {
+			lastAssistant.clearDraftSegments();
+			cleared = true;
+		}
+		if (
+			this.#pinnedErrorComponent &&
+			this.#pinnedErrorComponent !== lastAssistant &&
+			this.#pinnedErrorComponent.messagePersistenceKey() === key
+		) {
+			this.#pinnedErrorComponent.clearDraftSegments();
+			cleared = true;
+		}
+		if (!cleared) {
+			this.#supersededByKey.get(key)?.clearDraftSegments();
+		}
 	}
 }

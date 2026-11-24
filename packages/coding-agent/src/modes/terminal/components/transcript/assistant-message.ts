@@ -609,6 +609,16 @@ export class AssistantMessageComponent extends Container {
 		this.updateContent({ ...this.#lastMessage, errorPresentation });
 	}
 
+	/**
+	 * Clears rendered draft segments when a failed turn is retracted before an
+	 * exact retry, preserving the block's persistence key and error
+	 * presentation for recovery.
+	 */
+	clearDraftSegments(): void {
+		if (!this.#lastMessage || this.#lastMessage.segments.length === 0) return;
+		this.updateContent({ ...this.#lastMessage, segments: [] });
+	}
+
 	messagePersistenceKey(): string | undefined {
 		if (!this.#lastMessage) return undefined;
 		return [
