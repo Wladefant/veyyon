@@ -71,7 +71,17 @@ export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): strin
  * `undefined` when the challenge does not carry one.
  */
 export function extractOAuthChallengeScopes(error: Error): string | undefined {
-	const entries = error.message.matchAll(/([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]+)"/g);
+	// Transport errors append the headers after the body. Some errors start
+	// directly with the challenge and append a JSON body instead.
+	const challenge =
+		error.message.match(
+			/ \[WWW-Authenticate:[ \t]*((?:[^"[\]\r\n]|"(?:[^"\\\r\n]|\\.)*")*)\](?:\. Fix: [^\r\n]*)?$/i,
+		)?.[1] ??
+		error.message.match(
+			/^(?:HTTP \d{3}:[ \t]*)?(?:WWW-Authenticate:[ \t]*)?Bearer\b((?:[ \t,]+[a-zA-Z_][a-zA-Z0-9_-]*[ \t]*=[ \t]*"(?:[^"\\\r\n]|\\.)*")*)/i,
+		)?.[1];
+	if (!challenge) return undefined;
+	const entries = challenge.matchAll(/(?:^|[ \t,])([a-zA-Z_][a-zA-Z0-9_-]*)[ \t]*=[ \t]*"((?:[^"\\\r\n]|\\.)*)"/g);
 	for (const [, rawKey, value] of entries) {
 		const key = rawKey.toLowerCase();
 		if ((key === "scope" || key === "scopes") && value.trim() !== "") {
