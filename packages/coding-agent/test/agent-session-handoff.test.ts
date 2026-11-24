@@ -30,10 +30,6 @@ import { requireBundledModel } from "../../agent/test/helpers"
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 
-/** The automatic expensive-agent handoff focus removed by 82db6dbe ("style(session): apply biome check fixes"). */
-const AUTO_HANDOFF_FOCUS =
-	"Write a compact 3,000-token maximum successor brief. Include the assignment goal, current state, open steps, worktree, branch, source-observed HEAD, last test command and pass/fail counts, and important file paths. Do not invent repository metadata or test counts; say unknown when absent. Do not reproduce the source transcript.";
-
 /** Force the canonical in-place summary strategy for compaction-focused tests. */
 function withSummaryStrategy(settings: Settings): Settings {
 	settings.override("compaction.strategy", "summary" as never);
@@ -275,15 +271,15 @@ describe("AgentSession handoff", () => {
 			},
 		]);
 
-		await session.handoff(AUTO_HANDOFF_FOCUS, {
+		await session.handoff(undefined, {
 			autoTriggered: true,
 			compactSummary: true,
 		});
 
 		const call = handoffSpy.mock.calls[0];
 		const trailingContent = call?.[0].messages.at(-1)?.content;
-		expect(JSON.stringify(trailingContent)).toContain("3,000-token maximum");
-		expect(JSON.stringify(trailingContent)).toContain("Do not reproduce the source transcript");
+		expect(JSON.stringify(trailingContent)).toContain("at most 3,000 tokens");
+		expect(JSON.stringify(trailingContent)).toContain("Never reproduce transcript messages");
 		const successorBrief = session.agent.state.messages.find(
 			message => message.role === "custom" && message.customType === "handoff",
 		);
@@ -1864,7 +1860,7 @@ describe("AgentSession handoff", () => {
 				);
 			await session.prompt("Continue the assigned tool work");
 			await drainMaintenance();
-			expect(summarySpy).toHaveBeenCalledTimes(1);
+			expect(summarySpy.mock.calls).toHaveLength(1);
 			expect(session.sessionId).toBe(originalId);
 			expect(JSON.stringify(session.agent.state.messages)).toContain("SOURCE_TRANSCRIPT_SENTINEL");
 			expect(JSON.stringify(session.agent.state.messages)).toContain("successor continuation");
@@ -1884,7 +1880,7 @@ describe("AgentSession handoff", () => {
 		const sourceId = session.sessionId;
 		await session.prompt("Perform the tool steps");
 		await drainMaintenance();
-		expect(summarySpy).toHaveBeenCalledTimes(1);
+		expect(summarySpy.mock.calls).toHaveLength(1);
 		expect(streamingDuringSummary).toBe(true);
 		expect(session.sessionId).not.toBe(sourceId);
 		expect(mock.calls).toHaveLength(4);
@@ -1910,7 +1906,7 @@ describe("AgentSession handoff", () => {
 			await session.prompt("Perform tool steps");
 			await drainMaintenance();
 			expect(mock.calls).toHaveLength(4);
-			expect(summarySpy).not.toHaveBeenCalled();
+			expect(summarySpy.mock.calls).toHaveLength(0);
 		},
 	);
 	it.each(["root", "Luna"])("does not hand off a continuing %s session", async role => {
@@ -1924,7 +1920,7 @@ describe("AgentSession handoff", () => {
 		await session.prompt("Perform tool steps");
 		await drainMaintenance();
 		expect(mock.calls).toHaveLength(4);
-		expect(summarySpy).not.toHaveBeenCalled();
+		expect(summarySpy.mock.calls).toHaveLength(0);
 	});
 	it.each([128_000, 200_000, 512_000])(
 		"requires a summary candidate fitting the current context: %i tokens",
@@ -1952,7 +1948,7 @@ describe("AgentSession handoff", () => {
 			const sourceId = session.sessionId;
 			await session.prompt("Perform tool steps");
 			await drainMaintenance();
-			expect(summarySpy).toHaveBeenCalledTimes(capacity === 512_000 ? 1 : 0);
+			expect(summarySpy.mock.calls).toHaveLength(capacity === 512_000 ? 1 : 0);
 			if (capacity === 512_000) {
 				expect(session.sessionId).not.toBe(sourceId);
 				expect(summarySpy.mock.calls[0]?.[2]?.streamOptions?.maxTokens).toBe(64_000);

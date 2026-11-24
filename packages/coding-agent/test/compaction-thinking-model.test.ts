@@ -135,10 +135,9 @@ describe("Compaction summary thinking budget on Anthropic", () => {
 				const wire = body as unknown as AnthropicWire;
 				expect(wire.max_tokens).toBeGreaterThanOrEqual(summaryBudget(reserveTokens));
 				expect(wire.max_tokens).toBeLessThanOrEqual(model.maxTokens);
-				if (wire.thinking?.type === "enabled") {
-					expect(wire.thinking.budget_tokens).toBeGreaterThan(0);
-					expect(wire.thinking.budget_tokens).toBeLessThan(wire.max_tokens);
-				}
+				expect(wire.thinking?.type).toBe("enabled");
+				expect(wire.thinking?.budget_tokens).toBeGreaterThan(0);
+				expect(wire.thinking?.budget_tokens).toBeLessThan(wire.max_tokens);
 			}
 		},
 	);
@@ -153,6 +152,7 @@ describe("Compaction summary thinking budget on Anthropic", () => {
 				const wire = body as unknown as AnthropicWire;
 				expect(wire.max_tokens).toBeGreaterThanOrEqual(summaryBudget(reserveTokens));
 				expect(wire.max_tokens).toBeLessThanOrEqual(model.maxTokens);
+				expect(wire.thinking?.type).toBe("adaptive");
 				expect(wire.thinking?.budget_tokens).toBeUndefined();
 			}
 		},
@@ -173,10 +173,8 @@ describe("Compaction summary thinking budget on Antigravity", () => {
 				expect(maxOutputTokens).toBeGreaterThanOrEqual(summaryBudget(reserveTokens));
 				expect(maxOutputTokens).toBeLessThanOrEqual(model.maxTokens);
 				const budget = generation?.thinkingConfig?.thinkingBudget;
-				if (budget !== undefined) {
-					expect(budget).toBeGreaterThan(0);
-					expect(budget).toBeLessThan(maxOutputTokens ?? 0);
-				}
+				expect(budget).toBeGreaterThan(0);
+				expect(budget).toBeLessThan(maxOutputTokens ?? 0);
 			}
 		},
 	);

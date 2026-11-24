@@ -1662,9 +1662,11 @@ export class AgentSession {
 			}
 			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
+			if (signal?.aborted) return;
 			const automaticHandoffModel = this.#automaticHandoffSummaryModel(context);
 			if (automaticHandoffModel) {
 				if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
+				if (signal?.aborted) return;
 				if (await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel)) return;
 			}
 			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
@@ -5054,11 +5056,17 @@ export class AgentSession {
 		const agentId = this.#config.agentId;
 		this.#lastLaneHandoffSessionId = this.sessionId;
 		try {
-			const result = await this.handoff(
-				"Write a compact 3,000-token maximum successor brief. Include the assignment goal, current state, open steps, worktree, branch, source-observed HEAD, last test command and pass/fail counts, and important file paths. Do not invent repository metadata or test counts; say unknown when absent. Do not reproduce the source transcript.",
-				{ autoTriggered: true, compactSummary: true, preserveAgentLineage: true, summaryModel },
-			);
+			const result = await this.handoff(undefined, {
+				autoTriggered: true,
+				compactSummary: true,
+				preserveAgentLineage: true,
+				summaryModel,
+			});
 			if (!result) return false;
+			const registry = AgentRegistry.global();
+			if (agentId && registry.get(agentId)?.session === this) {
+				registry.attachSession(agentId, this, this.sessionFile);
+			}
 			messages.splice(0, messages.length, ...this.agent.state.messages);
 			return true;
 		} catch (error) {

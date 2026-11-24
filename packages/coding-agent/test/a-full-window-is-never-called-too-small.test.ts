@@ -96,13 +96,23 @@ describe("a session with a full context window is never told it is too small to 
 		const model = requireBundledModel(MODEL_PROVIDER, MODEL_ID);
 		// The summary itself is not under test: stub it so a compaction that does
 		// find a cut completes without a network call.
-		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
-			summary: "compacted",
-			shortSummary: undefined,
-			firstKeptEntryId: preparation.firstKeptEntryId,
-			tokensBefore: preparation.tokensBefore,
-			details: {},
-		}));
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => {
+			if (promptTokens < FULL_PROMPT_TOKENS) {
+				console.warn("small preparation", {
+					settings: preparation.settings,
+					history: preparation.messagesToSummarize.map(message => message.role),
+					prefix: preparation.turnPrefixMessages.map(message => message.role),
+					recent: preparation.recentMessages.map(message => message.role),
+				});
+			}
+			return {
+				summary: "compacted",
+				shortSummary: undefined,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: {},
+			};
+		});
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey(MODEL_PROVIDER, "test-key");
@@ -171,6 +181,7 @@ describe("a session with a full context window is never told it is too small to 
 
 	it("still says a small session is small", async () => {
 		const session = await sessionReporting(1_200);
+		console.warn("small context", session.getContextBreakdown());
 
 		expect(await compactOutcome(session)).toBe("Nothing to compact (session too small)");
 	});

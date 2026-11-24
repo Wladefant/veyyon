@@ -187,7 +187,9 @@ it("keeps the pre-compaction history in the stored transcript", async () => {
 		.getEntries()
 		.filter(entry => entry.type === "compaction")
 		.map(entry => (entry as { summary?: string }).summary ?? "");
-	expect(summaries).toEqual(["SUMMARY-OF-EVERYTHING-BEFORE"]);
+	expect(summaries).toEqual([
+		"No prior history.\n\n---\n\n**Turn Context (split turn):**\n\nSUMMARY-OF-EVERYTHING-BEFORE",
+	]);
 });
 
 it("sends a request a provider accepts after reloading a compacted session", async () => {

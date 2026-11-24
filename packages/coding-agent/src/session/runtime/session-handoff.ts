@@ -37,6 +37,24 @@ import type { ProviderSessions } from "./provider-sessions";
 import type { SessionSecrets } from "./session-secrets";
 import type { TodoRuntime } from "./todo-runtime";
 
+const COMPACT_HANDOFF_SECTIONS = {
+	"# COMPACT": "",
+	"## Goal": "State the assignment and its intended result.",
+	"## State": "Describe the current work and decisions that affect it.",
+	"## Open steps": "State the remaining work and the immediate next action.",
+	"## Repository": "Name the worktree, branch and observed HEAD.",
+	"## Tests": "Name the last test command and pass/fail counts.",
+	"## Files": "List important paths.",
+};
+const COMPACT_HANDOFF_PROMPT = [
+	"Write a successor brief of at most 3,000 tokens. Output only the brief.",
+	"Never reproduce transcript messages. Do not invent repository metadata or test results. Say unknown when absent.",
+	"Use these headings:",
+	...Object.entries(COMPACT_HANDOFF_SECTIONS).map(([heading, instruction]) =>
+		instruction ? `${heading}\n${instruction}` : heading,
+	),
+].join("\n\n");
+
 /** What {@link SessionHandoff} reads from the session's public surface. */
 export interface SessionHandoffSession {
 	readonly agent: Agent;
@@ -187,7 +205,10 @@ export class SessionHandoff {
 			// mirror exactly what the live turn populated the cache under.
 			const agent = session.agent;
 			const handoffPromptCacheKey = agent.promptCacheKey ?? agent.sessionId;
-			const handoffPromptText = renderHandoffPrompt(host.secrets.obfuscateTextForProvider(customInstructions));
+			const focus = host.secrets.obfuscateTextForProvider(customInstructions);
+			const handoffPromptText = options?.compactSummary
+				? (focus ? `${COMPACT_HANDOFF_PROMPT}\n\nAdditional focus: ${focus}` : COMPACT_HANDOFF_PROMPT)
+				: renderHandoffPrompt(focus);
 			const handoffSnapshot: AgentMessage[] = [
 				...agent.state.messages,
 				{
@@ -212,6 +233,7 @@ export class SessionHandoff {
 					hideThinkingSummary: agent.hideThinkingSummary,
 					initiatorOverride: "agent",
 					signal: handoffSignal,
+					...(options?.compactSummary && model.maxTokens != null ? { maxTokens: model.maxTokens } : {}),
 				},
 				model.provider,
 			);
@@ -244,16 +266,9 @@ export class SessionHandoff {
 				if (countTokens(handoffText) > 5_000) {
 					throw new Error("COMPACT handoff exceeds the 5,000-token estimate; keeping the original transcript");
 				}
-				for (const heading of [
-					"# COMPACT",
-					"## Goal",
-					"## State",
-					"## Open steps",
-					"## Repository",
-					"## Tests",
-					"## Files",
-				]) {
-					if (!handoffText.split("\n").some(line => line.trim() === heading)) {
+				const headings = new Set(handoffText.split("\n").map(line => line.trim()));
+				for (const heading of Object.keys(COMPACT_HANDOFF_SECTIONS)) {
+					if (!headings.has(heading)) {
 						throw new Error(`COMPACT handoff is missing ${heading}; keeping the original transcript`);
 					}
 				}
