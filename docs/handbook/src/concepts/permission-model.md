@@ -130,7 +130,7 @@ back to `prompt`, so commands still stop for your approval.
 
 ## Recursive shell deletes
 
-`bash` and `launch` refuse recognized recursive shell deletes regardless of the
+`bash` and `launch start` refuse recognized recursive shell deletes regardless of the
 target. Neither a per-tool `allow` nor a session bypass overrides the refusal.
 See [Recursive shell deletes](../features/sandbox.md#recursive-shell-deletes).
 

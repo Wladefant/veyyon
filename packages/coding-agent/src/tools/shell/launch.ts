@@ -30,7 +30,7 @@ import { resolveToCwd } from "../core/path-utils";
 import { checkPolysimMainArgv, checkPolysimMainDenial, type PolysimDenialResult } from "../core/polysim-main-guard";
 import { previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
-import { findRecursiveLaunchDeleteDenial, findRecursiveShellDeleteDenial } from "./bash-guard";
+import { findRecursiveLaunchDeleteDenial } from "./bash-guard";
 import {
 	cancelCapturedLaunchExitWatch,
 	type LaunchExitWatchPause,
@@ -443,7 +443,6 @@ function recursiveDeleteDenialFor(params: unknown): string | undefined {
 	if (call.op === "start" && call.application) {
 		return findRecursiveLaunchDeleteDenial(call.application, call.args ?? [], { ...process.env, ...call.env });
 	}
-	if (call.op === "send" && call.text) return findRecursiveShellDeleteDenial(call.text, process.env, true);
 	return undefined;
 }
 

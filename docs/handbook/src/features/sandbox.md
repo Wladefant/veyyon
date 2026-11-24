@@ -85,14 +85,14 @@ process exit status follows the run.
 
 ## Recursive shell deletes
 
-`bash` and `launch` refuse recognized recursive shell deletes, such as `rm -rf`,
+`bash` and `launch start` refuse recognized recursive shell deletes, such as `rm -rf`,
 PowerShell `Remove-Item -Recurse`, and `cmd /c rd /s`. Approval settings cannot
 override the refusal. A workspace or temp path does not make a shell delete safe.
 Use an approved cleanup operation, such as `wt_remove.py` for worktrees.
 
-This check does not inspect the effects of arbitrary programs, scripts, or partial
-terminal input. It cannot undo a deletion. Use an operating-system boundary to
-protect files from code that runs as the agent.
+The check does not inspect arbitrary programs or scripts. It does not treat
+`launch send` input as shell source. It cannot undo a deletion. Use an
+operating-system boundary to protect files from code that runs as the agent.
 
 ## Critical bash commands
 

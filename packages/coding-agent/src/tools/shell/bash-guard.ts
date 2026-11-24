@@ -1568,6 +1568,7 @@ function isDirectRecursiveDelete(name: string, args: readonly string[], syntax: 
 		if (powershellRemove && arg.startsWith("-")) {
 			const colon = arg.indexOf(":");
 			const parameter = (colon === -1 ? arg : arg.slice(0, colon)).toLowerCase();
+			if (syntax === "powershell" && colon !== -1 && arg.slice(colon + 1).toLowerCase() === "$false") continue;
 			if (parameter.startsWith("-r") && "-recurse".startsWith(parameter)) return true;
 		}
 	}
@@ -1625,18 +1626,13 @@ function recursiveDeleteInText(command: string, env: NodeJS.ProcessEnv, syntax: 
 /**
  * Refuse direct recursive deletes before shell dispatch. Inspect command words, not target paths:
  * nobody has proved that a generic shell delete can stay within a disposable root. This is not
- * confinement for an interpreter, an opaque script, or a partial terminal input.
+ * confinement for an interpreter, an opaque script, or terminal input.
  */
 export function findRecursiveShellDeleteDenial(
 	command: string,
 	env: NodeJS.ProcessEnv = process.env,
-	terminalInput = false,
 ): string | undefined {
-	const denied =
-		recursiveDeleteInText(command, env, "posix", 0) ||
-		(terminalInput &&
-			(recursiveDeleteInText(command, env, "powershell", 0) || recursiveDeleteInText(command, env, "cmd", 0)));
-	return denied ? RECURSIVE_DELETE_DENIAL : undefined;
+	return recursiveDeleteInText(command, env, "posix", 0) ? RECURSIVE_DELETE_DENIAL : undefined;
 }
 
 /** Launch starts an executable with argv, so only parse text passed to a shell. */

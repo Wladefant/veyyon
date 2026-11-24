@@ -26,6 +26,7 @@ describe("direct recursive shell deletes", () => {
 		String.raw`powershell.exe -NoProfile -Command 'Remove-Item -LiteralPath "C:\fixture tree" -Recurse -Force'`,
 		`pwsh -Command Get-ChildItem ./fixtures | Remove-Item -Recur`,
 		`pwsh -Command 'RI ./fixtures/* -Recurse'`,
+		`pwsh -Command 'Remove-Item ./fixtures -Recurse:$true'`,
 		`cmd.exe /d /c 'RD /S /Q "C:\\fixture tree"'`,
 		"cmd /c rmdir /s /q ./fixtures",
 	])("blocks %s before approval", command => {
@@ -41,6 +42,7 @@ describe("direct recursive shell deletes", () => {
 		`printf '%s\\n' 'rm -rf ./fixtures'`,
 		"echo rm -rf ./fixtures",
 		`pwsh -Command 'Get-ChildItem ./fixtures -Recurse'`,
+		`pwsh -Command 'Remove-Item ./fixture.txt -Recurse:$false'`,
 		"cmd /c echo rd /s /q ./fixtures",
 		"docker run --rm alpine rm -rf /scratch",
 	])("leaves %s on the normal approval path", command => {
@@ -83,18 +85,28 @@ describe("direct recursive shell deletes", () => {
 			application: "powershell.exe",
 			args: ["-NoProfile", "-Command", script],
 		};
-		const send = { op: "send", name: "test-shell", text: script } as const;
 		const outcomes = await Promise.allSettled([
 			bashTool.execute("test-bash", { command: `powershell.exe -NoProfile -Command "${script}"` }),
 			launchTool.execute("test-start", start),
-			launchTool.execute("test-send", send),
 		]);
 		for (const outcome of outcomes) {
 			expect(outcome).toMatchObject({ status: "rejected", reason: { message: expect.stringMatching(denial) } });
 		}
 		expect(launchTool.approval(start)).toMatchObject({ deny: true, reason: expect.stringMatching(denial) });
-		expect(launchTool.approval(send)).toMatchObject({ deny: true, reason: expect.stringMatching(denial) });
 		expect(await readFile(victimFile, "utf8")).toBe("victim fixture");
 		expect(await readFile(control, "utf8")).toBe("control fixture");
+	});
+
+	it("does not interpret launch input as shell source", async () => {
+		const tool = new LaunchTool(
+			makeToolSession({
+				getSessionId: () => {
+					throw new Error("input reached process admission");
+				},
+			}),
+		);
+		const send = { op: "send", name: "editor", text: "rm -rf ./fixture", enter: false } as const;
+		expect(tool.approval(send)).toBe("exec");
+		await expect(tool.execute("test-literal-send", send)).rejects.toThrow("input reached process admission");
 	});
 });
