@@ -72,8 +72,8 @@ describe("kernel tool bridge HTTP server", () => {
 			expect(res.status).toBe(200);
 			expect(body).toEqual({ ok: true, value: "file body" });
 			expect(calls).toHaveLength(1);
-			// `i` survives the bridge round trip so transcript renderers have a label.
-			expect((calls[0]!.args as Record<string, unknown>)[INTENT_FIELD]).toBe("py prelude");
+			// Prelude intent is bridge metadata unless it belongs to the tool schema.
+			expect(calls[0]!.args).toEqual({ path: "foo.ts" });
 		} finally {
 			unregister();
 		}
