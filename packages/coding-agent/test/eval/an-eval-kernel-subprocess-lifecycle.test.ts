@@ -108,7 +108,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 		const sessionId = `py-timeout:${crypto.randomUUID()}`;
 
 		const startTime = Date.now();
-		const result = await executePython("import asyncio; await asyncio.sleep(10)", {
+		const result = await executePython("import time; time.sleep(10)", {
 			cwd: tempDir.path(),
 			sessionId,
 			kernelOwnerId: PYTHON_OWNER,
@@ -119,6 +119,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 		expect(durationMs).toBeLessThan(4000);
 		expect(result.cancelled).toBe(true);
 		expect(result.output).toMatch(/timed out/i);
+		expect(result.cancellationPending).toBe(true);
 	}, 15_000);
 
 	it("aborts execution when AbortSignal fires", async () => {
@@ -127,7 +128,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 		const controller = new AbortController();
 
 		const startTime = Date.now();
-		const result = await executePython("import asyncio; print('RUNNING', flush=True); await asyncio.sleep(10)", {
+		const result = await executePython("import time; print('RUNNING', flush=True); time.sleep(10)", {
 			cwd: tempDir.path(),
 			sessionId,
 			kernelOwnerId: PYTHON_OWNER,
@@ -142,6 +143,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 
 		expect(durationMs).toBeLessThan(4000);
 		expect(result.cancelled).toBe(true);
+		expect(result.cancellationPending).toBe(true);
 	}, 15_000);
 
 	it("isolates execution in per-call mode without mutating session state", async () => {
