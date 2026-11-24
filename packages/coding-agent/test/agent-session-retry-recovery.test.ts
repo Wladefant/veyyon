@@ -18,7 +18,10 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveAssistantErrorPresentation } from "@veyyon/coding-agent/presentation/transcript-builder";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import type { AgentSessionEvent, ScheduledAgentContinueOptions } from "@veyyon/coding-agent/session/agent-session-types";
+import type {
+	AgentSessionEvent,
+	ScheduledAgentContinueOptions,
+} from "@veyyon/coding-agent/session/agent-session-types";
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
 import { PostPromptTasks } from "@veyyon/coding-agent/session/runtime/post-prompt-tasks";
 import { type RetryHost, RetryRuntime, type RetrySession } from "@veyyon/coding-agent/session/runtime/retry-runtime";

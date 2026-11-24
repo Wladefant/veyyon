@@ -2122,7 +2122,8 @@ describe("openai-codex streaming", () => {
 		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
 		const writer = writable.getWriter();
 		const { promise: progressObserved, resolve: markProgressObserved } = Promise.withResolvers<void>();
-		const emit = (event: Record<string, unknown>) => writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+		const emit = (event: Record<string, unknown>) =>
+			writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
 		let requestSignal: AbortSignal | undefined;
 		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
 		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
