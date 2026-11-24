@@ -16,7 +16,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@veyyon/catalog/wire/codex";
-import { isTimeoutError } from "@veyyon/utils/abortable";
+import { isTimeoutError, untilAborted } from "@veyyon/utils/abortable";
 import { getInstallId } from "@veyyon/utils/dirs";
 import { $env, $flag } from "@veyyon/utils/env";
 import { structuredCloneJSON } from "@veyyon/utils/json";
@@ -1407,6 +1407,26 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 	};
 }
 
+async function awaitCodexSetup<T>(
+	stage: string,
+	timeoutMs: number | undefined,
+	signal: AbortSignal | undefined,
+	run: () => Promise<T>,
+): Promise<T> {
+	const budgetMs = timeoutMs && timeoutMs > 0 ? timeoutMs : 300_000;
+	const deadline = scopedTimeoutSignal(budgetMs, signal);
+	try {
+		return await untilAborted(deadline.signal, run);
+	} catch (error) {
+		if (!signal?.aborted && deadline.signal.aborted) {
+			throw new DOMException(`OpenAI Codex timed out after ${budgetMs} ms during ${stage}`, "TimeoutError");
+		}
+		throw error;
+	} finally {
+		deadline.cancel();
+	}
+}
+
 function createCodexRequestContext(
 	model: Model<"openai-codex-responses">,
 	transformedBody: RequestBody,
@@ -1427,7 +1447,6 @@ function createCodexRequestContext(
 	const url = resolveCodexResponsesUrl(baseUrl);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
-
 
 	const requestHeaders = { ...(model.headers ?? {}), ...(options?.headers ?? {}) };
 	const rawRequestDump: RawHttpRequestDump = {
@@ -2040,7 +2059,15 @@ async function openCodexWebSocketTransport(
 		...chainedBody,
 		client_metadata: websocketClientMetadata,
 	};
-	const replacementWebsocketRequest = await options?.onPayload?.(websocketRequest, model);
+	const onPayload = options?.onPayload;
+	const replacementWebsocketRequest = onPayload
+		? await awaitCodexSetup(
+				"WebSocket payload preparation",
+				requestSetup.websocketFirstEventTimeoutMs,
+				requestSetup.requestSignal,
+				async () => onPayload(websocketRequest, model),
+			)
+		: undefined;
 	if (replacementWebsocketRequest !== undefined) {
 		websocketRequest = replacementWebsocketRequest as typeof websocketRequest;
 	}
@@ -2161,7 +2188,7 @@ async function openCodexSseTransport(
 	const canAppendBeforeRequest = state?.canAppend === true;
 	let wireBody = body;
 	let wireJson: string | undefined;
-	const prepareBody = async (): Promise<CodexSseAttempt> => {
+	const prepareBody = async (signal?: AbortSignal): Promise<CodexSseAttempt> => {
 		// Serialize once. The hook, when present, gets an isolated parse of
 		// exactly those bytes; when no extension handles the event the wire
 		// object is the untouched original and the recorded bytes are reused.
@@ -2169,9 +2196,15 @@ async function openCodexSseTransport(
 		// serialize-once costs 9ms — paid on every attempt before the first byte.
 		const bodyJson = JSON.stringify(body);
 		let wireParams = body;
-		if (options?.onPayload) {
+		const onPayload = options?.onPayload;
+		if (onPayload) {
 			const attemptBody = JSON.parse(bodyJson) as RequestBody;
-			const replacementWireBody = await options.onPayload(attemptBody, model);
+			const replacementWireBody = await awaitCodexSetup(
+				"SSE payload preparation",
+				requestSetup.firstEventTimeoutMs,
+				signal,
+				async () => onPayload(attemptBody, model),
+			);
 			wireParams =
 				replacementWireBody !== undefined && replacementWireBody !== attemptBody
 					? (replacementWireBody as RequestBody)
@@ -2207,7 +2240,19 @@ async function openCodexSseTransport(
 		prepareBody,
 		requestContext.compactionMetadata,
 	);
-	await notifyProviderResponse(options, handle.response, model, handle.requestId);
+	if (options?.onResponse) {
+		try {
+			await awaitCodexSetup("SSE response hook", requestSetup.firstEventTimeoutMs, requestSetup.requestSignal, () =>
+				notifyProviderResponse(options, handle.response, model, handle.requestId),
+			);
+		} catch (error) {
+			requestSetup.requestAbortController.abort(error);
+			// No iterator has started. Cancel the unread body without letting
+			// a stalled transport's cleanup own the terminal outcome.
+			void handle.response.body?.cancel(error).catch(() => {});
+			throw error;
+		}
+	}
 	// A response means `prepareBody` serialized the attempt that received it.
 	recordCodexTurnRequestDiagnostics(state, wireBody, wireJson!, "sse", canAppendBeforeRequest);
 	const cleanup = async (): Promise<void> => {
@@ -2422,11 +2467,20 @@ class CodexStreamProcessor {
 	async process(): Promise<CodexStreamCompletion> {
 		const { output, stream } = this;
 		stream.push({ type: "start", partial: output });
+		let sawProgress = false;
 
 		while (true) {
 			this.#attemptFirstTokenTime = this.firstTokenTime;
 			try {
 				for await (const rawEvent of this.runtime.eventStream) {
+					if (!sawProgress && isCodexStreamProgressEvent(rawEvent)) {
+						sawProgress = true;
+						logger.debug("Codex first stream progress", {
+							sessionId: this.options?.sessionId,
+							requestStartedAt: this.startTime,
+							transport: this.runtime.transport,
+						});
+					}
 					this.#handleStreamEvent(rawEvent);
 					if (this.runtime.sawTerminalEvent) break;
 				}
@@ -3296,6 +3350,15 @@ const streamOpenAICodexResponsesOnce = (
 				});
 			}
 			const initialTransport = await openInitialCodexEventStream(model, options, requestSetup, requestContext);
+			logger.debug("Codex stream opened", {
+				sessionId: options?.sessionId,
+				requestStartedAt: startTime,
+				transport: initialTransport.transport,
+				firstEventTimeoutMs:
+					initialTransport.transport === "sse"
+						? requestSetup.firstEventTimeoutMs
+						: requestSetup.websocketFirstEventTimeoutMs,
+			});
 			const runtime = new CodexStreamRuntime({
 				...initialTransport,
 				websocketState: requestContext.websocketState,
@@ -3337,9 +3400,19 @@ const streamOpenAICodexResponsesOnce = (
 					});
 				}
 			}
+			logger.debug("Codex stream settled", {
+				sessionId: options?.sessionId,
+				requestStartedAt: startTime,
+				outcome: message.stopReason,
+			});
 			stream.push({ type: "done", reason: message.stopReason as "stop" | "length" | "toolUse", message });
 			stream.end();
 		} catch (error) {
+			logger.debug("Codex stream failed", {
+				sessionId: options?.sessionId,
+				requestStartedAt: startTime,
+				stage: requestContext === undefined ? "context" : processingContext ? "stream" : "setup",
+			});
 			const failureContext =
 				processingContext ??
 				({
@@ -4520,7 +4593,10 @@ async function openCodexSseEventStream(
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
 	/** The body one attempt sends and its serialization, prepared before each attempt. */
-	prepareAttempt: () => CodexSseAttempt | Promise<CodexSseAttempt> = () => ({ json: JSON.stringify(body), body }),
+	prepareAttempt: (signal?: AbortSignal) => CodexSseAttempt | Promise<CodexSseAttempt> = () => ({
+		json: JSON.stringify(body),
+		body,
+	}),
 	metadataState: Pick<CodexWebSocketSessionState, "modelsEtag"> | undefined = state,
 ): Promise<OpenAIStreamHandle<Record<string, unknown>>> {
 	const headers = createCodexHeaders(
@@ -4575,7 +4651,8 @@ async function openCodexSseEventStream(
 			signal,
 			prepareInit: async () => {
 				clearPreResponseTimeout?.();
-				const attempt = await prepareAttempt();
+				const attempt = await prepareAttempt(signal);
+				signal?.throwIfAborted();
 				const compressedBody = allowCompression ? compressCodexRequestBody(attempt.json, url) : undefined;
 				if (compressedBody !== undefined) {
 					headers.set("content-encoding", "zstd");
