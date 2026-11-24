@@ -4,7 +4,6 @@ import { normalizeTools } from "@veyyon/agent-core/tool-normalization";
 import type { ToolCall, TSchema } from "@veyyon/ai";
 import {
 	adaptSchemaForStrict,
-	jsonSchemaToTypeScript,
 	toolWireSchema,
 	validateJsonSchemaValue,
 	validateStrictSchemaEnforcement,
@@ -82,7 +81,16 @@ describe("browser tool schema", () => {
 		const tool = new BrowserTool(makeSession());
 		const wire = toolWireSchema(tool);
 		const app = (wire.properties as Record<string, { properties?: Record<string, unknown> }>).app;
-		expect(Object.keys(app.properties ?? {}).sort()).toEqual(["args", "cdp_url", "path", "target"]);
+		expect(Object.keys(app.properties ?? {}).sort()).toEqual([
+			"args",
+			"cdp_url",
+			"extension",
+			"instance",
+			"instance_id",
+			"path",
+			"profile",
+			"target",
+		]);
 		expect(validateJsonSchemaValue(wire, { action: "unsupported" }).success).toBe(false);
 		expect(() =>
 			validateToolCall([tool], {
@@ -108,8 +116,14 @@ describe("browser tool schema", () => {
 			name: "known-route",
 			app: { path: "/valid/app" },
 		});
-		expect(validateJsonSchemaValue(wire, { action: "open", name: "headless", app: { path: "/usr/bin/chromium" } }).success).toBe(true);
-		expect(validateJsonSchemaValue(wire, { action: "open", name: "cdp", app: { cdp_url: "http://127.0.0.1:9222" } }).success).toBe(true);
+		expect(
+			validateJsonSchemaValue(wire, { action: "open", name: "headless", app: { path: "/usr/bin/chromium" } })
+				.success,
+		).toBe(true);
+		expect(
+			validateJsonSchemaValue(wire, { action: "open", name: "cdp", app: { cdp_url: "http://127.0.0.1:9222" } })
+				.success,
+		).toBe(true);
 	});
 
 	it("rejects a direct open call without a supported app route before launching", async () => {
@@ -129,7 +143,7 @@ describe("browser tool schema", () => {
 			arguments: {
 				action: "open",
 				name: "known-route",
-				app: { path: "/valid/app", extension: true, unexpected: true },
+				app: { path: "/valid/app", unexpected: true },
 			},
 		});
 		expect(args).toEqual({
@@ -148,7 +162,6 @@ describe("browser tool schema", () => {
 			acquireBrowser.mockRestore();
 		}
 	});
-
 
 	// Reproduces the regression the Codex review flagged on #3647: with default
 	// `tools.intentTracing`, normalizeTools must keep the closed action variants
@@ -214,6 +227,7 @@ describe("browser tool schema", () => {
 				code: "return 1;",
 				timeout: null,
 				all: null,
+				approved_tab_ids: null,
 				kill: null,
 			}).success,
 		).toBe(true);

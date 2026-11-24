@@ -197,6 +197,9 @@ function resolveBrowserKind(
 	if (app?.instance || app?.instance_id || app?.profile) {
 		throw new ToolError("app.instance, app.instance_id, and app.profile require app.extension: true.");
 	}
+	if (app !== undefined && !app.path && !app.cdp_url) {
+		throw new ToolError("app requires path, cdp_url, or extension.");
+	}
 	if (app?.cdp_url) {
 		return { kind: "connected", cdpUrl: trimTrailingSlashes(app.cdp_url) };
 	}
@@ -895,10 +898,7 @@ async function close(
 	return toolResult(details).text(details.result).done();
 }
 
-function inventory(
-	ownerId: string | undefined,
-	details: BrowserToolDetails,
-): AgentToolResult<BrowserToolDetails> {
+function inventory(ownerId: string | undefined, details: BrowserToolDetails): AgentToolResult<BrowserToolDetails> {
 	const tabs = getExtensionTabInventory(ownerId);
 	if (tabs.length === 0) {
 		details.result = "No relay-managed extension tabs are open.";
@@ -913,7 +913,9 @@ function inventory(
 		ownership: tab.ownership,
 	}));
 	details.result = `Listed ${rows.length} relay-managed extension tab(s)`;
-	return toolResult(details).text(JSON.stringify(rows, null, 2)).done();
+	return toolResult(details)
+		.text(JSON.stringify(rows, null, 2))
+		.done();
 }
 
 /** Persist over-cap browser run output as a session artifact; mirrors the bash minimizer's save path. */

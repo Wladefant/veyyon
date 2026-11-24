@@ -40,7 +40,11 @@ describe("eval with an artifact that cannot be saved", () => {
 		const updated = Promise.withResolvers<void>();
 		const running = tool.execute(
 			"call-cancel-full",
-			{ language: "js", code: "print('x'.repeat(120000)); await Bun.sleep(30000);", timeout: 0 },
+			{
+				language: "js",
+				code: "print('xxxx\\n'.repeat(24000)); await Promise.withResolvers().promise;",
+				timeout: 0,
+			},
 			controller.signal,
 			update => {
 				// Abort only once the streamed output has reached the caller, so the sink holds bytes.
@@ -66,7 +70,7 @@ describe("eval with an artifact that cannot be saved", () => {
 		const tool = new EvalTool(makeSession("/dev/full"));
 		const result = await tool.execute("call-complete-full", {
 			language: "js",
-			code: "print('x'.repeat(120000));",
+			code: "print('xxxx\\n'.repeat(24000));",
 			timeout: 30,
 		});
 		expect(result.details?.meta?.artifactError).toMatch(/^(open|write|flush|end)$/);
