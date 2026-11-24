@@ -187,6 +187,12 @@ describe("/mcp auth commands", () => {
 			{ name: "JSON explicit scope", direct: true, scope: "read", expected: "read" },
 			{ name: "JSON embedded scope", direct: true, endpoint: "?scope=read", expected: "read" },
 			{ name: "JSON PRM fallback", direct: true, expected: "read profile" },
+			{
+				name: "JSON supported scopes with blank PRM scopes",
+				direct: true,
+				blankPrm: true,
+				expected: "read profile admin",
+			},
 			{ name: "JSON configured scopes", direct: true, configured: "read", expected: "read" },
 			{
 				name: "challenge and embedded scope",
@@ -291,6 +297,7 @@ describe("/mcp auth commands", () => {
 					),
 				);
 				const registeredScopes: unknown[] = [];
+				let resourceMetadataRequests = 0;
 				vi.spyOn(globalThis, "fetch").mockImplementation(
 					Object.assign(
 						async (input: string | URL | Request, init?: RequestInit | BunFetchRequestInit) => {
@@ -298,11 +305,13 @@ describe("/mcp auth commands", () => {
 							if (
 								url === resourceMetadataUrl ||
 								url === "https://mcp.example.com/.well-known/oauth-protected-resource"
-							)
+							) {
+								resourceMetadataRequests += 1;
 								return Response.json({
 									authorization_servers: ["https://auth.example.com"],
-									scopes_supported: ["read", "profile"],
+									scopes_supported: scenario.blankPrm ? [" ", "\t"] : ["read", "profile"],
 								});
+							}
 							if (url === "https://auth.example.com/.well-known/oauth-authorization-server")
 								return Response.json(discoveryMetadata);
 							if (url === "https://auth.example.com/register") {
@@ -326,6 +335,7 @@ describe("/mcp auth commands", () => {
 				await controller.handle("reauth envserver");
 				expect(authorizationScopes).toEqual([scenario.expected]);
 				expect(registeredScopes).toEqual([scenario.expected]);
+				if (scenario.direct && scenario.configured) expect(resourceMetadataRequests).toBe(0);
 				expect(showError.mock.calls.flat().join("\n")).toContain("Consent cancelled");
 				expect(authStorage.get(credentialId)).toEqual(previous);
 			});

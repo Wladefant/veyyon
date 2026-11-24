@@ -399,7 +399,9 @@ function readMetadataScopes(metadata: Record<string, unknown>): string | undefin
 	const explicit = readExplicitScopes(metadata);
 	if (explicit !== undefined) return explicit;
 	if (Array.isArray(metadata.scopes_supported)) {
-		const joined = metadata.scopes_supported.filter((scope): scope is string => typeof scope === "string").join(" ");
+		const joined = metadata.scopes_supported
+			.filter((scope): scope is string => typeof scope === "string" && scope.trim() !== "")
+			.join(" ");
 		if (joined) return joined;
 	}
 	return undefined;
@@ -424,9 +426,10 @@ export async function fetchResourceMetadataScopes(
 			method: "GET",
 			headers: { Accept: "application/json" },
 			redirect: "follow",
+			signal: AbortSignal.timeout(5_000),
 		});
 		if (!resp.ok) {
-			logger.warn("Protected-resource metadata could not be fetched; the grant will carry no advertised scopes", {
+			logger.warn("Protected-resource scopes could not be fetched", {
 				url: resourceMetadataUrl,
 				status: resp.status,
 			});
@@ -435,10 +438,7 @@ export async function fetchResourceMetadataScopes(
 		const meta = (await resp.json()) as Record<string, unknown>;
 		return readMetadataScopes(meta);
 	} catch (error) {
-		// Undefined also means "this document advertises no scopes", which is normal, so a FAILURE to read
-		// it has to say so: the authorization request then goes out without the scopes the server expects
-		// and comes back as an opaque `invalid_scope` or `server_error` with nothing pointing here.
-		logger.warn("Protected-resource metadata could not be read; the grant will carry no advertised scopes", {
+		logger.warn("Protected-resource scopes could not be read", {
 			url: resourceMetadataUrl,
 			error: errorMessage(error),
 		});
