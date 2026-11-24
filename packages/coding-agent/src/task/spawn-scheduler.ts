@@ -176,7 +176,9 @@ function mergeInlinePayloads(
 		if (payload.isError === true && !spawnResults?.length) hasError = true;
 		const text = payload.content.find(part => part.type === "text")?.text;
 		if (text) contentParts.push(text);
-		if (spawnResults) hasUsage = appendSpawnResults(results, usageTotals, outputPaths, spawnResults, index) || hasUsage;
+		if (spawnResults) {
+			hasUsage = appendSpawnResults(results, usageTotals, outputPaths, spawnResults, index) || hasUsage;
+		}
 	}
 	return {
 		contentParts,
