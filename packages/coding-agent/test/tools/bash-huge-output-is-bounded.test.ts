@@ -157,7 +157,7 @@ describe("a multi-megabyte stream is capped, not inlined", () => {
 		expect(text).toBe(OVERSIZED_OUTPUT_RECORD);
 		expect(text).not.toContain("xxxx");
 		expect(meta?.limits?.columnTruncated).toBeUndefined();
-		expect(artifactPaths).toEqual([]);
+		expect(await fs.readdir(tmpDir)).toEqual([]);
 	});
 
 	/**
