@@ -2182,7 +2182,7 @@ export class AgentSession {
 					const registry = AgentRegistry.global();
 					if (registry.get(id)?.session === this) registry.attachSession(id, this, this.sessionFile);
 				}
-				await this.#conversation.release();
+				await this.#conversation.release({ preserveAgentLineage });
 			},
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),

@@ -2038,4 +2038,66 @@ describe("AgentSession handoff", () => {
 		expect(session.sessionId).toBe(sourceSessionId);
 		expect(session.agent.state.messages).toEqual(sourceMessages);
 	});
+
+	it("keeps a spawned parent's live descendant across automatic handoff", async () => {
+		const parentId = "lineage-parent";
+		const childId = "lineage-live-child";
+		await createContinuingChild({ id: parentId });
+		using childDir = TempDir.createSync("@pi-handoff-child-");
+		const childManager = SessionManager.create(childDir.path(), childDir.path());
+		const childModel = createMockModel({
+			id: "claude-sonnet-4-5",
+			provider: "anthropic",
+			responses: [{ content: ["idle"] }],
+		});
+		const childSession = new AgentSession({
+			agent: new Agent({
+				initialState: { model: childModel, systemPrompt: ["Child"], tools: [], messages: [] },
+				streamFn: childModel.stream,
+			}),
+			sessionManager: childManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			isSpawned: true,
+			agentKind: "sub",
+			agentId: childId,
+		});
+		const registry = AgentRegistry.global();
+		registry.rescope(parentId, "lineage-conversation");
+		registry.register({
+			id: childId,
+			displayName: childId,
+			kind: "sub",
+			parentId,
+			session: childSession,
+			sessionFile: childSession.sessionFile,
+		});
+		try {
+			const oldParentFile = session.sessionFile;
+			const oldScope = registry.get(parentId)?.scope;
+			expect(registry.get(parentId)?.sessionFile).toBe(oldParentFile);
+			expect(oldScope).toBeDefined();
+			expect(registry.get(childId)?.scope).toBe(oldScope);
+			expect(registry.get(childId)?.parentId).toBe(parentId);
+			expect(registry.get(childId)?.status).toBe("running");
+
+			vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(successorBrief);
+			await session.prompt("Perform the tool steps");
+			await drainMaintenance();
+
+			expect(session.sessionFile).not.toBe(oldParentFile);
+			expect(registry.get(parentId)?.sessionFile).toBe(session.sessionFile);
+			expect(registry.get(parentId)?.scope).toBe(oldScope);
+			const child = registry.get(childId);
+			expect(child).toBeDefined();
+			expect(child?.parentId).toBe(parentId);
+			expect(child?.scope).toBe(oldScope);
+			expect(child?.status).toBe("running");
+			expect(child?.session).toBe(childSession);
+		} finally {
+			registry.unregister(childId);
+			registry.unregister(parentId);
+			await childSession.dispose();
+		}
+	});
 });
