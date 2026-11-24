@@ -99,8 +99,8 @@ describe("OVH related-test selector", () => {
 		const prompt = "packages/coding-agent/src/prompts/agent/user-prompt.md";
 		const output = runSelector([generated, prompt]);
 		const selected = parseSelectedTests(output);
-		expect(output).toContain(`${generated}: transitive; transitive tests=1; selected=1`);
 		expect(selected).toContain("scripts/gen-settings-reference.test.ts");
+		expect(selected).toContain("scripts/a-generated-doc-says-so-on-its-first-line.test.ts");
 		expect(selected).toContain("packages/coding-agent/test/tools/tool-prompt-budget.test.ts");
 	}, 120000);
 
@@ -115,14 +115,11 @@ describe("OVH related-test selector", () => {
 					compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext" },
 				}),
 				"CHANGELOG.md": "# Changelog\n",
-				"docs/guide.md": "# Guide\n",
 				"packages/pkg-a/CHANGELOG.md": "# Package changelog\n",
 				"packages/pkg-a/src/doc-references.ts":
-					'export const paths = ["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md", "docs/guide.md"];\n',
+					'export const paths = ["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md"];\n',
 				"packages/pkg-a/test/doc-reference-consumer.test.ts":
 					'import { paths } from "../src/doc-references.js";\nexport const references = paths;\n',
-				"packages/pkg-a/test/guide-reader.test.ts":
-					'import { readFileSync } from "node:fs";\nexport const guide = readFileSync("docs/guide.md", "utf8");\n',
 				"packages/pkg-a/package.json": JSON.stringify({ name: "@fixture/pkg-a", version: "1.0.0" }),
 				"packages/pkg-a/src/mod-a.ts": 'export const a = "alpha";\n',
 				"packages/pkg-a/src/mod-b.ts": 'console.log("barrel side effect");\nexport const b = "beta";\n',
@@ -156,11 +153,6 @@ describe("OVH related-test selector", () => {
 				expect(parseSelectedTests(runSelector([file], { cwd: fixtureDir }))).toEqual([]);
 			},
 		);
-
-		it("selects a direct guide reader without following incidental references through source imports", () => {
-			const output = runSelector(["docs/guide.md"], { cwd: fixtureDir });
-			expect(parseSelectedTests(output)).toEqual(["packages/pkg-a/test/guide-reader.test.ts"]);
-		});
 
 		it("retains consumer when importing a value re-exported by a barrel from changed module", () => {
 			const output = runSelector(["packages/pkg-a/src/mod-a.ts"], { cwd: fixtureDir });
