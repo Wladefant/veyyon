@@ -4,10 +4,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Show the action and status of a secret request in web transcripts without dumping its raw arguments or result ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
-
 ## [1.8.0] - 2026-11-05
 
 ### Changed

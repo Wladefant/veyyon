@@ -19,7 +19,9 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import type { AgentSession } from "@veyyon/coding-agent";
 import { TempDir } from "@veyyon/utils";
+import { InProcessClient } from "../../backends/in-process/client";
 import { InProcessBackend } from "../../backends/in-process/main";
 import type {
 	EvalSuite,
@@ -182,11 +184,13 @@ describe("the listeners a trial leaves on its run's signal", () => {
 			const controller = new AbortController();
 			const ledger = recordingSignal(controller);
 			const { promise: promptBlocked, resolve: releasePrompt } = Promise.withResolvers<void>();
+			const { promise: prompting, resolve: enteredPrompt } = Promise.withResolvers<void>();
 			const aborts: string[] = [];
 			const backend = new InProcessBackend({
 				clientFactory: () => ({
 					async start() {},
 					async prompt() {
+						enteredPrompt();
 						await promptBlocked;
 					},
 					async getSessionStats() {
@@ -216,6 +220,7 @@ describe("the listeners a trial leaves on its run's signal", () => {
 				{ suite: "listener-probe-suite", variant: "default", task: "probe-task", repeat: 0 },
 				context,
 			);
+			await prompting;
 			controller.abort();
 			const artifacts = await running;
 
@@ -223,6 +228,78 @@ describe("the listeners a trial leaves on its run's signal", () => {
 			expect(String(artifacts.extra?.error)).toContain("Trial aborted by context signal");
 			expect(ledger.registered()).toBe(0);
 		} finally {
+			await tempDir.remove();
+		}
+	});
+
+	it("disposes a session that finishes starting after its cancelled trial returns", async () => {
+		const tempDir = await TempDir.create("@evals-test-cancel-startup-");
+		const { promise: creatingSession, resolve: enteredFactory } = Promise.withResolvers<void>();
+		const { promise: startupGate, resolve: releaseStartup } = Promise.withResolvers<void>();
+		const { promise: startupFinished, resolve: observeStartup } = Promise.withResolvers<void>();
+		try {
+			const controller = new AbortController();
+			let live = false;
+			let promptCalls = 0;
+			let stateReads = 0;
+			let disposals = 0;
+			const session = {
+				subscribe: () => () => {},
+				async prompt() {
+					promptCalls++;
+				},
+				async waitForIdle() {},
+				async dispose() {
+					disposals++;
+					live = false;
+				},
+			} as AgentSession;
+			const backend = new InProcessBackend({
+				clientFactory: options => {
+					const client = new InProcessClient(options, async () => {
+						enteredFactory();
+						await startupGate;
+						live = true;
+						return { session };
+					});
+					client.getState = async () => {
+						stateReads++;
+						return {};
+					};
+					const start = client.start.bind(client);
+					client.start = () => {
+						const starting = start();
+						observeStartup(starting);
+						return starting;
+					};
+					return client;
+				},
+			});
+			const running = backend.runTrial(
+				{ suite: "listener-probe-suite", variant: "default", task: "probe-task", repeat: 0 },
+				{
+					runId: "cancel-startup",
+					suite: probeSuite(),
+					workDir: tempDir.absolute(),
+					runsDir: tempDir.join("runs"),
+					harnesses,
+					signal: controller.signal,
+					options: { variants: VARIANTS },
+				},
+			);
+			await creatingSession;
+			controller.abort();
+			const artifacts = await running;
+			expect(String(artifacts.extra?.error)).toContain("Trial aborted by context signal");
+
+			releaseStartup();
+			await startupFinished;
+			expect(live).toBe(false);
+			expect(disposals).toBe(1);
+			expect(stateReads).toBe(0);
+			expect(promptCalls).toBe(0);
+		} finally {
+			releaseStartup();
 			await tempDir.remove();
 		}
 	});

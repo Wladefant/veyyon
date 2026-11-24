@@ -256,9 +256,12 @@ export class InProcessBackend implements ExecutionBackend {
 			text: string | null;
 			sessionState: InProcessSessionState | undefined;
 		}> => {
+			timeoutAbort.signal.throwIfAborted();
 			await client.start();
+			timeoutAbort.signal.throwIfAborted();
 			if (typeof client.getState === "function") {
 				state = await client.getState();
+				timeoutAbort.signal.throwIfAborted();
 			}
 			if (instruction) {
 				await client.prompt(instruction);

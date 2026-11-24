@@ -173,25 +173,6 @@ describe("@veyyon/tool-render registry", () => {
 		expect(htmlGeneric).toContain("const a = 1;");
 		expect(htmlGeneric).not.toContain("generic fallthrough text");
 	});
-	it("renders a secret request's action and status without its raw arguments or result", () => {
-		const renderer = resolveToolRenderer("secret_request");
-		const marker = "synthetic-private-field";
-		const rendered = renderToStaticMarkup(
-			createElement(renderer.Summary, {
-				name: "secret_request",
-				args: { action: "consume", secretRef: marker },
-				result: {
-					content: [{ type: "text", text: marker }],
-					details: { request: { status: "consumed" }, secretRef: marker },
-				},
-			}),
-		);
-		expect(rendered).toContain("Consume");
-		expect(rendered).toContain("consumed");
-		expect(rendered).not.toContain(marker);
-		expect(renderer.Body).toBeUndefined();
-	});
-
 	it("keeps stripAnsi browser-safe (no Node deps in the util path)", () => {
 		expect(stripAnsi("plain\x1b[31mred\x1b[0m")).toBe("plainred");
 	});

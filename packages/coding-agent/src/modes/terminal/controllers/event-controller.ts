@@ -61,6 +61,7 @@ export type EventControllerContext = Pick<
 	| "clearPinnedError"
 	| "clearTransientSessionUi"
 	| "clearWorkingLoader"
+	| "editor"
 	| "effectiveHideThinkingBlock"
 	| "ensureLoadingAnimation"
 	| "flushCompactionQueue"
@@ -493,8 +494,13 @@ export class EventController {
 		this.#cards.resetReadGroup();
 		this.#displaceable.resolvePoll();
 		this.#displaceable.sealTodo();
-		this.#settleSubmittedEcho(message, signature);
+		const wasLocallySubmitted = this.#settleSubmittedEcho(message, signature);
 		if (!message.synthetic) {
+			// Clear the editor only when the submission did not originate from a local submission (optimistic or
+			// queued-while-streaming). Both local paths already cleared the editor at submit time; clearing again here
+			// would race with the next prompt being typed while the previous large redraw lands and erase the
+			// in-progress draft (#783).
+			if (!wasLocallySubmitted) this.ctx.editor.setText("");
 			this.ctx.updatePendingMessagesDisplay();
 			// A prompt landing mid-turn (queued while streaming) becomes the one being worked: move the glow so it
 			// always sits on the newest prompt.
@@ -504,19 +510,20 @@ export class EventController {
 	}
 
 	/**
-	 * Settles a user message against what this client drew at submit time. A matching optimistic echo stays,
-	 * an unmatched one gives way to the message, and a message from elsewhere is appended.
+	 * Settles a user message against what this client drew at submit time and returns whether the message came from
+	 * a local submission. A matching optimistic echo stays, an unmatched one gives way to the message, and a message
+	 * from elsewhere is appended.
 	 */
-	#settleSubmittedEcho(message: StartedUserMessage, signature: string): void {
+	#settleSubmittedEcho(message: StartedUserMessage, signature: string): boolean {
 		const optimisticSignature = this.ctx.optimisticUserMessageSignature;
 		const matchedLocalSubmission = this.ctx.locallySubmittedUserSignatures.delete(signature);
 		if (optimisticSignature === signature) {
 			this.ctx.clearOptimisticUserMessage();
-			return;
+			return true;
 		}
 		if (optimisticSignature !== undefined && !matchedLocalSubmission) {
 			this.ctx.replaceOptimisticUserMessage(message);
-			return;
+			return true;
 		}
 		// Append synchronously: #emit dispatches to this listener fire-and-forget (see AgentSession.#emit), so any
 		// await between the user message_start and addMessageToChat lets later events (assistant message_start, tool
@@ -524,6 +531,7 @@ export class EventController {
 		// boundaries. addMessageToChat materializes clickable image links via the synchronous putBlobSync fallback, so
 		// no await is needed here.
 		this.ctx.addMessageToChat(message);
+		return matchedLocalSubmission;
 	}
 
 	#startAssistantMessage(message: AssistantMessage): void {

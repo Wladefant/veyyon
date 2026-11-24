@@ -292,7 +292,7 @@ function targetTodo(verb: TodoTargetVerb, argument: string, port: TodoCommandPor
 		const { phases, errors } = applyOpsToPhases(current, [{ op: verb }]);
 		if (errors.length > 0) return failure(errors.join("; "));
 		commitTodos(port, phases, `/todo ${verb} (all)`, removed);
-		return info(verb === "pending" ? "Reset all tasks to pending." : `Marked all tasks ${status}.`);
+		return info(`Marked all tasks ${status}.`);
 	}
 
 	for (const query of targetQueries(argument)) {
@@ -301,24 +301,14 @@ function targetTodo(verb: TodoTargetVerb, argument: string, port: TodoCommandPor
 			const { phases, errors } = applyOpsToPhases(current, [{ op: verb, task: taskHit.task.content }]);
 			if (errors.length > 0) return failure(errors.join("; "));
 			commitTodos(port, phases, `/todo ${verb} ${taskHit.task.content}`, removed);
-			if (removed) return info(`Removed: ${taskHit.task.content}`);
-			return info(
-				verb === "pending"
-					? `Reset to pending: ${taskHit.task.content}`
-					: `Marked ${status}: ${taskHit.task.content}`,
-			);
+			return info(removed ? `Removed: ${taskHit.task.content}` : `Marked ${status}: ${taskHit.task.content}`);
 		}
 		const phaseHit = findPhaseFuzzy(current, query);
 		if (phaseHit) {
 			const { phases, errors } = applyOpsToPhases(current, [{ op: verb, phase: phaseHit.name }]);
 			if (errors.length > 0) return failure(errors.join("; "));
 			commitTodos(port, phases, `/todo ${verb} ${phaseHit.name}`, removed);
-			if (removed) return info(`Removed phase: ${phaseHit.name}`);
-			return info(
-				verb === "pending"
-					? `Reset phase ${phaseHit.name} to pending.`
-					: `Marked phase ${phaseHit.name} ${status}.`,
-			);
+			return info(removed ? `Removed phase: ${phaseHit.name}` : `Marked phase ${phaseHit.name} ${status}.`);
 		}
 	}
 	return failure(`No task or phase matched "${argument}".`);
