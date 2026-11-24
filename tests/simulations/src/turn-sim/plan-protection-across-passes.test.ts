@@ -43,10 +43,12 @@
  * belongs with the compaction suites.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import type { AgentTool } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import { TOOL } from "@veyyon/coding-agent/tools/core/builtin-names";
 import { createSimulation, type Simulation, scriptTurns, simTool } from "./harness";
+import { describeViolations, pairingViolations, toolResultsIn } from "./invariants";
 
 let sim: Simulation | undefined;
 
@@ -134,7 +136,61 @@ describe("every pass that rewrites history leaves the plan alone", () => {
 		const simulation = await runTwoRounds(true, PLAN_NAMED);
 
 		// The pass already ran, twice, at the end of each prompt.
-		expect(textOfResult(simulation, "control-1")).toBe(SUPERSEDED_NOTICE);
+		expect(describeViolations("plan-protection", pairingViolations(simulation.session.messages))).toEqual([]);
+		expect(
+			toolResultsIn(simulation.session.messages)
+				.map(result => result.id)
+				.sort(),
+		).toEqual(["control-1", "control-2", "plan-1", "plan-2"]);
+
+		const control1Entry = simulation.sessionManager
+			.getBranch()
+			.find(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolCallId === "control-1",
+			);
+		expect(control1Entry).toBeDefined();
+		if (!control1Entry || control1Entry.type !== "message" || control1Entry.message.role !== "toolResult") {
+			throw new Error("Expected recorded toolResult entry for control-1");
+		}
+
+		const control1Text = textOfResult(simulation, "control-1");
+		const match = control1Text.match(/\n\[recover: artifact:\/\/([^\s)]+) \(entry ([^)]+)\)\]$/);
+		expect(match).not.toBeNull();
+		const artifactId = match?.[1] ?? "";
+		expect(match?.[2]).toBe(control1Entry.id);
+		expect(control1Text).toBe(`${SUPERSEDED_NOTICE}\n[recover: artifact://${artifactId} (entry ${control1Entry.id})]`);
+
+		const artifactPath = await simulation.sessionManager.getArtifactPath(artifactId);
+		expect(artifactPath).toBeTruthy();
+		const archive = JSON.parse(await fs.readFile(artifactPath ?? "", "utf8")) as {
+			version: number;
+			operation: string;
+			entries: Array<{
+				id: string;
+				type: string;
+				message?: {
+					role: string;
+					toolCallId?: string;
+					content?: Array<{ type: string; text?: string }>;
+				};
+			}>;
+		};
+		expect(archive.version).toBe(1);
+		expect(archive.operation).toBe("prune-stale");
+		const archivedControl = archive.entries.find(entry => entry.id === control1Entry.id);
+		expect(archivedControl).toBeDefined();
+		expect(archivedControl?.message?.toolCallId).toBe("control-1");
+		const archivedControlText = (archivedControl?.message?.content ?? [])
+			.filter(block => block.type === "text")
+			.map(block => block.text ?? "")
+			.join("");
+		expect(archivedControlText).toBe(bodyFor(CONTROL_PATH));
+		expect(archive.entries.some(entry => entry.message?.toolCallId === "plan-1" || entry.message?.toolCallId === "plan-2")).toBe(false);
+
+		expect(textOfResult(simulation, "control-2")).toBe(bodyFor(CONTROL_PATH));
 		expect(textOfResult(simulation, "plan-1")).toBe(bodyFor(PLAN_NAMED));
 		expect(textOfResult(simulation, "plan-2")).toBe(bodyFor(PLAN_NAMED));
 	});

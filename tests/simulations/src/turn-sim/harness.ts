@@ -891,6 +891,9 @@ export async function createSimulation(options: SimulationOptions): Promise<Simu
 	resetScript();
 	installScript(options.script);
 	const tempDir = TempDir.createSync("@pi-simulation-");
+	// Transcript bytes use memory storage, but fork reservations and artifacts
+	// use the real sessions directory.
+	if (options.persist) await fs.mkdir(`${tempDir.path()}/sessions`);
 	const authStorage = await AuthStorage.create(`${tempDir.path()}/auth.db`);
 	// The session refuses to prompt a provider it holds no credential for, so
 	// the simulation registers a runtime key. Nothing reads it: the scripted

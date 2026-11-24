@@ -315,7 +315,7 @@ describe("a session that runs out of room climbs to a larger model before it sum
 	it("compacts a provider overflow in place when promotion is off", async () => {
 		const run = await overflow(false);
 
-		expect(run.served).toEqual(["1:primary", "2:primary"]);
+		expect(run.served).toEqual(["1:primary", "2:primary", "3:primary:summary", "4:primary"]);
 		expect(run.compactions).toBe(1);
 		expect(run.changes).toEqual(["primary@default"]);
 		expect(run.modelNow).toBe(PRIMARY);

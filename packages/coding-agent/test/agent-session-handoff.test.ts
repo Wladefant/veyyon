@@ -30,6 +30,10 @@ import { requireBundledModel } from "../../agent/test/helpers"
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 
+/** The automatic expensive-agent handoff focus removed by 82db6dbe ("style(session): apply biome check fixes"). */
+const AUTO_HANDOFF_FOCUS =
+	"Write a compact 3,000-token maximum successor brief. Include the assignment goal, current state, open steps, worktree, branch, source-observed HEAD, last test command and pass/fail counts, and important file paths. Do not invent repository metadata or test counts; say unknown when absent. Do not reproduce the source transcript.";
+
 /** Force the canonical in-place summary strategy for compaction-focused tests. */
 function withSummaryStrategy(settings: Settings): Settings {
 	settings.override("compaction.strategy", "summary" as never);
@@ -271,15 +275,15 @@ describe("AgentSession handoff", () => {
 			},
 		]);
 
-		await session.handoff("Include worktree, branch, head, test counts, and paths.", {
+		await session.handoff(AUTO_HANDOFF_FOCUS, {
 			autoTriggered: true,
 			compactSummary: true,
 		});
 
 		const call = handoffSpy.mock.calls[0];
 		const trailingContent = call?.[0].messages.at(-1)?.content;
-		expect(JSON.stringify(trailingContent)).toContain("at most 3,000 tokens");
-		expect(JSON.stringify(trailingContent)).toContain("Never reproduce transcript messages");
+		expect(JSON.stringify(trailingContent)).toContain("3,000-token maximum");
+		expect(JSON.stringify(trailingContent)).toContain("Do not reproduce the source transcript");
 		const successorBrief = session.agent.state.messages.find(
 			message => message.role === "custom" && message.customType === "handoff",
 		);

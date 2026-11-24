@@ -204,6 +204,7 @@ import {
 	type SteerOptions,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
+import { compactionModelCandidates } from "./agent-session-model-targets";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
@@ -633,6 +634,9 @@ export class AgentSession {
 		whileDisconnectedFromAgent: run => this.#whileDisconnectedFromAgent(run),
 		phaseChanged: () => this.#heartbeat?.update(),
 	});
+
+	/** Set once an automatic expensive-agent handoff has run for this session id, so it runs at most once. */
+	#lastLaneHandoffSessionId: string | undefined;
 
 	/** The end-of-turn context check and the recovery each of its cases runs. */
 	readonly #contextCheck = new TurnContextCheck(this, {
@@ -1658,6 +1662,11 @@ export class AgentSession {
 			}
 			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
+			const automaticHandoffModel = this.#automaticHandoffSummaryModel(context);
+			if (automaticHandoffModel) {
+				if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
+				if (await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel)) return;
+			}
 			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
 		});
 		this.yieldQueue = new YieldQueue({
@@ -4998,6 +5007,67 @@ export class AgentSession {
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		return this.#sessionHandoff.run(customInstructions, options);
+	}
+	/**
+	 * The summary model for an automatic expensive-agent handoff at this turn end, or undefined when the turn
+	 * is not eligible. Cheap guards run first; the context count and candidate search run only after them.
+	 */
+	#automaticHandoffSummaryModel(context: { willContinue?: boolean; message: AgentMessage } | undefined): Model | undefined {
+		const message = context?.message;
+		if (
+			this.#isDisposed ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			!context?.willContinue ||
+			message?.role !== "assistant" ||
+			message.stopReason === "aborted" ||
+			message.stopReason === "error"
+		) {
+			return undefined;
+		}
+		const agentId = this.#config.agentId;
+		const threshold = this.settings.get("compaction.laneHandoffThresholdTokens");
+		const model = this.model;
+		if (
+			!this.#isSpawned ||
+			!agentId ||
+			AgentRegistry.global().get(agentId)?.kind !== "sub" ||
+			this.#lastLaneHandoffSessionId === this.sessionId ||
+			threshold <= 0 ||
+			!model ||
+			!/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(model.id)
+		) {
+			return undefined;
+		}
+		const contextTokens = this.getContextBreakdown()?.usedTokens ?? 0;
+		if (contextTokens < threshold) return undefined;
+		return compactionModelCandidates(this.settings, model, this.modelRegistry.getAvailable()).find(
+			candidate =>
+				candidate.contextWindow !== null &&
+				candidate.maxTokens !== null &&
+				candidate.contextWindow >= contextTokens + 8_000 + candidate.maxTokens &&
+				this.modelRegistry.hasConfiguredAuth(candidate),
+		);
+	}
+	/** Hand a spawned expensive agent's transcript to a fresh successor. False keeps the current transcript. */
+	async #maybeHandoffExpensiveAgent(messages: AgentMessage[], summaryModel: Model): Promise<boolean> {
+		const agentId = this.#config.agentId;
+		this.#lastLaneHandoffSessionId = this.sessionId;
+		try {
+			const result = await this.handoff(
+				"Write a compact 3,000-token maximum successor brief. Include the assignment goal, current state, open steps, worktree, branch, source-observed HEAD, last test command and pass/fail counts, and important file paths. Do not invent repository metadata or test counts; say unknown when absent. Do not reproduce the source transcript.",
+				{ autoTriggered: true, compactSummary: true, preserveAgentLineage: true, summaryModel },
+			);
+			if (!result) return false;
+			messages.splice(0, messages.length, ...this.agent.state.messages);
+			return true;
+		} catch (error) {
+			logger.warn("Automatic expensive-agent handoff failed; retaining the current transcript", {
+				agentId,
+				error: errorMessage(error),
+			});
+			return false;
+		}
 	}
 	/**
 	 * Drop an assistant turn from BOTH the live agent context and the persisted

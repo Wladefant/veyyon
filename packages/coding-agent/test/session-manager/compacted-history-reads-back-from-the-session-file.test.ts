@@ -225,6 +225,7 @@ class ObservedStorage extends FileSessionStorage {
 			identity: inner.identity,
 			read: (offset, length) => {
 				this.reads += 1;
+				if (this.reads <= 3) console.warn("cold read", new Error().stack);
 				return inner.read(offset, length);
 			},
 			scanLines: (from, headBytes, visit) => {

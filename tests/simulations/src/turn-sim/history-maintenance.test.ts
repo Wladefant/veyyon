@@ -50,6 +50,7 @@
  *     rows that expect a blanked read while leaving every off-state cell green.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
 import type { Context } from "@veyyon/ai";
@@ -193,13 +194,72 @@ function textOfResult(messages: readonly AgentMessage[], toolCallId: string): st
 	return "(no result recorded)";
 }
 
-function expectedTextFor(row: Row, call: Call, gated: boolean): string {
-	const outcome = gated ? row.whenOn[call.id] : "intact";
-	if (outcome === "superseded") return SUPERSEDED_NOTICE;
-	if (outcome === "useless") return USELESS_NOTICE;
+function originalBodyFor(call: Call): string {
 	if (call.tool === "read") return bodyFor(String(call.args.path));
 	if (call.tool === "empty-search") return bodyFor(`no matches for ${String(call.args.pattern)}`);
 	return bodyFor(`search backend refused ${String(call.args.pattern)}`);
+}
+
+async function expectedTextWithRecovery(
+	simulation: Simulation,
+	row: Row,
+	call: Call,
+	gated: boolean,
+): Promise<string> {
+	const outcome = gated ? row.whenOn[call.id] : "intact";
+	const originalBody = originalBodyFor(call);
+	if (outcome === "intact") return originalBody;
+
+	const notice = outcome === "superseded" ? SUPERSEDED_NOTICE : USELESS_NOTICE;
+	const branchEntry = simulation.sessionManager
+		.getBranch()
+		.find(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === call.id,
+		);
+	expect(branchEntry).toBeDefined();
+	if (!branchEntry || branchEntry.type !== "message" || branchEntry.message.role !== "toolResult") {
+		throw new Error(`Expected recorded toolResult entry for ${call.id}`);
+	}
+
+	const text = branchEntry.message.content
+		.filter(block => block.type === "text")
+		.map(block => block.text)
+		.join("");
+	const match = text.match(/\n\[recover: artifact:\/\/([^\s)]+) \(entry ([^)]+)\)\]$/);
+	expect(match).not.toBeNull();
+	const artifactId = match?.[1] ?? "";
+	expect(match?.[2]).toBe(branchEntry.id);
+
+	const artifactPath = await simulation.sessionManager.getArtifactPath(artifactId);
+	expect(artifactPath).toBeTruthy();
+	const archive = JSON.parse(await fs.readFile(artifactPath ?? "", "utf8")) as {
+		version: number;
+		operation: string;
+		entries: Array<{
+			id: string;
+			type: string;
+			message?: {
+				role: string;
+				toolCallId?: string;
+				content?: Array<{ type: string; text?: string }>;
+			};
+		}>;
+	};
+	expect(archive.version).toBe(1);
+	expect(archive.operation).toBe("prune-stale");
+	const archived = archive.entries.find(entry => entry.id === branchEntry.id);
+	expect(archived).toBeDefined();
+	expect(archived?.message?.toolCallId).toBe(call.id);
+	const archivedText = (archived?.message?.content ?? [])
+		.filter(block => block.type === "text")
+		.map(block => block.text ?? "")
+		.join("");
+	expect(archivedText).toBe(originalBody);
+
+	return `${notice}\n[recover: artifact://${artifactId} (entry ${branchEntry.id})]`;
 }
 
 describe("the end-of-turn maintenance pass rewrites history in both places or neither", () => {
@@ -217,6 +277,7 @@ describe("the end-of-turn maintenance pass rewrites history in both places or ne
 				const cell = `${row.name} / ${gate.label}`;
 				const contexts: Context[] = [];
 				sim = await createSimulation({
+					persist: true,
 					settings: { "retry.enabled": false, ...gate.settings },
 					tools: maintenanceTools(),
 					script: scriptTurns(
@@ -269,8 +330,10 @@ describe("the end-of-turn maintenance pass rewrites history in both places or ne
 				expect(outbound).toBeDefined();
 				expect(describeViolations(cell, pairingViolations(outbound?.messages ?? []))).toEqual([]);
 
+				const expectedTexts: string[] = [];
 				for (const call of calls) {
-					const expected = expectedTextFor(row, call, gate.label === "maintenance on");
+					const expected = await expectedTextWithRecovery(sim, row, call, gate.label === "maintenance on");
+					expectedTexts.push(expected);
 					expect(`${call.id} stored: ${textOfResult(sim.session.messages, call.id)}`).toBe(
 						`${call.id} stored: ${expected}`,
 					);
@@ -285,7 +348,6 @@ describe("the end-of-turn maintenance pass rewrites history in both places or ne
 				// first-sight order, so the stored id is not a key there. Order is
 				// the contract that survives the rename, and `pairingViolations`
 				// above is what proves the renamed calls and results still agree.
-				const expectedTexts = calls.map(call => expectedTextFor(row, call, gate.label === "maintenance on"));
 				expect(textsOfResults(outbound?.messages ?? [])).toEqual(expectedTexts);
 			});
 		}
@@ -351,7 +413,8 @@ describe("the maintenance pass and a turn that died with its calls unrun", () =>
 		await sim.session.prompt("now answer");
 
 		expect(textOfResult(sim.session.messages, "read-1")).toBe(bodyFor("src/a.ts"));
-		expect(textOfResult(sim.session.messages, "read-1")).not.toBe(SUPERSEDED_NOTICE);
+		expect(textOfResult(sim.session.messages, "read-1")).not.toContain(SUPERSEDED_NOTICE);
+		expect(textOfResult(sim.session.messages, "read-1")).not.toContain("[recover: artifact://");
 		expect(textOfResult(sim.session.messages, "read-2")).toContain("not executed");
 
 		// And on the wire, which is the copy the next request is shaped from.
@@ -360,6 +423,7 @@ describe("the maintenance pass and a turn that died with its calls unrun", () =>
 		expect(describeViolations(cell, pairingViolations(outbound?.messages ?? []))).toEqual([]);
 		const wire = textsOfResults(outbound?.messages ?? []);
 		expect(wire.some(text => text === bodyFor("src/a.ts"))).toBe(true);
-		expect(wire.some(text => text === SUPERSEDED_NOTICE)).toBe(false);
+		expect(wire.some(text => text.includes(SUPERSEDED_NOTICE))).toBe(false);
+		expect(wire.some(text => text.includes("[recover: artifact://"))).toBe(false);
 	});
 });

@@ -11,6 +11,7 @@
 - Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore automatic handoff for expensive child sessions without requiring mid-turn compaction ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ## [1.12.3] - 2026-11-21
 
