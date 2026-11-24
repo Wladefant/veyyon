@@ -68,6 +68,7 @@ import type { MCPToolCache } from "./tool-cache";
 import { describeMCPServerTarget } from "./transports/transport-failure";
 import {
 	isMCPEventsEnabled,
+	type MCPEventCallback,
 	type MCPEventDescriptor,
 	type MCPEventOccurrence,
 	type MCPGetPromptResult,
@@ -106,6 +107,12 @@ type ActiveMCPEventSubscription = {
 	webhookVerificationRoute?: { secret: string };
 	unsubscribe?: Promise<void>;
 };
+
+type MCPEventControlCallback = (
+	serverName: string,
+	subscriptionKey: string,
+	message: MCPWebhookControl,
+) => ReturnType<MCPEventCallback>;
 
 const MCP_EVENT_STREAM_HEARTBEAT_TIMEOUT_MS = 60_000;
 
@@ -383,11 +390,7 @@ export class MCPManager {
 			...(gate ? { beforeSpawn: () => gate("an MCP stdio server") } : {}),
 		};
 	}
-	#onEventControl?: (
-		serverName: string,
-		subscriptionKey: string,
-		message: MCPWebhookControl,
-	) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
+	#onEventControl?: MCPEventControlCallback;
 	#webhookRegistrations = new Map<string, MCPWebhookRegistration>();
 	#webhookVerificationRoutes = new Map<string, { secret: string }>();
 	#webhookSubscriptions = new Map<string, { serverName: string; key: string }>();
@@ -406,7 +409,7 @@ export class MCPManager {
 				// Control acceptance may finish after this subscription is explicitly stopped.
 				// Preserve its acknowledgement, but never publish an old cursor or resubscribe.
 				if (subscription.controller.signal.aborted || this.#activeEvents.get(target.key) !== subscription) {
-					return outcome === "duplicate" ? "duplicate" : "queued";
+					return outcome;
 				}
 				if (message.type === "gap") {
 					await this.#recordEventCursor(subscription, message.cursor ?? null);
@@ -416,7 +419,7 @@ export class MCPManager {
 					this.#stopEvent(target.key, subscription, false);
 					void this.#refreshEventDescriptors(target.serverName);
 				}
-				return outcome === "duplicate" ? "duplicate" : "queued";
+				return outcome;
 			}
 			return (await this.#deliverEvent(target.serverName, target.key, subscription, message))
 				? "queued"
@@ -425,11 +428,7 @@ export class MCPManager {
 	});
 	#onEventCursor?: (serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>;
 	#eventCursorProvider?: (serverName: string, subscriptionKey: string) => string | null | undefined;
-	#onEvent?: (
-		serverName: string,
-		event: MCPEventOccurrence,
-		subscriptionKey: string,
-	) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
+	#onEvent?: MCPEventCallback;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
 	// Key-based webhook unsubscribe blocks only that canonical subscription,
 	// not independent poll/push feeds or unrelated webhook callbacks.
@@ -559,15 +558,7 @@ export class MCPManager {
 		this.#onNotification = handler;
 	}
 
-	setOnEvent(
-		handler:
-			| ((
-					serverName: string,
-					event: MCPEventOccurrence,
-					subscriptionKey: string,
-			  ) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
-			| undefined,
-	): void {
+	setOnEvent(handler: MCPEventCallback | undefined): void {
 		const callbackScope = this.#eventCallbackContext.getStore();
 		// A callback started under a previous consumer must not undo a newer
 		// external clear/replacement. In particular, its late re-enable would
@@ -652,15 +643,7 @@ export class MCPManager {
 		this.#eventCursorProvider = provider;
 	}
 
-	setOnEventControl(
-		handler:
-			| ((
-					serverName: string,
-					subscriptionKey: string,
-					message: MCPWebhookControl,
-			  ) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
-			| undefined,
-	): void {
+	setOnEventControl(handler: MCPEventControlCallback | undefined): void {
 		// A stale or disconnected event callback cannot capture a successor's control.
 		if (this.#eventCallbackCannotConfigure()) return;
 		const scope = this.#eventCallbackContext.getStore();
@@ -823,7 +806,7 @@ export class MCPManager {
 						return;
 					}
 					const descriptor = byName.get(requested.name);
-					if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
+					if (!descriptor?.delivery.includes(requested.mode)) {
 						const active = this.#activeEvents.get(key);
 						if (active) this.#stopEvent(key, active);
 						return;
@@ -1127,13 +1110,14 @@ export class MCPManager {
 		serverName: string,
 		key: string,
 		control: MCPWebhookControl,
-	): Promise<void | "queued" | "duplicate"> {
+	): Promise<"queued" | "duplicate"> {
 		const handler = this.#onEventControl;
 		if (!handler) throw new Error("MCP event control callback is not configured");
 		const subscription = this.#activeEvents.get(key);
-		return await (subscription
+		const outcome = await (subscription
 			? this.#withEventCallback(serverName, () => handler(serverName, key, control))
 			: handler(serverName, key, control));
+		return outcome === "duplicate" ? "duplicate" : "queued";
 	}
 
 	#eventKey(serverName: string, subscription: MCPServerEventSubscriptionConfig): string {
@@ -2381,6 +2365,9 @@ export class MCPManager {
 			return pending;
 		}
 
+		const config = this.getServerConfig(name);
+		if (!config) return null;
+
 		if (this.#tripReconnectBreaker(name)) {
 			// A suspended transport is no longer an event-feed owner. Without
 			// this drain, manual recovery has no oldConnection to retire, and
@@ -2390,7 +2377,7 @@ export class MCPManager {
 			return null;
 		}
 
-		const attempt = this.#doReconnect(name);
+		const attempt = this.#doReconnect(name, config);
 		this.#pendingReconnections.set(name, attempt);
 		this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
 		return attempt.finally(() => this.#pendingReconnections.delete(name));
@@ -2499,11 +2486,9 @@ export class MCPManager {
 		return false;
 	}
 
-	async #doReconnect(name: string): Promise<MCPServerConnection | null> {
+	async #doReconnect(name: string, config: MCPServerConfig): Promise<MCPServerConnection | null> {
 		const oldConnection = this.#connections.get(name);
-		const config = oldConnection?.config ?? this.#serverConfigs.get(name);
 		const source = this.#sources.get(name) ?? oldConnection?._source;
-		if (!config) return null;
 
 		logger.debug("MCP reconnecting", { path: `mcp:${name}` });
 

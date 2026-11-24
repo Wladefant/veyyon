@@ -7,7 +7,7 @@
 import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseEvents, readSseJson, Snowflake, untilAborted } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
-import { describeJsonRpcError, type IncomingMessageRoutes, reportUnattributableError } from "../incoming-message";
+import { describeJsonRpcError } from "../incoming-message";
 import { JSON_RPC_POST_HEADERS } from "../json-rpc";
 import {
 	createMCPTimeout,
@@ -227,27 +227,6 @@ export class HttpTransport implements MCPTransport {
 			const sessionId = response.headers.get("Mcp-Session-Id");
 			if (sessionId) this.#sessionId = sessionId;
 		},
-	};
-
-	/** Messages on the GET stream, and those a request's response stream does not take for itself. */
-	readonly #incoming: IncomingMessageRoutes = {
-		server: () => this.config.url,
-		// A response travels on the stream of the POST that sent its request; one arriving anywhere
-		// else answers nothing this client is waiting on.
-		response: () => {},
-		serverRequest: request => {
-			void answerServerRequest(this.onRequest, request).then(answer => {
-				if (!this.#connected) return;
-				return deliverServerResponse(
-					this.#postTarget,
-					this.config.url,
-					answer,
-					resolveMCPTimeoutMs(this.config.timeout),
-				);
-			});
-		},
-		notification: (method, params) => this.onNotification?.(method, params),
-		unattributableError: error => this.onError?.(reportUnattributableError(this.config.url, error, 0)),
 	};
 
 	constructor(private config: MCPHttpServerConfig | MCPSseServerConfig) {}
