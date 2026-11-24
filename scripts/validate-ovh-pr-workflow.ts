@@ -20,6 +20,7 @@ interface Job {
 	name?: string;
 	needs?: string | string[];
 	if?: string;
+	"timeout-minutes"?: number | string;
 	"runs-on": string[];
 	outputs?: Record<string, string>;
 	steps: Step[];
@@ -84,6 +85,7 @@ function context({
 	prepared = "success",
 	focusedTests = "",
 	workflowChanged = "true",
+	workflowOnly = "false",
 	installed = "success",
 	native = false,
 	headRef = "feature/example",
@@ -100,6 +102,7 @@ function context({
 	prepared?: string;
 	focusedTests?: string;
 	workflowChanged?: string;
+	workflowOnly?: string;
 	installed?: string;
 	native?: boolean;
 	headRef?: string;
@@ -136,11 +139,11 @@ function context({
 		needs: {
 			prepare: {
 				result: prepared,
-				outputs: { native_ready: nativeReady },
+				outputs: { native_ready: nativeReady, workflow_only: workflowOnly },
 			},
 		},
 		steps: {
-			changed: { outputs: { workflow_changed: workflowChanged } },
+			changed: { outputs: { workflow_changed: workflowChanged, workflow_only: workflowOnly } },
 			install: { outcome: installed },
 			native: { outputs: { native_ready: nativeReady } },
 		},
@@ -195,6 +198,56 @@ function validate(workflow: Workflow): void {
 
 	check("admitted ready same-repository PR runs related-test path", () => {
 		equal(eligibleJobs(context()), ["prepare", "test"]);
+	});
+
+	check("workflow-only PRs run the workflow validator without native or product test jobs", () => {
+		const fixture = context({ workflowOnly: "true" });
+		equal(eligibleJobs(fixture), ["prepare"]);
+		for (const id of ["selection", "native", "planner"]) {
+			const step = workflow.jobs.prepare!.steps.find(candidate => candidate.id === id);
+			equal(evaluate(step?.if, fixture), false);
+		}
+	});
+
+	check("automatic PR jobs stop at five minutes without shortening manual runs", () => {
+		for (const job of [workflow.jobs.prepare!, workflow.jobs.test!]) {
+			const limit = job["timeout-minutes"];
+			equal(evaluate(String(limit), context()), 5);
+			equal(evaluate(String(limit), context({ event: "workflow_dispatch" })), 15);
+		}
+	});
+
+	check("PR shard plans reserve two minutes for setup while manual plans keep their budget", () => {
+		const planner = workflow.jobs.prepare!.steps.find(step => step.id === "planner");
+		const dir = mkdtempSync(join(tmpdir(), "ovh-shard-budget-"));
+		try {
+			const input = join(dir, "selected.txt");
+			const output = join(dir, "out");
+			writeFileSync(input, "scripts/example.test.ts\n");
+			for (const [event, expected] of [
+				["pull_request", 180_000],
+				["workflow_dispatch", 480_000],
+			] as const) {
+				const limit = evaluate(planner?.env?.OVH_TARGET_SHARD_MS, context({ event }));
+				const run = spawnSync("node", ["scripts/ovh-test-shards.mjs", "--input", input, "--output", output], {
+					env: { ...process.env, GITHUB_OUTPUT: "", OVH_TARGET_SHARD_MS: String(limit) },
+					encoding: "utf8",
+					timeout: 10_000,
+				});
+				if (run.status !== 0) throw new Error(run.stderr || "Shard planner failed");
+				equal(JSON.parse(readFileSync(join(output, "plan.json"), "utf8")).targetDurationMs, expected);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	check("full CI has no PR trigger and retains main, tags and manual dispatch", () => {
+		const source = new URL("../.github/workflows/ci.yml", import.meta.url);
+		const full = Bun.YAML.parse(readFileSync(source, "utf8")) as Workflow;
+		equal(full.on.pull_request, undefined);
+		equal(full.on.push, { branches: ["main"], tags: ["v*"] });
+		equal(Object.hasOwn(full.on, "workflow_dispatch"), true);
 	});
 
 	check("fork PR allocates no job", () => {

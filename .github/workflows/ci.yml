@@ -10,8 +10,7 @@ on:
    push:
       branches: [main]
       tags: ["v*"]
-   # Every pull request, whatever its base; the reason is in checks.yml.
-   pull_request:
+   # Pull requests use focused OVH CI. Keep full CI on hosted release runners.
    workflow_dispatch:
 
 # A tag run publishes, and a later main push must never cancel it: sharing the
@@ -29,8 +28,7 @@ on:
 # not. A tag and its bump commit share a sha, so the tag keeps a DIFFERENT prefix
 # and cannot land in the same group as the main run that tested it.
 #
-# Pull requests and other branches keep branch-wide cancellation, which is where
-# superseding a run is the right answer.
+# Manual runs and release runs must finish even if a newer run starts.
 concurrency:
    group: "${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/v') && format('release-{0}', github.sha) || (github.ref == 'refs/heads/main' && format('main-{0}', github.sha) || github.ref) }}"
    cancel-in-progress: "${{ !(startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main') }}"
@@ -53,8 +51,7 @@ jobs:
    # An operator pushes `vX.Y.Z` at a main commit this workflow already tested,
    # and that tag push starts the run below. `release_metadata` resolves the tag
    # once and proves it points at a commit on main, so downstream jobs switch on
-   # `is-release` and address it by name. Ordinary contributor pushes and pull
-   # requests still run CI without publishing.
+   # `is-release` and address it by name. Main and manual runs do not publish.
    release_metadata:
       name: Resolve release metadata
       runs-on: ubuntu-22.04

@@ -4,17 +4,22 @@
 
 ### Fixed
 
+- Reject invalid browser app routes before launch, cache IRC schemas across launches, and repair tool and trust regression coverage ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep the default and allowed agent types in the shorter task prompt ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Return promptly when a Python eval cell does not acknowledge cancellation. Report that the cell may still be running without stopping the kernel ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Restore idle queue delivery, bounded `/btw` promotion, terminal error records, raw SSE capture access, and TTSR rules from approved plugins. Let print mode exit past untimed bash jobs and log failed extension aborts in spawned agents ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep MCP authentication refresh within the request deadline ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Stage Windows WriteTool edits and archive rewrites with the existing file's DACL. Write archive bytes through the staging handle instead of reopening the temp path ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
 - Fence synchronized sessions after an invalid initial lease, and wait for queued message writes before deduplicating results ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Match CLI help and completion to command metadata, including the terminal-control summary. Separate MCP event wiring from startup and account for more session subprocesses in the CPU budget ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Track refusal fence installation sites after the session split ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore the raw SSE debug viewer and tell agents to use verified IRC names ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ## [1.12.3] - 2026-11-21

@@ -50,15 +50,15 @@ function makeKind(socketSuffix: string): CmuxKind {
 	};
 }
 
-function makeSession(cwd: string): ToolSession {
-	// Minimal shape: `runInTab` only reads `cwd`, `settings.get("browser.screenshotDir")`,
-	// and `getActiveModel?.()`. Everything else on `ToolSession` is untouched by the
-	// tab-supervisor flow we exercise.
+function makeSession(cwd: string, sessionId: string): ToolSession {
+	// Minimal shape: `runInTab` reads `cwd`, `getSessionId` (the tab's owner check), `settings.get("browser.screenshotDir")`,
+	// and `getActiveModel?.()`. Everything else on `ToolSession` is untouched by the tab-supervisor flow we exercise.
 	return makeToolSession({
 		cwd,
 		hasUI: false,
 		settings: { get: () => undefined },
 		getSessionFile: () => null,
+		getSessionId: () => sessionId,
 	});
 }
 
@@ -134,7 +134,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 			await releaseBrowser(browser, { kill: false });
 			expect(acquired.tab.backend).toBe("cmux");
 
-			const session = makeSession("/tmp");
+			const session = makeSession("/tmp", "session-mid-run");
 			// Fire the run WITHOUT awaiting. `runtime.run` drives `tab.goto`,
 			// which drives `browser.navigate`, which stalls on `navGate` — so
 			// `runInTab` sits inside `runCmuxCode` with `tab.pending` populated.
@@ -218,7 +218,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 			await releaseBrowser(browser, { kill: false });
 			expect(acquired.tab.backend).toBe("cmux");
 
-			const session = makeSession("/tmp");
+			const session = makeSession("/tmp", "session-wait-mid-run");
 			// The user code awaits `wait(60_000)` — which drives
 			// `waitForBrowserRun(60_000, signal)` -> `untilAborted(signal,
 			// () => Bun.sleep(60_000))` INSIDE the runtime. Nothing hits the
