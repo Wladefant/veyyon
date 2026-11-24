@@ -426,12 +426,13 @@ export async function oauthEndpointsForAuthFailure(
 ): Promise<OAuthEndpoints | null> {
 	let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
 	const configuredScopes = options.configuredScopes?.trim();
+	const hasExplicitScopes = oauth?.explicitScopes && Boolean(oauth.scopes?.trim());
 	if (!oauth && url) {
 		const discovery = discoverOAuthEndpoints(url, authResult.authServerUrl, authResult.resourceMetadataUrl, {
 			protectedScopes: authResult.scopes,
 		});
 		oauth = options.ignoreDiscoveryFailure ? await discovery.catch(() => null) : await discovery;
-	} else if (oauth && !configuredScopes && !oauth.explicitScopes && authResult.resourceMetadataUrl) {
+	} else if (oauth && !configuredScopes && !hasExplicitScopes && authResult.resourceMetadataUrl) {
 		// The JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
 		// advertised protected-resource metadata for the required scopes.
 		const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);

@@ -186,6 +186,18 @@ describe("/mcp auth commands", () => {
 			{ name: "PRM fallback", expected: "read profile" },
 			{ name: "JSON explicit scope", direct: true, scope: "read", expected: "read" },
 			{ name: "JSON embedded scope", direct: true, endpoint: "?scope=read", expected: "read" },
+			{
+				name: "JSON empty embedded scope with PRM fallback",
+				direct: true,
+				endpoint: "?scope=",
+				expected: "read profile",
+			},
+			{
+				name: "JSON blank embedded scope with PRM fallback",
+				direct: true,
+				endpoint: "?scope=%20",
+				expected: "read profile",
+			},
 			{ name: "JSON PRM fallback", direct: true, expected: "read profile" },
 			{
 				name: "JSON supported scopes with blank PRM scopes",
