@@ -247,20 +247,21 @@ describe("the listeners a trial leaves on its run's signal", () => {
 				subscribe: () => () => {},
 				async prompt() {
 					promptCalls++;
+					return true;
 				},
 				async waitForIdle() {},
 				async dispose() {
 					disposals++;
 					live = false;
 				},
-			} as AgentSession;
+			} satisfies Pick<AgentSession, "subscribe" | "prompt" | "waitForIdle" | "dispose">;
 			const backend = new InProcessBackend({
 				clientFactory: options => {
 					const client = new InProcessClient(options, async () => {
 						enteredFactory();
 						await startupGate;
 						live = true;
-						return { session };
+						return { session: session as unknown as AgentSession };
 					});
 					client.getState = async () => {
 						stateReads++;
