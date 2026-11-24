@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { OAuthCallbackFlow } from "@veyyon/ai/registry/oauth/callback-server";
 import type { OAuthAuthInfo, OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
 import { parseHTML } from "linkedom";
@@ -110,6 +110,62 @@ describe("OAuthCallbackFlow callback security", () => {
 		} finally {
 			abort.abort("test cleanup");
 			await login.catch(() => undefined);
+		}
+	});
+});
+
+describe("OAuthCallbackFlow listener exposure", () => {
+	it("binds the default callback listener to the IPv4 loopback address only", async () => {
+		const abort = new AbortController();
+		activeAborts.push(abort);
+		const serve = spyOn(Bun, "serve");
+		const auth = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new CallbackProbeFlow(
+			{ signal: abort.signal, onAuth: info => auth.resolve(info) },
+			{ preferredPort: 0 },
+		);
+		const login = flow.login().catch(() => undefined);
+		try {
+			await auth.promise;
+			expect(serve.mock.calls.map(([options]) => options.hostname)).toEqual(["127.0.0.1"]);
+		} finally {
+			serve.mockRestore();
+			abort.abort("test cleanup");
+			await login;
+		}
+	});
+
+	it.each([
+		["an error without state", { error: "access_denied" }],
+		["a code with a forged state", { code: "forged-code", state: "forged-state" }],
+		["a request without code or state", {}],
+	])("does not settle the pending login on %s", async (_label, query) => {
+		const { info, abort, login } = await startFlow();
+		let settled = false;
+		const outcome = login.then(
+			() => (settled = true),
+			() => (settled = true),
+		);
+		const authUrl = new URL(info.url);
+		const redirectUri = authUrl.searchParams.get("redirect_uri");
+		const state = authUrl.searchParams.get("state");
+		if (!redirectUri || !state) throw new Error("OAuth test flow did not advertise its callback parameters");
+
+		try {
+			const forged = new URL(redirectUri);
+			for (const [key, value] of Object.entries(query)) forged.searchParams.set(key, value);
+			await fetch(forged);
+			expect(settled).toBe(false);
+
+			const valid = new URL(redirectUri);
+			valid.searchParams.set("code", "valid-code");
+			valid.searchParams.set("state", state);
+			const response = await fetch(valid);
+			expect(response.status).toBe(200);
+			expect((await login).access).toBe("valid-code");
+		} finally {
+			abort.abort("test cleanup");
+			await outcome;
 		}
 	});
 });
