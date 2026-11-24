@@ -64,6 +64,9 @@ async function runMove(
 		sessionManager: {
 			getCwd: () => path.join(root, "home"),
 		},
+		settings: {
+			flush: async () => {},
+		},
 		showHookConfirm: async (title: string, message: string) => {
 			run.prompts.push([title, message]);
 			return options.confirm ?? false;
