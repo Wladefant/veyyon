@@ -6,6 +6,8 @@
 
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Refuse recognized recursive deletes in agent `bash` and `launch` calls before starting a process or sending terminal input ([Refs #1189](https://github.com/Wladefant/veyyon/issues/1189)).
+
 ## [1.12.3] - 2026-11-21
 
 ### Added

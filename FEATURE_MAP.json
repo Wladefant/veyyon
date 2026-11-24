@@ -4,6 +4,20 @@
   "repository": "Wladefant/veyyon",
   "description": "Feature map for Veyyon coding-agent capabilities.",
   "features": {
+    "direct-recursive-shell-delete-refusal": {
+      "name": "Direct recursive shell delete refusal",
+      "description": "Refuse recognized direct recursive deletes in Bash and launch without granting an approval exception.",
+      "entry_files": [
+        "packages/coding-agent/src/tools/shell/bash-guard.ts",
+        "packages/coding-agent/src/tools/shell/bash.ts",
+        "packages/coding-agent/src/tools/shell/launch.ts"
+      ],
+      "tests": ["packages/coding-agent/test/recursive-shell-delete.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1189",
+      "risk": "high",
+      "components": ["coding-agent", "bash", "launch"],
+      "docs": ["docs/handbook/src/features/sandbox.md"]
+    },
     "irc-send-receipts": {
       "name": "IRC send receipts",
       "description": "Report confirmed or unconfirmed peer delivery without waiting indefinitely for revival or journal persistence.",

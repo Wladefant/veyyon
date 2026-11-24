@@ -83,6 +83,17 @@ add `tools.approval.<name>: allow`, or use an interactive UI), and the model rec
 run unattended, pass `--yolo` or pick a mode that does not prompt for the tiers you need. The
 process exit status follows the run.
 
+## Recursive shell deletes
+
+`bash` and `launch` refuse recognized recursive shell deletes, such as `rm -rf`,
+PowerShell `Remove-Item -Recurse`, and `cmd /c rd /s`. Approval settings cannot
+override the refusal. A workspace or temp path does not make a shell delete safe.
+Use an approved cleanup operation, such as `wt_remove.py` for worktrees.
+
+This check does not inspect the effects of arbitrary programs, scripts, or partial
+terminal input. It cannot undo a deletion. Use an operating-system boundary to
+protect files from code that runs as the agent.
+
 ## Critical bash commands
 
 Some shell commands always prompt in `plan`, `ask`, `ask-command` and `auto`, even over a per-tool
@@ -95,9 +106,8 @@ stops a recursive delete of the home directory, of anything containing it, of a 
 directory, or of a directory holding your credentials. It also stops a recursive delete whose
 target it cannot resolve, such as `rm -rf "$dir"/*`, because an empty `$dir` makes that
 command start at the root. It also stops a truncating redirect into a credentials directory,
-such as `echo x > ~/.ssh/id_ed25519`; appending with `>>` is left alone. Deletes inside your
-workspace, such as `rm -rf node_modules` or `rm -rf dist`, run without a prompt, and so do
-ordinary redirects such as `bun test > /tmp/results.txt`.
+such as `echo x > ~/.ssh/id_ed25519`. Appending with `>>` and ordinary redirects
+such as `bun test > /tmp/results.txt` are left alone.
 
 The second half is a pattern list (`FLAGGED_BASH_PATTERNS`, same file) for shapes with no
 path to expand, and each entry records what it would do. The **destructive** ones are `sudo rm`,
@@ -108,9 +118,8 @@ variants), host control (`shutdown`, `reboot`, `kill -9 1`), and network shells 
 run code nobody read or restart the machine, without destroying anything.
 
 Neither half can be narrowed. You can widen the first half with `tools.protectedPaths`, a list of
-absolute paths (a leading `~` is expanded) that a recursive delete must also stop for. It only
-adds: the built-in rules read no configuration, so no value there stops the check from prompting
-for a delete of your home directory. See
+absolute paths (a leading `~` is expanded) that a destructive operation must also
+stop for. It cannot lift the recursive shell delete refusal. See
 [the permission model](../concepts/permission-model.md) for an example.
 
 The destructive half, and the whole of the first half, stop for approval in `yolo` as well, and

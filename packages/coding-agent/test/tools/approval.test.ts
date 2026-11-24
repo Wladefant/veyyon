@@ -438,7 +438,7 @@ describe("tool-owned dynamic approval declarations", () => {
 			critical: true,
 			reason: "Fork bomb: takes this host down",
 		});
-		expect(bashApproval("sudo rm -rf /important")).toEqual({
+		expect(bashApproval("sudo rm -f /important")).toEqual({
 			tier: "exec",
 			critical: true,
 			reason: "Deletes files as root",
@@ -475,16 +475,17 @@ describe("tool-owned dynamic approval declarations", () => {
 	});
 
 	/**
-	 * The expansion half names the path it would have removed, because a prompt
+	 * The expansion half names the path it would have affected, because a prompt
 	 * saying only "critical pattern detected" tells nobody which part of a long
-	 * command line was the problem. `rm -rf /` is here rather than above for
-	 * that reason: the answer got more specific, not weaker.
+	 * command line was the problem. `chgrp -R staff /` is here rather than above
+	 * for that reason (direct recursive deletes are hard-denied before the
+	 * classifier): the answer got more specific, not weaker.
 	 */
-	it("names the path a destructive command would remove", () => {
-		expect(bashApproval("rm -rf /")).toEqual({
+	it("names the path a destructive command would affect", () => {
+		expect(bashApproval("chgrp -R staff /")).toEqual({
 			tier: "exec",
 			critical: true,
-			reason: "rm would recursively remove a protected system directory (/)",
+			reason: "chgrp would recursively remove a protected system directory (/)",
 		});
 	});
 
@@ -495,7 +496,7 @@ describe("tool-owned dynamic approval declarations", () => {
 	 * halves had drifted apart on which strength to use.
 	 */
 	it("marks both halves critical rather than merely overriding", () => {
-		for (const command of ["rm -rf ~/", "mkfs.ext4 /dev/sda1"]) {
+		for (const command of ["chgrp -R staff ~/", "mkfs.ext4 /dev/sda1"]) {
 			const decision = bashApproval(command);
 			expect(typeof decision).toBe("object");
 			expect((decision as { critical?: boolean }).critical).toBe(true);

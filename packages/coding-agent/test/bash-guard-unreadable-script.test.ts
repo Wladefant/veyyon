@@ -143,13 +143,14 @@ describe("the approval decision a run with no interactive surface receives", () 
 	});
 
 	/**
-	 * Nesting adds no evidence. `rm -rf $D` with nothing setting `D` expands to
-	 * `rm -rf` and deletes nothing, inside a `bash -c` string exactly as outside
-	 * one, so it earns the same prompt-below-yolo verdict it earns on its own and
-	 * not the `critical` floor. The floor is for what the text makes certain, and
-	 * an unset name makes nothing certain wherever it is written.
+	 * Nesting adds no evidence. `chgrp -R staff $D` with nothing setting `D`
+	 * expands to `chgrp -R staff` and rewrites nothing, inside a `bash -c` string
+	 * exactly as outside one, so it earns the same prompt-below-yolo verdict it
+	 * earns on its own and not the `critical` floor. The floor is for what the
+	 * text makes certain, and an unset name makes nothing certain wherever it is
+	 * written.
 	 */
-	it("asks about a nested delete through an unset name without using the floor", () => {
-		expect(rung('bash -c "rm -rf $D"')).toBe("prompts");
+	it("asks about a nested recursive rewrite through an unset name without using the floor", () => {
+		expect(rung('bash -c "chgrp -R staff $D"')).toBe("prompts");
 	});
 });

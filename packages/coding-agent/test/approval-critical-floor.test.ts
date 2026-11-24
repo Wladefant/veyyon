@@ -181,14 +181,14 @@ describe("the bash tool's own decisions", () => {
 	/**
 	 * End to end through the real tool rather than a stand-in, because the
 	 * finding was that the two halves disagreed about which strength to use.
-	 * A home-directory delete must reach `prompt` in yolo from the actual
-	 * `BashTool.approval`.
+	 * A home-directory recursive rewrite must reach `prompt` in yolo from the
+	 * actual `BashTool.approval` (direct recursive deletes are hard-denied).
 	 */
-	it("marks a home-directory delete critical", async () => {
+	it("marks a home-directory recursive rewrite critical", async () => {
 		const { bashApprovalDecision } = await import("../src/tools/shell/bash");
 		const tool = { name: "bash", approval: bashApprovalDecision };
 
-		const resolved = resolveApproval(tool, { command: "rm -rf ~/" }, "yolo", {});
+		const resolved = resolveApproval(tool, { command: "chgrp -R staff ~/" }, "yolo", {});
 
 		expect(resolved.policy).toBe("prompt");
 		expect(resolved.reason).toContain("recursively remove");
@@ -199,7 +199,7 @@ describe("the bash tool's own decisions", () => {
 		const { bashApprovalDecision } = await import("../src/tools/shell/bash");
 		const tool = { name: "bash", approval: bashApprovalDecision };
 
-		expect(resolveApproval(tool, { command: "rm -rf node_modules" }, "yolo", {}).policy).toBe("allow");
+		expect(resolveApproval(tool, { command: "chmod -R 644 ./build" }, "yolo", {}).policy).toBe("allow");
 		expect(resolveApproval(tool, { command: "bun test" }, "yolo", {}).policy).toBe("allow");
 	});
 
@@ -218,7 +218,7 @@ describe("the bash tool's own decisions", () => {
 		});
 		const bash = new BashTool(session);
 
-		const decision = bash.approval({ command: "rm -rf /mnt/photos" });
+		const decision = bash.approval({ command: "chgrp -R staff /mnt/photos" });
 
 		expect(typeof decision).toBe("object");
 		expect((decision as { reason?: string }).reason).toContain("tools.protectedPaths");
@@ -230,7 +230,7 @@ describe("the bash tool's own decisions", () => {
 		const { makeToolSession } = await import("./helpers/tool-session");
 		const bash = new BashTool(makeToolSession());
 
-		const decision = bash.approval({ command: "rm -rf /mnt/photos" });
+		const decision = bash.approval({ command: "chgrp -R staff /mnt/photos" });
 		const flags =
 			typeof decision === "string"
 				? { tier: decision }
@@ -252,7 +252,7 @@ describe("the bash tool's own decisions", () => {
 		const { makeToolSession } = await import("./helpers/tool-session");
 		const bash = new BashTool(makeToolSession());
 
-		const decision = bash.approval({ command: "rm -rf ~/" });
+		const decision = bash.approval({ command: "chgrp -R staff ~/" });
 
 		expect((decision as { critical?: boolean }).critical).toBe(true);
 	});
