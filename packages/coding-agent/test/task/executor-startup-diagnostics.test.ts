@@ -1,6 +1,9 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import type { BuiltSkillPromptMessage, Skill } from "@veyyon/coding-agent/extensibility/skills";
+import * as skillsModule from "@veyyon/coding-agent/extensibility/skills";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
 import { PHASE_WATCHDOG_LIMITS_MS } from "@veyyon/coding-agent/task/run-monitor";
@@ -164,6 +167,47 @@ describe("runSubprocess startup diagnostics", () => {
 		releaseCreate();
 		for (let i = 0; i < 10; i++) await Promise.resolve();
 		expect(disposeSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports an autoload watchdog stall before a pending skill read finishes", async () => {
+		vi.useFakeTimers();
+		const skill: Skill = {
+			name: "gated",
+			description: "A skill with a pending read",
+			filePath: "/skills/gated/SKILL.md",
+			baseDir: "/skills/gated",
+			source: "user",
+		};
+		const readStarted = Promise.withResolvers<void>();
+		const read = Promise.withResolvers<BuiltSkillPromptMessage>();
+		vi.spyOn(skillsModule, "buildSkillPromptMessage").mockImplementation(() => {
+			readStarted.resolve();
+			return read.promise;
+		});
+		const session = createMockSession(({ emit }) => {
+			emit(yieldSuccessEvent({ ok: true }, "unexpected-prompt"));
+		});
+		const promptSpy = vi.spyOn(session, "prompt");
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const run = runSubprocess({
+			...baseOptions,
+			id: "agent-stall-autoload-skills",
+			settings: Settings.isolated({ "agent.maxRuntimeMs": 0 }),
+			autoloadSkills: { kind: "resolved", skills: [skill] },
+		});
+
+		await readStarted.promise;
+		await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS["session-initializing"]);
+		const stalled = await Promise.race([run, setImmediate()]);
+
+		read.resolve({ message: "Skill contents", details: { name: skill.name, path: skill.filePath, lineCount: 1 } });
+		await run;
+
+		expect(stalled?.terminalOutcome).toBe("stalled");
+		expect(stalled?.abortReason).toContain("autoload-skills");
+		expect(session.sendCustomMessage).not.toHaveBeenCalled();
+		expect(promptSpy).not.toHaveBeenCalled();
 	});
 
 	it("keeps explicit upstream cancellation during setup classified as cancelled", async () => {
