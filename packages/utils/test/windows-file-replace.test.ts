@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -8,6 +8,7 @@ import {
 	closeWindowsWriteStage,
 	publishWindowsWriteStage,
 	reserveWindowsWriteStage,
+	type WindowsWriteStage,
 	writeWindowsWriteStage,
 } from "@veyyon/utils/windows-file-replace";
 
@@ -76,6 +77,47 @@ describe.skipIf(process.platform !== "win32")("Windows security-preserving file 
 			}
 			expect(leftovers()).toEqual([]);
 			expect(fs.readFileSync(file, "utf8")).toBe("initial\n");
+		},
+		aclTestTimeout,
+	);
+
+	it(
+		"publishes a restricted file after GC during native stage creation",
+		() => {
+			const { file, original } = restrictedFile("gc-\u03bb.txt");
+			const writePointer = Buffer.prototype.writeBigUInt64LE;
+			let forcedCollection = false;
+			// Scope the stress point to the descriptor field, the last field set in OBJECT_ATTRIBUTES.
+			// This runs after both nested pointers are packed and before the real NtCreateFile.
+			const stress = spyOn(Buffer.prototype, "writeBigUInt64LE").mockImplementation(function (
+				this: Buffer,
+				value: bigint,
+				offset?: number,
+			) {
+				const result = writePointer.call(this, value, offset);
+				if (offset === 32 && value !== 0n) {
+					for (let i = 0; i < 128; i++) Buffer.alloc(4096, i);
+					Bun.gc(true);
+					forcedCollection = true;
+				}
+				return result;
+			});
+			let stage: WindowsWriteStage;
+			try {
+				stage = reserveWindowsWriteStage(file);
+			} finally {
+				stress.mockRestore();
+			}
+			try {
+				expect(forcedCollection).toBe(true);
+				writeWindowsWriteStage(stage, Buffer.from("after GC\n"), true);
+				publishWindowsWriteStage(stage);
+			} finally {
+				closeWindowsWriteStage(stage);
+			}
+			expect(fs.readFileSync(file, "utf8")).toBe("after GC\n");
+			expect(dacl(file)).toBe(original);
+			expect(leftovers()).toEqual([]);
 		},
 		aclTestTimeout,
 	);

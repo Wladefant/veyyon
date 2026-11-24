@@ -127,6 +127,7 @@ function openRelative(
 	attributes.writeBigUInt64LE(root, 8);
 	attributes.writeBigUInt64LE(base + BigInt(unicodeOffset), 16);
 	attributes.writeUInt32LE(OBJ_CASE_INSENSITIVE, 24);
+	// withSecurity owns this native allocation and frees it only after this call returns.
 	attributes.writeBigUInt64LE(descriptor ? BigInt(descriptor) : 0n, 32);
 	const handle = new BigUint64Array(1);
 	const status =
