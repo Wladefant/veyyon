@@ -11,7 +11,7 @@ import { scheduler } from "node:timers/promises";
 import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, AssistantRetryRecovery, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-import { ANTIGRAVITY_ENDPOINTS, ANTHROPIC_API_ENDPOINT, CLOUD_CODE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
+import { ANTHROPIC_API_ENDPOINT, ANTIGRAVITY_ENDPOINTS, CLOUD_CODE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	calculateRetryBackoffDelayMs,
@@ -48,7 +48,9 @@ import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
 const CODEX_RETRYABLE_CLOSE = /^websocket closed \((?:1000|1006|1012)\)$/;
 const DNS_LOOKUP_FAILURE = /\bENOTFOUND[\s"']+([a-z0-9.-]+)/i;
 const ANTHROPIC_DNS_HOST = new URL(ANTHROPIC_API_ENDPOINT).hostname;
-const CLOUD_CODE_DNS_HOSTS = [CLOUD_CODE_ENDPOINT, ...ANTIGRAVITY_ENDPOINTS].map(endpoint => new URL(endpoint).hostname);
+const CLOUD_CODE_DNS_HOSTS = [CLOUD_CODE_ENDPOINT, ...ANTIGRAVITY_ENDPOINTS].map(
+	endpoint => new URL(endpoint).hostname,
+);
 
 function isKnownEndpointDnsFailure(message: AssistantMessage, model: Model): boolean {
 	const text = message.errorMessage ?? "";
