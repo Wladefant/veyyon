@@ -67,7 +67,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/inspect-image": 260,
 	"tools/inspect-image-system": 192,
 	"tools/irc": 1102,
-	"tools/isolation-error": 225,
+	"tools/isolation-error": 293,
 	"tools/isolation-recovery-hint": 83,
 	"tools/isolation-summary": 589,
 	"tools/job": 413,
