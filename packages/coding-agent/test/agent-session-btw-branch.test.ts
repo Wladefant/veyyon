@@ -402,7 +402,12 @@ describe("AgentSession.branchFromBtw", () => {
 			await flush();
 		});
 
-		const branch = activeSession.branchFromBtw("question", createBtwAssistant());
+		const branch = activeSession.branchFromBtw(
+			"question",
+			createBtwAssistant(),
+			requiredLeafId(activeSession),
+			manager.getSessionId(),
+		);
 		try {
 			await flushStarted.promise;
 			await activeSession.steer("new user work");
