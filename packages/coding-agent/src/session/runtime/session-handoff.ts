@@ -86,7 +86,7 @@ export interface SessionHandoffHost {
 	clearNextTurnMessages(): void;
 	cancelOwnAsyncJobs(): void;
 	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
-	endConversation(): Promise<void>;
+	endConversation(preserveAgentLineage: boolean): Promise<void>;
 	resetMemoryContextForNewTranscript(): void;
 	resetAllAdvisorRuntimes(): void;
 }
@@ -318,12 +318,6 @@ export class SessionHandoff {
 					maxNestedSpawnDepth: childInit.maxNestedSpawnDepth,
 				});
 			}
-			// A handoff continues the work in a NEW transcript. The pre-handoff
-			// spawned agents wrote into the old one and their jobs were just cancelled;
-			// leaving them registered would list them under the new conversation, and
-			// no cell of the new transcript reaches the old one's eval kernels.
-			await host.endConversation();
-
 			host.checkpoint.clear();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
 			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
@@ -366,7 +360,13 @@ export class SessionHandoff {
 			agent.replaceMessages(sessionContext.messages);
 			host.resetAllAdvisorRuntimes();
 			host.todo.syncFromBranch();
-			await sessionManager.ensureOnDisk();
+			try {
+				await sessionManager.ensureOnDisk();
+			} finally {
+				// The transcript has changed even if the write fails. Retire the old
+				// conversation and publish the successor identity before re-scoping.
+				await host.endConversation(options?.preserveAgentLineage === true);
+			}
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && session.settings.get("compaction.handoffSaveToDisk")) {
 				savedPath = await this.#saveDocument(handoffText);

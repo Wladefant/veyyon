@@ -77,6 +77,7 @@ describe("AgentSession handoff", () => {
 	async function createContinuingChild(options: {
 		id: string;
 		provider?: string;
+		providerSessionId?: string;
 		modelId?: string;
 		kind?: "main" | "sub";
 		spawned?: boolean;
@@ -119,6 +120,7 @@ describe("AgentSession handoff", () => {
 				"compaction.laneHandoffThresholdTokens": options.threshold ?? 150_000,
 			}),
 			modelRegistry,
+			providerSessionId: options.providerSessionId,
 			isSpawned: options.spawned ?? true,
 			agentKind: options.kind ?? "sub",
 			agentId: options.id,
@@ -271,7 +273,8 @@ describe("AgentSession handoff", () => {
 			},
 		]);
 
-		await session.handoff(undefined, {
+		const focus = "Include worktree, branch, head, test counts, and paths.";
+		await session.handoff(focus, {
 			autoTriggered: true,
 			compactSummary: true,
 		});
@@ -280,6 +283,7 @@ describe("AgentSession handoff", () => {
 		const trailingContent = call?.[0].messages.at(-1)?.content;
 		expect(JSON.stringify(trailingContent)).toContain("at most 3,000 tokens");
 		expect(JSON.stringify(trailingContent)).toContain("Never reproduce transcript messages");
+		expect(JSON.stringify(trailingContent)).toContain(focus);
 		const successorBrief = session.agent.state.messages.find(
 			message => message.role === "custom" && message.customType === "handoff",
 		);
@@ -1873,20 +1877,35 @@ describe("AgentSession handoff", () => {
 
 	it("stops the current turn if the new transcript cannot be written after switching", async () => {
 		const id = "handoff-write-failure";
-		const mock = await createContinuingChild({ id });
+		const providerSessionId = "fixed-provider-route";
+		const mock = await createContinuingChild({ id, providerSessionId });
 		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(successorBrief);
-		const sourceId = session.sessionId;
+		const sourceId = sessionManager.getSessionId();
 		const ensureOnDisk = sessionManager.ensureOnDisk.bind(sessionManager);
 		vi.spyOn(sessionManager, "ensureOnDisk").mockImplementation(async () => {
-			if (session.sessionId !== sourceId) throw new Error("Successor transcript write failed");
+			if (sessionManager.getSessionId() !== sourceId) throw new Error("Successor transcript write failed");
 			await ensureOnDisk();
 		});
 
-		await session.prompt("Perform the tool steps");
+		const registry = AgentRegistry.global();
+		const published: Array<{ scope?: string; file?: string | null }> = [];
+		const unsubscribe = registry.onChange(event => {
+			if (event.type === "status_changed" && event.ref.id === id) {
+				published.push({ scope: event.ref.scope, file: event.ref.sessionFile });
+			}
+		});
+		try {
+			await session.prompt("Perform the tool steps");
+		} finally {
+			unsubscribe();
+		}
+		const successorId = sessionManager.getSessionId();
 
-		expect(session.sessionId).not.toBe(sourceId);
+		expect(successorId).not.toBe(sourceId);
+		expect(session.sessionId).toBe(providerSessionId);
 		expect(mock.calls).toHaveLength(1);
 		expect(session.agent.state.error).toBe("Successor transcript write failed");
+		expect(published.find(update => update.scope === successorId)?.file).toBe(session.sessionFile);
 		expect(JSON.stringify(session.agent.state.messages)).toContain("# COMPACT");
 		expect(JSON.stringify(session.agent.state.messages)).not.toContain("SOURCE_TRANSCRIPT_SENTINEL");
 		expect(AgentRegistry.global().get(id)?.sessionFile).toBe(session.sessionFile);

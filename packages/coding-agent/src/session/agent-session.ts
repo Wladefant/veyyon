@@ -2176,7 +2176,14 @@ export class AgentSession {
 			effectiveServiceTier: model => this.#tiers.effective(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
-			endConversation: () => this.#conversation.release(),
+			endConversation: async preserveAgentLineage => {
+				const id = this.#config.agentId;
+				if (preserveAgentLineage && id) {
+					const registry = AgentRegistry.global();
+					if (registry.get(id)?.session === this) registry.attachSession(id, this, this.sessionFile);
+				}
+				await this.#conversation.release();
+			},
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
@@ -5039,7 +5046,7 @@ export class AgentSession {
 			!this.#isSpawned ||
 			!agentId ||
 			AgentRegistry.global().get(agentId)?.kind !== "sub" ||
-			this.#lastLaneHandoffSessionId === this.sessionId ||
+			this.#lastLaneHandoffSessionId === this.sessionManager.getSessionId() ||
 			threshold <= 0 ||
 			!model ||
 			!/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(model.id)
@@ -5063,7 +5070,7 @@ export class AgentSession {
 		signal?: AbortSignal,
 	): Promise<boolean> {
 		const agentId = this.#config.agentId;
-		const sourceSessionId = this.sessionId;
+		const sourceSessionId = this.sessionManager.getSessionId();
 		this.#lastLaneHandoffSessionId = sourceSessionId;
 		try {
 			const result = await this.handoff(undefined, {
@@ -5077,7 +5084,7 @@ export class AgentSession {
 		} catch (error) {
 			// Once the session manager has switched, stop the turn on failure.
 			// Continuing would send source messages against the successor's transcript.
-			if (this.sessionId !== sourceSessionId) throw error;
+			if (this.sessionManager.getSessionId() !== sourceSessionId) throw error;
 			if (signal?.aborted) return false;
 			logger.warn("Automatic expensive-agent handoff failed; retaining the current transcript", {
 				agentId,
@@ -5085,9 +5092,10 @@ export class AgentSession {
 			});
 			return false;
 		} finally {
-			if (this.sessionId !== sourceSessionId) {
+			if (this.sessionManager.getSessionId() !== sourceSessionId) {
 				const registry = AgentRegistry.global();
-				if (agentId && registry.get(agentId)?.session === this) {
+				const ref = agentId ? registry.get(agentId) : undefined;
+				if (agentId && ref?.session === this && ref.sessionFile !== this.sessionFile) {
 					registry.attachSession(agentId, this, this.sessionFile);
 				}
 				messages.splice(0, messages.length, ...this.agent.state.messages);
