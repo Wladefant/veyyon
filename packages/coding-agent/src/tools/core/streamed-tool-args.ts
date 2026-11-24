@@ -87,10 +87,16 @@ export class StreamingJsonStringExtractor {
 	#targetEscaped = false;
 	#targetUnicode = "";
 	#values: Record<string, string> = {};
+	#valueOpenedAt = -1;
 	#changed = false;
 
 	constructor(keys: readonly string[]) {
 		this.#keys = new Set(keys);
+	}
+
+	/** Prefix length through the opening quote, or -1 outside a tracked string. */
+	get valueOpenedAt(): number {
+		return this.#valueOpenedAt;
 	}
 
 	reset(): void {
@@ -103,6 +109,7 @@ export class StreamingJsonStringExtractor {
 		this.#candidateUnicode = "";
 		this.#matchedKey = undefined;
 		this.#targetKey = undefined;
+		this.#valueOpenedAt = -1;
 		this.#targetEscaped = false;
 		this.#targetUnicode = "";
 		this.#values = {};
@@ -228,6 +235,7 @@ export class StreamingJsonStringExtractor {
 			this.#targetUnicode = "";
 			this.#state = "target";
 			this.#offset++;
+			this.#valueOpenedAt = this.#offset;
 			return;
 		}
 		this.#targetKey = undefined;
@@ -256,6 +264,7 @@ export class StreamingJsonStringExtractor {
 		}
 		if (ch === '"') {
 			this.#targetKey = undefined;
+			this.#valueOpenedAt = -1;
 			this.#state = "scan";
 			this.#offset++;
 			return;
@@ -463,12 +472,17 @@ export function displayArgsForPrefix(
 		return { args, changed: true };
 	}
 
+	// If the extractor has decoded all new bytes inside a string, reparsing
+	// cannot recover another field. Parse again when that string closes.
+	const extracted = state.stringExtractor?.update(prefix);
+	const valueOpenedAt = state.stringExtractor?.valueOpenedAt ?? -1;
+
 	let parsedChanged = false;
 	if (forceParse || (prefix.length > 0 && prefix.length < STREAMING_JSON_PARSE_MIN_GROWTH)) {
 		state.parsedArgs = expandStreamedValues(state.argot, parseStreamingJson<Record<string, unknown>>(prefix));
 		state.parsedLen = prefix.length;
 		parsedChanged = true;
-	} else {
+	} else if (valueOpenedAt < 0 || state.parsedLen < valueOpenedAt) {
 		const throttled = parseStreamingJsonThrottled<Record<string, unknown>>(prefix, state.parsedLen);
 		if (throttled) {
 			state.parsedArgs = expandStreamedValues(state.argot, throttled.value);
@@ -476,7 +490,6 @@ export function displayArgsForPrefix(
 			parsedChanged = true;
 		}
 	}
-	const extracted = state.stringExtractor?.update(prefix);
 	if (extracted?.changed) {
 		state.parsedArgs = { ...state.parsedArgs, ...expandStreamedValues(state.argot, extracted.values) };
 		parsedChanged = true;

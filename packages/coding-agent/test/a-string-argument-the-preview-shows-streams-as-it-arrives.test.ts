@@ -160,7 +160,7 @@ interface BuiltTool {
 
 interface Sweep {
 	readonly unconstructable: string[];
-	readonly notRegistered: string[];
+	readonly notRegistered: string[][];
 	/** Every argument shape a tool was built with, one entry per distinct set of declared arguments. */
 	readonly built: Map<string, BuiltTool[]>;
 }
@@ -205,7 +205,7 @@ async function buildRegistry(settings: Record<string, unknown>): Promise<Sweep> 
 	tools.push(...((await createVibeModeTools(session)) as AgentTool[]));
 	const built = new Map<string, BuiltTool[]>();
 	for (const tool of tools) built.set(tool.name, [{ tool, args: argumentsOf(tool) }]);
-	return { unconstructable, notRegistered, built };
+	return { unconstructable, notRegistered: [notRegistered], built };
 }
 
 /** `base` plus every tool shape in `other` whose declared arguments `base` has not seen. */
@@ -251,10 +251,12 @@ describe("a string argument the preview shows streams as it arrives", () => {
 		agentDir.removeSync();
 	});
 
-	it("builds every tool the registry declares", () => {
+	it("builds every tool available to both fixture sessions", () => {
 		expect(sweep.unconstructable).toEqual([]);
-		const expectedNotRegistered = git.github.available() ? [] : ["github"];
-		expect(sweep.notRegistered).toEqual(expectedNotRegistered);
+		// These fixture sessions have no native secret intake factory.
+		// GitHub also requires the gh CLI on the host.
+		const unavailable = git.github.available() ? ["secret_request"] : ["github", "secret_request"];
+		expect(sweep.notRegistered.map(names => names.toSorted())).toEqual([unavailable, unavailable]);
 	});
 
 	/** Non-vacuity: the four arguments the defect was reported against are among the ones the sweep drives. */

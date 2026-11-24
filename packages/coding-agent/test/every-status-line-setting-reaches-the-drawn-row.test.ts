@@ -32,6 +32,7 @@ import type {
 } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import * as git from "@veyyon/coding-agent/utils/git";
+import * as gitHead from "@veyyon/coding-agent/utils/git-head";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { makeStatusLineProducer } from "./helpers/status-line-session";
@@ -133,18 +134,25 @@ beforeEach(async () => {
 	await initTheme(false);
 	vi.spyOn(os, "homedir").mockReturnValue(HOME);
 	// A branch to show and no git subprocess: HEAD answers from memory, the status read from nothing.
-	vi.spyOn(git.head, "resolveSync").mockReturnValue({
-		kind: "ref",
-		branchName: "feature",
-		ref: "refs/heads/feature",
-		commit: null,
+	const repo = {
 		commonDir: "/repo/.git",
 		gitDir: "/repo/.git",
 		gitEntryPath: "/repo/.git",
 		headPath: "/repo/.git/HEAD",
 		repoRoot: "/repo",
+		isReftable: false,
+	};
+	const head = {
+		...repo,
+		kind: "ref" as const,
+		branchName: "feature",
+		ref: "refs/heads/feature",
+		commit: null,
 		headContent: "ref: refs/heads/feature\n",
-	});
+	};
+	vi.spyOn(gitHead, "resolveRepositorySync").mockReturnValue(repo);
+	vi.spyOn(gitHead, "resolveHeadStateFromFiles").mockReturnValue(head);
+	vi.spyOn(git.head, "resolveSync").mockReturnValue(head);
 	vi.spyOn(git.status, "summary").mockResolvedValue(null);
 	// 14:05:09 local, so the clock reads differently in 12h and 24h and with and without seconds.
 	setSystemTime(new Date(2026, 0, 2, 14, 5, 9));

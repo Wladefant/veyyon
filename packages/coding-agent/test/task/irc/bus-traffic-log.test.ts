@@ -227,8 +227,11 @@ describe("IrcBus traffic log", () => {
 	it("records a leg whose delivery threw, and rethrows unchanged", async () => {
 		const boom = new Error("registry mirror is unreadable");
 		const brokenRegistry = {
-			get: () => {
-				throw boom;
+			relationTo: () => "unknown",
+			actorContext: (id: string) => ({ selfId: id, ancestorIds: [] }),
+			get: (id: string) => {
+				if (id === "Worker") throw boom;
+				return undefined;
 			},
 		} as unknown as AgentRegistry;
 		const bus = new IrcBus(brokenRegistry);
