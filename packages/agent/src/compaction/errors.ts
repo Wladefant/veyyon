@@ -29,3 +29,14 @@ export class CompactionCancelledError extends Error {
  *   "failed"    — any other rejection from `session.compact()`.
  */
 export type CompactionOutcome = "ok" | "cancelled" | "failed";
+
+export class CompactionExperimentError extends Error {
+	override readonly name: string = "CompactionExperimentError";
+}
+
+export class OversizeCompactionRecapError extends CompactionExperimentError {
+	override readonly name = "OversizeCompactionRecapError";
+	constructor() {
+		super("The recap and required carryover do not fit the compaction arm's budget.");
+	}
+}

@@ -810,6 +810,7 @@ export class CompactionRuntime {
 			fromExtension,
 			result.preserveData,
 		);
+		this.#session.agent.compactionExperiment?.noteLegacyCompaction();
 		this.#session.sessionManager.coolCompactedHistory();
 		this.#session.agent.replaceMessages(this.#session.buildDisplaySessionContext().messages);
 		await this.#pruneDiscoveredTools(this.#session.agent.state.messages);

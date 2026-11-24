@@ -35,6 +35,7 @@ export type ConfiguredDialect = Dialect | ((model: Model) => Dialect | undefined
 
 import type { HarmonyAuditEvent } from "@veyyon/ai/utils/harmony-leak";
 import type { AppendOnlyContextManager } from "./append-only-context";
+import type { CompactionExperiment } from "./compaction/experiment";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { AgentTelemetryConfig } from "./telemetry";
 
@@ -132,6 +133,8 @@ export interface ToolCallArgumentTransform {
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model;
+	/** Explicit opt-in for one isolated context-compaction benchmark session. */
+	compactionExperiment?: CompactionExperiment;
 
 	/**
 	 * Pause boundary for this loop. Defaults to the process-wide gate used by

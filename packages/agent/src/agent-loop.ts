@@ -76,6 +76,7 @@ import {
 	structuredCloneJSON,
 	transferTelegramTrace,
 } from "@veyyon/utils";
+import { CompactionExperimentError } from "./compaction/errors";
 import { type AgentPauseGate, agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
@@ -1408,10 +1409,8 @@ async function buildProviderTurn(
 	toolChoice: ToolChoice | undefined,
 ): Promise<ProviderTurn> {
 	const { context, config } = run;
-	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
-	const messages = config.transformContext
-		? await config.transformContext(context.messages, run.signal)
-		: context.messages;
+	const source = config.compactionExperiment?.project(context.messages) ?? context.messages;
+	const messages = config.transformContext ? await config.transformContext(source, run.signal) : source;
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
 	const normalizedMessages = normalizeMessagesForProvider(await config.convertToLlm(messages), model);
 	const ownedDialect = resolveConfiguredDialect(config.dialect, model);
@@ -1554,19 +1553,30 @@ async function streamAssistantResponse(run: LoopRun, state: LoopState): Promise<
 	// fallback — must apply on the next call instead of the run silently finishing on the stale model captured at run
 	// start.
 	const model = config.getModel?.() ?? config.model;
-	const turn = await buildProviderTurn(
-		run,
-		model,
-		state.hostToolChoice ?? state.forcedToolChoice ?? config.toolChoice,
-	);
+	const experiment = config.compactionExperiment;
+	experiment?.admit(model);
+	let turn = await buildProviderTurn(run, model, state.hostToolChoice ?? state.forcedToolChoice ?? config.toolChoice);
 	// Wrap the user-supplied onResponse so we always observe response headers for telemetry
 	// (`ChatUsageEvent.headers`, gateway auto-detection) without stealing them from the configured hook.
 	let responseHeaders: Readonly<Record<string, string>> | undefined;
 	const userOnResponse = config.onResponse;
-	const options = await resolveTurnOptions(run, state, model, turn, (response, modelInfo) => {
+	let options = await resolveTurnOptions(run, state, model, turn, (response, modelInfo) => {
 		responseHeaders = response.headers;
 		return userOnResponse?.(response, modelInfo);
 	});
+	if (experiment?.active) {
+		if (turn.inband) experiment.fail(new CompactionExperimentError("The experiment requires native tool calling."));
+		const prepared = await experiment.prepare(
+			turn.llmContext,
+			run.context.messages,
+			model,
+			options,
+			run.streamFn ?? streamSimple,
+			async () => (await buildProviderTurn(run, model, turn.toolChoice)).llmContext,
+		);
+		options = prepared.options;
+		turn = { ...turn, llmContext: prepared.context };
+	}
 
 	const stepNumber = run.stepCounter.count;
 	run.stepCounter.count += 1;
@@ -1594,6 +1604,7 @@ async function streamAssistantResponse(run: LoopRun, state: LoopState): Promise<
 			responseHeaders,
 			baseUrl: model.baseUrl,
 		});
+		experiment?.observe(message);
 	};
 
 	try {

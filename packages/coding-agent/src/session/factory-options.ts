@@ -6,6 +6,7 @@
  * factory, so naming a field does not pull in the composition root.
  */
 import type { AgentTelemetryConfig } from "@veyyon/agent-core";
+import type { CompactionExperiment } from "@veyyon/agent-core/compaction/experiment";
 import type { Model } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { HostNotifier } from "@veyyon/host";
@@ -35,8 +36,8 @@ import type { RuntimeMCPConfig } from "../mcp/runtime-config";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { AgentRegistry } from "../registry/agent-registry";
-import type { ProtectedCredentialResource } from "../secrets/protected-resources";
 import type { SecretIntakeHostConfiguration } from "../secrets/intake-host";
+import type { ProtectedCredentialResource } from "../secrets/protected-resources";
 
 import type { ClaimedTicket, TopicReplenishmentEngine } from "../task/topic-replenishment";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -113,6 +114,8 @@ export interface CreateAgentSessionOptions {
 	providerPromptCacheKeySource?: "explicit" | "fork";
 	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
 	deadline?: number;
+	/** Off by default. One experiment instance per fresh, isolated benchmark case. */
+	compactionExperiment?: CompactionExperiment;
 
 	/** Custom tools to register (in addition to built-in tools). Accepts both CustomTool and ToolDefinition. */
 	customTools?: (CustomTool | ToolDefinition)[];

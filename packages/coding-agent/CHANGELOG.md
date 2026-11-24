@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Let the SDK opt a fresh session into the context-compaction benchmark without changing the default behavior ([#1235](https://github.com/Wladefant/veyyon/issues/1235)).
+
 ### Fixed
 
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
