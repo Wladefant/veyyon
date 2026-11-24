@@ -3,6 +3,7 @@
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@veyyon/ai";
+import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { errorMessage, logger, reportFault, settleWithin } from "@veyyon/utils";
 import type { KeyId } from "@veyyon/utils/keys";
@@ -346,7 +347,10 @@ export class ExtensionRunner {
 		// Context actions (required)
 		this.#getModel = contextActions.getModel;
 		this.#isIdleFn = contextActions.isIdle;
-		this.#abortFn = contextActions.abort;
+		// A void-typed host action can still return a promise. Catch it at the fire-and-forget boundary.
+		const { abort } = contextActions;
+		const abortTarget = { abort: () => Promise.resolve(abort()) };
+		this.#abortFn = () => abortDetached(abortTarget, "extension context");
 		this.#hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.#shutdownHandler = contextActions.shutdown;
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;

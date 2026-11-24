@@ -184,7 +184,6 @@ async function connect(manager: MCPManager, name: string, config: MCPServerConfi
 }
 
 describe("MCPManager event subscription contracts", () => {
-
 	it("preserves the successor's pending webhook verifier when a retired same-path subscribe finishes", async () => {
 		for (const formerOutcome of ["success", "error"] as const) {
 			const retiringStarted = Promise.withResolvers<void>();
@@ -223,23 +222,30 @@ describe("MCPManager event subscription contracts", () => {
 			const sharedPath = "/events/reused-pending-challenge";
 			const makeEvents = (port: number, secretRef: string) => ({
 				enabled: true,
-				subscriptions: [{
-					name: EVENT_NAME,
-					mode: "webhook" as const,
-					webhook: {
-						callbackUrl: `https://callback.example.test${sharedPath}`,
-						secretRef,
-						listenPort: port,
+				subscriptions: [
+					{
+						name: EVENT_NAME,
+						mode: "webhook" as const,
+						webhook: {
+							callbackUrl: `https://callback.example.test${sharedPath}`,
+							secretRef,
+							listenPort: port,
+						},
 					},
-				}],
+				],
 			});
 			let stoppingA: Promise<void> | undefined;
 			try {
 				// Start A without an event listener so its transport can be given a
 				// deterministic delayed RPC; the real manager and receiver still run.
-				await withinHandlerChange(connect(manager, "retiring-webhook", managerConfig(serverA, makeEvents(
-					portA, "$MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET",
-				))), "connect retiring server");
+				await withinHandlerChange(
+					connect(
+						manager,
+						"retiring-webhook",
+						managerConfig(serverA, makeEvents(portA, "$MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET")),
+					),
+					"connect retiring server",
+				);
 				const retiringConnection = manager.getConnection("retiring-webhook");
 				if (!retiringConnection) throw new Error("Retiring MCP server did not connect");
 				const actualRequest = retiringConnection.transport.request.bind(retiringConnection.transport);
@@ -258,14 +264,23 @@ describe("MCPManager event subscription contracts", () => {
 				});
 				await withinHandlerChange(retiringStarted.promise, "retiring pending webhook subscribe");
 				stoppingA = manager.disconnectServer("retiring-webhook");
-				for (let attempt = 0; attempt < 50 && manager.getActiveEventSubscriptionCount("retiring-webhook") !== 0; attempt++) {
+				for (
+					let attempt = 0;
+					attempt < 50 && manager.getActiveEventSubscriptionCount("retiring-webhook") !== 0;
+					attempt++
+				) {
 					await delay(1);
 				}
 				expect(manager.getActiveEventSubscriptionCount("retiring-webhook")).toBe(0);
 				// Different owner key, deliberately reusing the retired callback path.
-				await withinHandlerChange(connect(manager, "successor-webhook", managerConfig(serverB, makeEvents(
-					portB, "$MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET",
-				))), "connect successor server");
+				await withinHandlerChange(
+					connect(
+						manager,
+						"successor-webhook",
+						managerConfig(serverB, makeEvents(portB, "$MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET")),
+					),
+					"connect successor server",
+				);
 				await withinHandlerChange(successorStarted.promise, "successor pending webhook subscribe");
 				// The old operation settles only AFTER B has reserved its HMAC key.
 				if (formerOutcome === "success") {
@@ -281,17 +296,20 @@ describe("MCPManager event subscription contracts", () => {
 				const signature = createHmac("sha256", Buffer.alloc(32, 61))
 					.update(`${messageId}.${timestamp}.${body}`)
 					.digest("base64");
-				const response = await withinHandlerChange(fetch(`http://127.0.0.1:${portB}${sharedPath}`, {
-					method: "POST",
-					headers: {
-						"content-type": "application/json",
-						"X-MCP-Subscription-Id": "successor-pending-id",
-						"webhook-id": messageId,
-						"webhook-timestamp": timestamp,
-						"webhook-signature": `v1,${signature}`,
-					},
-					body,
-				}), "successor HMAC challenge");
+				const response = await withinHandlerChange(
+					fetch(`http://127.0.0.1:${portB}${sharedPath}`, {
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							"X-MCP-Subscription-Id": "successor-pending-id",
+							"webhook-id": messageId,
+							"webhook-timestamp": timestamp,
+							"webhook-signature": `v1,${signature}`,
+						},
+						body,
+					}),
+					"successor HMAC challenge",
+				);
 				expect(response.status).toBe(200);
 				expect(await response.json()).toEqual({ challenge });
 				// A rotated/retired signer must not verify the new owner.
@@ -552,18 +570,31 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		vi.useFakeTimers();
 		try {
-			await connect(manager, "bounded-reconnect-server", managerConfig(server, {
-				enabled: true,
-				subscriptions: [{ name: EVENT_NAME, mode: "push" }],
-			}));
+			await connect(
+				manager,
+				"bounded-reconnect-server",
+				managerConfig(server, {
+					enabled: true,
+					subscriptions: [{ name: EVENT_NAME, mode: "push" }],
+				}),
+			);
 			await streamOpened.promise;
 			await eventReceived.promise;
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(1);
 			expect(received).toEqual(["stream-1"]);
 
-			emitStreamNotification(server.streamControllers[0]!, server.requests.filter(request => request.method === "events/stream")[0]!.id!, "notifications/events/event", {
-				eventId: "failed-1", name: EVENT_NAME, timestamp: "2026-10-14T12:00:00Z", data: {}, cursor: 1,
-			});
+			emitStreamNotification(
+				server.streamControllers[0]!,
+				server.requests.filter(request => request.method === "events/stream")[0]!.id!,
+				"notifications/events/event",
+				{
+					eventId: "failed-1",
+					name: EVENT_NAME,
+					timestamp: "2026-10-14T12:00:00Z",
+					data: {},
+					cursor: 1,
+				},
+			);
 			await server.streamCancellations[0]!;
 			await advanceTimers(4_999);
 			await settleNetwork();
@@ -576,9 +607,18 @@ describe("MCPManager event subscription contracts", () => {
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(2);
 			expect(received).toEqual(["stream-1", "stream-2"]);
 
-			emitStreamNotification(server.streamControllers[1]!, server.requests.filter(request => request.method === "events/stream")[1]!.id!, "notifications/events/event", {
-				eventId: "failed-2", name: EVENT_NAME, timestamp: "2026-10-14T12:00:00Z", data: {}, cursor: 1,
-			});
+			emitStreamNotification(
+				server.streamControllers[1]!,
+				server.requests.filter(request => request.method === "events/stream")[1]!.id!,
+				"notifications/events/event",
+				{
+					eventId: "failed-2",
+					name: EVENT_NAME,
+					timestamp: "2026-10-14T12:00:00Z",
+					data: {},
+					cursor: 1,
+				},
+			);
 			await server.streamCancellations[1]!;
 			await advanceTimers(4_999);
 			await settleNetwork();
@@ -589,9 +629,18 @@ describe("MCPManager event subscription contracts", () => {
 			await thirdStreamOpened.promise;
 			expect(server.requests.filter(request => request.method === "events/stream")).toHaveLength(3);
 
-			emitStreamNotification(server.streamControllers[2]!, server.requests.filter(request => request.method === "events/stream")[2]!.id!, "notifications/events/event", {
-				eventId: "failed-3", name: EVENT_NAME, timestamp: "2026-10-14T12:00:00Z", data: {}, cursor: 1,
-			});
+			emitStreamNotification(
+				server.streamControllers[2]!,
+				server.requests.filter(request => request.method === "events/stream")[2]!.id!,
+				"notifications/events/event",
+				{
+					eventId: "failed-3",
+					name: EVENT_NAME,
+					timestamp: "2026-10-14T12:00:00Z",
+					data: {},
+					cursor: 1,
+				},
+			);
 			await server.streamCancellations[2]!;
 			const stop = manager.stopEvents();
 			await stop;
@@ -1047,7 +1096,7 @@ describe("MCPManager event subscription contracts", () => {
 				.map(r => r.method)
 				.filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
-			expect(onEvent).not.toHaveBeenCalled();
+			expect(onEvent.mock.calls).toHaveLength(0);
 			expect(server.streamControllers).toHaveLength(0);
 		} finally {
 			await manager.stopEvents();
@@ -1122,7 +1171,7 @@ describe("MCPManager event subscription contracts", () => {
 				.map(r => r.method)
 				.filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
-			expect(onEvent).not.toHaveBeenCalled();
+			expect(onEvent.mock.calls).toHaveLength(0);
 			expect(server.streamControllers).toHaveLength(0);
 		} finally {
 			await manager.stopEvents();
@@ -1249,13 +1298,13 @@ describe("MCPManager event subscription contracts", () => {
 
 			await secondPollRequested.promise;
 
-			expect(onEvent).toHaveBeenCalledTimes(1);
-			expect(onEvent).toHaveBeenCalledWith(
+			expect(onEvent.mock.calls).toHaveLength(1);
+			expect(onEvent.mock.calls).toContainEqual([
 				serverName,
 				expect.objectContaining({ eventId: "valid-1", name: EVENT_NAME }),
 				expect.any(String),
-			);
-			expect(onCursor).toHaveBeenCalledWith(serverName, expect.any(String), "cursor-1");
+			]);
+			expect(onCursor.mock.calls).toContainEqual([serverName, expect.any(String), "cursor-1"]);
 		} finally {
 			await manager.stopEvents();
 			server.stop();
@@ -1287,9 +1336,17 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setOnEvent(() => {});
 			manager.setOnEventCursor(() => {});
 			try {
-				await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-					enabled: true, subscriptions: [{ name: EVENT_NAME, mode }],
-				})), `${mode} connection`);
+				await withinHandlerChange(
+					connect(
+						manager,
+						serverName,
+						managerConfig(server, {
+							enabled: true,
+							subscriptions: [{ name: EVENT_NAME, mode }],
+						}),
+					),
+					`${mode} connection`,
+				);
 				await withinHandlerChange(firstStarted.promise, `${mode} first subscription`);
 				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
 
@@ -1350,17 +1407,27 @@ describe("MCPManager event subscription contracts", () => {
 		const previousSecret = process.env.MCP_EVENTS_CONTRACT_SECRET;
 		process.env.MCP_EVENTS_CONTRACT_SECRET = CALLBACK_SECRET;
 		try {
-			await withinHandlerChange(connect(manager, "reenroll-webhook", managerConfig(server, {
-				enabled: true,
-				subscriptions: [{
-					name: EVENT_NAME, mode: "webhook",
-					webhook: {
-						callbackUrl: "https://callback.example.test/events/orders",
-						secretRef: "$MCP_EVENTS_CONTRACT_SECRET",
-						listenPort,
-					},
-				}],
-			})), "initial webhook connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					"reenroll-webhook",
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [
+							{
+								name: EVENT_NAME,
+								mode: "webhook",
+								webhook: {
+									callbackUrl: "https://callback.example.test/events/orders",
+									secretRef: "$MCP_EVENTS_CONTRACT_SECRET",
+									listenPort,
+								},
+							},
+						],
+					}),
+				),
+				"initial webhook connection",
+			);
 			await withinHandlerChange(firstCursor.promise, "initial webhook cursor");
 			expect(manager.getActiveEventSubscriptionCount("reenroll-webhook")).toBe(1);
 			manager.setOnEvent(undefined);
@@ -1387,7 +1454,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
-
 	// WHY: a single global handler-clear teardown barrier can block unrelated
 	// event feeds behind a slow webhook unsubscribe. Distinct canonical keys
 	// must re-enroll independently while the affected key waits for its old
@@ -1412,7 +1478,10 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "webhook",
 			eventsList: async () => ({
 				events: [slowName, independentName].map(name => ({
-					name, description: "fake event", inputSchema: { type: "object" }, delivery: ["webhook"],
+					name,
+					description: "fake event",
+					inputSchema: { type: "object" },
+					delivery: ["webhook"],
 				})),
 			}),
 			webhookSubscribe: async params => {
@@ -1449,29 +1518,45 @@ describe("MCPManager event subscription contracts", () => {
 			if (cursor === independentName + ":2") renewedIndependent.resolve();
 		});
 		try {
-			await withinHandlerChange(manager.connectServers({
-				"slow-webhooks": managerConfig(webhookServer, {
-					enabled: true,
-					subscriptions: [
-						{ name: slowName, mode: "webhook", webhook: {
-							callbackUrl: "https://callback.example.test/events/slow",
-							secretRef: "$MCP_EVENTS_KEYED_SECRET",
-							listenPort,
-						} },
-						{ name: independentName, mode: "webhook", webhook: {
-							callbackUrl: "https://callback.example.test/events/independent",
-							secretRef: "$MCP_EVENTS_KEYED_SECRET",
-							listenPort,
-						} },
-					],
-				}),
-				"unrelated-poll": managerConfig(pollServer, {
-					enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-				}),
-			}, {}), "initial independent event connections");
-			await withinHandlerChange(Promise.all([
-				initialSlow.promise, initialIndependent.promise, initialPoll.promise,
-			]), "initial three event subscriptions");
+			await withinHandlerChange(
+				manager.connectServers(
+					{
+						"slow-webhooks": managerConfig(webhookServer, {
+							enabled: true,
+							subscriptions: [
+								{
+									name: slowName,
+									mode: "webhook",
+									webhook: {
+										callbackUrl: "https://callback.example.test/events/slow",
+										secretRef: "$MCP_EVENTS_KEYED_SECRET",
+										listenPort,
+									},
+								},
+								{
+									name: independentName,
+									mode: "webhook",
+									webhook: {
+										callbackUrl: "https://callback.example.test/events/independent",
+										secretRef: "$MCP_EVENTS_KEYED_SECRET",
+										listenPort,
+									},
+								},
+							],
+						}),
+						"unrelated-poll": managerConfig(pollServer, {
+							enabled: true,
+							subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+						}),
+					},
+					{},
+				),
+				"initial independent event connections",
+			);
+			await withinHandlerChange(
+				Promise.all([initialSlow.promise, initialIndependent.promise, initialPoll.promise]),
+				"initial three event subscriptions",
+			);
 			expect(manager.getActiveEventSubscriptionCount()).toBe(3);
 
 			manager.setOnEvent(undefined);
@@ -1480,9 +1565,10 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setOnEvent(() => {});
 			// Neither the unrelated poll server nor the second webhook key
 			// depends on the still-unacknowledged old slow-key unsubscribe.
-			await withinHandlerChange(Promise.all([
-				renewedIndependent.promise, renewedPoll.promise,
-			]), "independent re-enrollment while old unsubscribe is unresolved");
+			await withinHandlerChange(
+				Promise.all([renewedIndependent.promise, renewedPoll.promise]),
+				"independent re-enrollment while old unsubscribe is unresolved",
+			);
 			expect(subscriptions.get(slowName)).toBe(1);
 			expect(subscriptions.get(independentName)).toBe(2);
 			expect(polls).toBe(2);
@@ -1502,8 +1588,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 30_000);
-
-
 
 	// WHY: setOnEvent(undefined) called by an in-flight callback previously
 	// retained that callback's poll lifecycle in the same-key enrollment barrier.
@@ -1546,9 +1630,17 @@ describe("MCPManager event subscription contracts", () => {
 			callbackCompleted.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "reentrant poll initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"reentrant poll initial connection",
+			);
 			await withinHandlerChange(callbackCompleted.promise, "reentrant poll callback completion");
 			await withinHandlerChange(renewedPoll.promise, "reentrant poll replacement request");
 			expect(polls).toBe(2);
@@ -1581,7 +1673,14 @@ describe("MCPManager event subscription contracts", () => {
 				lists++;
 				if (lists === 2) secondList.resolve();
 				return {
-					events: [{ name: EVENT_NAME, description: "synthetic poll", inputSchema: { type: "object" }, delivery: ["poll"] }],
+					events: [
+						{
+							name: EVENT_NAME,
+							description: "synthetic poll",
+							inputSchema: { type: "object" },
+							delivery: ["poll"],
+						},
+					],
 				};
 			},
 			poll: () => {
@@ -1610,9 +1709,17 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "external poll initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"external poll initial connection",
+			);
 			await withinHandlerChange(firstAcceptanceEntered.promise, "old consumer acceptance");
 			manager.setOnEvent(undefined);
 			manager.setOnEvent(() => {});
@@ -1634,7 +1741,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
-
 	// WHY: externally clearing the handler while a former callback is blocked
 	// invalidates that callback's right to revive the old feed. Its subsequent
 	// setter call must settle without making startup wait on the old lifecycle.
@@ -1648,10 +1754,13 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: () => {
 				polls++;
-				if (polls === 1) return {
-					events: [event("obsolete-handler-event", "obsolete-event-cursor")],
-					cursor: "obsolete-page-cursor", hasMore: false, nextPollMs: 30_000,
-				};
+				if (polls === 1)
+					return {
+						events: [event("obsolete-handler-event", "obsolete-event-cursor")],
+						cursor: "obsolete-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
@@ -1672,9 +1781,17 @@ describe("MCPManager event subscription contracts", () => {
 			oldCompleted.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "initial external-clear poll server");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"initial external-clear poll server",
+			);
 			await withinHandlerChange(oldEntered.promise, "in-flight obsolete callback");
 			manager.setOnEvent(undefined);
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
@@ -1709,13 +1826,18 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: () => {
 				polls++;
-				if (polls === 1) return {
-					events: [event("old-handler-event", "old-cursor")],
-					cursor: "old-page-cursor", hasMore: true, nextPollMs: 0,
-				};
+				if (polls === 1)
+					return {
+						events: [event("old-handler-event", "old-cursor")],
+						cursor: "old-page-cursor",
+						hasMore: true,
+						nextPollMs: 0,
+					};
 				return {
 					events: [event("new-handler-event", "fresh-cursor")],
-					cursor: "fresh-page-cursor", hasMore: false, nextPollMs: 30_000,
+					cursor: "fresh-page-cursor",
+					hasMore: false,
+					nextPollMs: 30_000,
 				};
 			},
 		});
@@ -1729,9 +1851,17 @@ describe("MCPManager event subscription contracts", () => {
 			oldCompleted.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "initial external-replace poll server");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"initial external-replace poll server",
+			);
 			await withinHandlerChange(oldEntered.promise, "old callback in flight");
 			manager.setOnEvent((_name, occurrence) => {
 				if (occurrence.eventId === "new-handler-event") freshDelivered.resolve();
@@ -1751,7 +1881,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
-
 	// WHY: the generation fence prevents a stale callback from setting a
 	// new handler, but an obsolete callback must not be able to stop the
 	// externally installed successor through the async stopEvents entrypoint.
@@ -1767,14 +1896,20 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: () => {
 				polls++;
-				if (polls === 1) return {
-					events: [event("stale-stop-original", "original-cursor")],
-					cursor: "original-page-cursor", hasMore: true, nextPollMs: 0,
-				};
-				if (polls === 2) return {
-					events: [event("stale-stop-successor", "successor-cursor")],
-					cursor: "successor-page-cursor", hasMore: false, nextPollMs: 30_000,
-				};
+				if (polls === 1)
+					return {
+						events: [event("stale-stop-original", "original-cursor")],
+						cursor: "original-page-cursor",
+						hasMore: true,
+						nextPollMs: 0,
+					};
+				if (polls === 2)
+					return {
+						events: [event("stale-stop-successor", "successor-cursor")],
+						cursor: "successor-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
@@ -1789,9 +1924,17 @@ describe("MCPManager event subscription contracts", () => {
 			staleStopSettled.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "stale stop initial poll connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"stale stop initial poll connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "obsolete callback entered");
 			// Deliberately install the successor without clearing the feed. The
 			// manager may continue the current subscription with the new callback.
@@ -1813,7 +1956,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
-
 	// WHY: replacing an event consumer must also fence its cursor writer.
 	// A paused obsolete callback can otherwise rebind persistence after the
 	// current owner sets the authoritative successor callback. This drives
@@ -1832,14 +1974,20 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: () => {
 				polls++;
-				if (polls === 1) return {
-					events: [event("cursor-original", "original-occurrence-cursor")],
-					cursor: "original-page-cursor", hasMore: true, nextPollMs: 0,
-				};
-				if (polls === 2) return {
-					events: [event("cursor-successor", "successor-occurrence-cursor")],
-					cursor: "successor-page-cursor", hasMore: false, nextPollMs: 30_000,
-				};
+				if (polls === 1)
+					return {
+						events: [event("cursor-original", "original-occurrence-cursor")],
+						cursor: "original-page-cursor",
+						hasMore: true,
+						nextPollMs: 0,
+					};
+				if (polls === 2)
+					return {
+						events: [event("cursor-successor", "successor-occurrence-cursor")],
+						cursor: "successor-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
@@ -1849,13 +1997,23 @@ describe("MCPManager event subscription contracts", () => {
 			if (occurrence.eventId !== "cursor-original") return;
 			oldEntered.resolve();
 			await releaseOld.promise;
-			manager.setOnEventCursor(() => { staleCursorWrites++; });
+			manager.setOnEventCursor(() => {
+				staleCursorWrites++;
+			});
 			staleSetterSettled.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "stale cursor initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"stale cursor initial connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "obsolete cursor callback entered");
 			manager.setOnEvent((_name, occurrence) => {
 				if (occurrence.eventId === "cursor-successor") successorDelivered.resolve();
@@ -1881,7 +2039,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 20_000);
-
 
 	// WHY: an obsolete event callback can still run after a newer consumer is
 	// installed. It must not overwrite the newer handler for durable gap and
@@ -1910,13 +2067,23 @@ describe("MCPManager event subscription contracts", () => {
 			if (occurrence.eventId !== "control-original") return;
 			oldEntered.resolve();
 			await releaseOld.promise;
-			manager.setOnEventControl(() => { staleControls++; });
+			manager.setOnEventControl(() => {
+				staleControls++;
+			});
 			obsoleteSetterReturned.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "stale control loopback connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"stale control loopback connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "obsolete event callback entered");
 			manager.setOnEvent(() => {});
 			manager.setOnEventControl((_name, _key, control) => {
@@ -1953,10 +2120,13 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: params => {
 				requestedCursors.push(params.cursor);
-				if (requestedCursors.length === 1) return {
-					events: [event("provider-original", "provider-original-event")],
-					cursor: "provider-original-page", hasMore: false, nextPollMs: 30_000,
-				};
+				if (requestedCursors.length === 1)
+					return {
+						events: [event("provider-original", "provider-original-event")],
+						cursor: "provider-original-page",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				successorPollStarted.resolve();
 				return { events: [], cursor: "provider-new-page", hasMore: false, nextPollMs: 30_000 };
 			},
@@ -1972,9 +2142,17 @@ describe("MCPManager event subscription contracts", () => {
 			obsoleteSetterReturned.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "stale resume provider initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"stale resume provider initial connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "obsolete resume provider callback entered");
 			manager.setOnEvent(() => {});
 			manager.setEventCursorProvider(() => "successor-resume-cursor");
@@ -1994,7 +2172,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 20_000);
-
 
 	// WHY: replacing only the durable cursor/control/provider callbacks does not
 	// change the event consumer generation. A paused event handler must not later
@@ -2017,10 +2194,14 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: params => {
 				requestedCursors.push(params.cursor);
-				if (requestedCursors.length === 1) return {
-					events: [event("held-auxiliary-callback", "first-occurrence")],
-					cursor: "first-page", truncated: true, hasMore: false, nextPollMs: 30_000,
-				};
+				if (requestedCursors.length === 1)
+					return {
+						events: [event("held-auxiliary-callback", "first-occurrence")],
+						cursor: "first-page",
+						truncated: true,
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				secondPoll.resolve();
 				return { events: [], cursor: "second-page", hasMore: false, nextPollMs: 30_000 };
 			},
@@ -2035,15 +2216,27 @@ describe("MCPManager event subscription contracts", () => {
 			await releaseOld.promise;
 			// These setters run inside the still-active old callback scope;
 			// only the auxiliary writers, not the event handler, were replaced.
-			manager.setOnEventCursor(() => { staleCursorCalls++; });
-			manager.setOnEventControl(() => { staleControlCalls++; });
+			manager.setOnEventCursor(() => {
+				staleCursorCalls++;
+			});
+			manager.setOnEventControl(() => {
+				staleControlCalls++;
+			});
 			manager.setEventCursorProvider(() => "stale-resume");
 			oldFinished.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "auxiliary-writer initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"auxiliary-writer initial connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "held auxiliary callback");
 			// Deliberately do NOT call setOnEvent: its unrelated global
 			// revision already fences stale callbacks in other tests.
@@ -2057,7 +2250,10 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setEventCursorProvider(() => "successor-resume");
 			releaseOld.resolve();
 			await withinHandlerChange(oldFinished.promise, "late auxiliary setter attempts");
-			await withinHandlerChange(Promise.all([currentGap.promise, currentCursor.promise]), "current auxiliary callbacks");
+			await withinHandlerChange(
+				Promise.all([currentGap.promise, currentCursor.promise]),
+				"current auxiliary callbacks",
+			);
 			expect(staleCursorCalls).toBe(0);
 			expect(staleControlCalls).toBe(0);
 			expect(committedCursors).toContain("first-page");
@@ -2074,7 +2270,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 20_000);
-
 
 	// WHY: an active callback can legitimately choose a newer cursor,
 	// control, and resume handler twice in one turn. A generation guard that
@@ -2093,10 +2288,14 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: params => {
 				requestedCursors.push(params.cursor);
-				if (requestedCursors.length === 1) return {
-					events: [event("current-auxiliary-writer", "self-event-cursor")],
-					cursor: "self-page", truncated: true, hasMore: false, nextPollMs: 30_000,
-				};
+				if (requestedCursors.length === 1)
+					return {
+						events: [event("current-auxiliary-writer", "self-event-cursor")],
+						cursor: "self-page",
+						truncated: true,
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				secondPoll.resolve();
 				return { events: [], cursor: "restarted-page", hasMore: false, nextPollMs: 30_000 };
 			},
@@ -2107,12 +2306,16 @@ describe("MCPManager event subscription contracts", () => {
 		manager.setEventCursorProvider(() => "initial-resume");
 		manager.setOnEvent((_name, occurrence) => {
 			if (occurrence.eventId !== "current-auxiliary-writer") return;
-			manager.setOnEventCursor(() => { obsoleteCursorInvocations++; });
+			manager.setOnEventCursor(() => {
+				obsoleteCursorInvocations++;
+			});
 			manager.setOnEventCursor((_name, _key, cursor) => {
 				currentCursors.push(cursor);
 				if (cursor === "self-page") cursorObserved.resolve();
 			});
-			manager.setOnEventControl(() => { obsoleteControlInvocations++; });
+			manager.setOnEventControl(() => {
+				obsoleteControlInvocations++;
+			});
 			manager.setOnEventControl((_name, _key, control) => {
 				if (control.type === "gap" && control.cursor === "self-page") gapObserved.resolve();
 			});
@@ -2120,10 +2323,21 @@ describe("MCPManager event subscription contracts", () => {
 			manager.setEventCursorProvider(() => "latest-resume");
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "current auxiliary writer connection");
-			await withinHandlerChange(Promise.all([gapObserved.promise, cursorObserved.promise]), "current auxiliary callbacks");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"current auxiliary writer connection",
+			);
+			await withinHandlerChange(
+				Promise.all([gapObserved.promise, cursorObserved.promise]),
+				"current auxiliary callbacks",
+			);
 			expect(obsoleteCursorInvocations).toBe(0);
 			expect(obsoleteControlInvocations).toBe(0);
 			expect(currentCursors).toContain("self-page");
@@ -2170,9 +2384,14 @@ describe("MCPManager event subscription contracts", () => {
 				manager.setOnEventCursor(() => {});
 				try {
 					await withinHandlerChange(
-						connect(manager, serverName, managerConfig(server, {
-							enabled: true, subscriptions: [subscription],
-						})),
+						connect(
+							manager,
+							serverName,
+							managerConfig(server, {
+								enabled: true,
+								subscriptions: [subscription],
+							}),
+						),
 						`invalid callback ${index} server connection`,
 					);
 					const startup = manager.getEventStartupPromise(serverName);
@@ -2194,7 +2413,6 @@ describe("MCPManager event subscription contracts", () => {
 			else process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET = previousSecret;
 		}
 	}, 30_000);
-
 
 	// WHY: two distinct event configurations may supply one HTTPS callback
 	// path. The second registration must be refused instead of remaining a
@@ -2238,10 +2456,14 @@ describe("MCPManager event subscription contracts", () => {
 		manager.setOnEventCursor(() => accepted.resolve());
 		try {
 			await withinHandlerChange(
-				connect(manager, "colliding-callbacks", managerConfig(server, {
-					enabled: true,
-					subscriptions,
-				})),
+				connect(
+					manager,
+					"colliding-callbacks",
+					managerConfig(server, {
+						enabled: true,
+						subscriptions,
+					}),
+				),
 				"same-callback server connection",
 			);
 			await withinHandlerChange(accepted.promise, "first valid callback registration");
@@ -2284,13 +2506,18 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: () => {
 				polls++;
-				if (polls === 1) return {
-					events: [event("stop-before-reenable", "old-occurrence-cursor")],
-					cursor: "old-page-cursor", hasMore: false, nextPollMs: 30_000,
-				};
+				if (polls === 1)
+					return {
+						events: [event("stop-before-reenable", "old-occurrence-cursor")],
+						cursor: "old-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				return {
 					events: [event("should-not-restart", "new-occurrence-cursor")],
-					cursor: "new-page-cursor", hasMore: false, nextPollMs: 30_000,
+					cursor: "new-page-cursor",
+					hasMore: false,
+					nextPollMs: 30_000,
 				};
 			},
 		});
@@ -2308,9 +2535,17 @@ describe("MCPManager event subscription contracts", () => {
 			oldSettled.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "external-stop initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"external-stop initial connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "external-stop original callback entered");
 			const externalStop = manager.stopEvents();
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
@@ -2343,14 +2578,20 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: () => {
 				polls++;
-				if (polls === 1) return {
-					events: [event("self-stop-original", "first-cursor")],
-					cursor: "first-page-cursor", hasMore: false, nextPollMs: 30_000,
-				};
-				if (polls === 2) return {
-					events: [event("self-stop-successor", "second-cursor")],
-					cursor: "second-page-cursor", hasMore: false, nextPollMs: 30_000,
-				};
+				if (polls === 1)
+					return {
+						events: [event("self-stop-original", "first-cursor")],
+						cursor: "first-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
+				if (polls === 2)
+					return {
+						events: [event("self-stop-successor", "second-cursor")],
+						cursor: "second-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
@@ -2367,9 +2608,17 @@ describe("MCPManager event subscription contracts", () => {
 			restarted.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "self-stop initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"self-stop initial connection",
+			);
 			await withinHandlerChange(restarted.promise, "callback-owned stop and restart");
 			await withinHandlerChange(secondDelivered.promise, "self-stop successor delivery");
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
@@ -2402,8 +2651,18 @@ describe("MCPManager event subscription contracts", () => {
 			poll: () => {
 				aPolls++;
 				return aPolls === 1
-					? { events: [event("A-in-flight", "A-original-cursor")], cursor: "A-original-page", hasMore: false, nextPollMs: 30_000 }
-					: { events: [event("A-should-not-restart", "A-next-cursor")], cursor: "A-next-page", hasMore: false, nextPollMs: 30_000 };
+					? {
+							events: [event("A-in-flight", "A-original-cursor")],
+							cursor: "A-original-page",
+							hasMore: false,
+							nextPollMs: 30_000,
+						}
+					: {
+							events: [event("A-should-not-restart", "A-next-cursor")],
+							cursor: "A-next-page",
+							hasMore: false,
+							nextPollMs: 30_000,
+						};
 			},
 		});
 		const serverB = fakeMcpServer({
@@ -2413,7 +2672,12 @@ describe("MCPManager event subscription contracts", () => {
 				return bPolls === 1
 					? { events: [event("B-unrelated", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 1_000 }
 					: bPolls === 2
-						? { events: [event("B-after-A-closed", "B-cursor-2")], cursor: "B-page-2", hasMore: false, nextPollMs: 30_000 }
+						? {
+								events: [event("B-after-A-closed", "B-cursor-2")],
+								cursor: "B-page-2",
+								hasMore: false,
+								nextPollMs: 30_000,
+							}
 						: { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
@@ -2434,15 +2698,31 @@ describe("MCPManager event subscription contracts", () => {
 			oldSettled.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverAName, managerConfig(serverA, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "A initial event connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverAName,
+					managerConfig(serverA, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"A initial event connection",
+			);
 			await withinHandlerChange(oldEntered.promise, "A original event callback");
 			const disconnectA = manager.disconnectServer(serverAName);
 			expect(manager.getActiveEventSubscriptionCount(serverAName)).toBe(0);
-			await withinHandlerChange(connect(manager, serverBName, managerConfig(serverB, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "B concurrent event connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverBName,
+					managerConfig(serverB, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"B concurrent event connection",
+			);
 			await withinHandlerChange(independentDelivered.promise, "independent B event delivery");
 			releaseOld.resolve();
 			await withinHandlerChange(oldSettled.promise, "A old callback released");
@@ -2463,7 +2743,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
-
 
 	// WHY: an external disconnect drains the callback that may itself await
 	// a nested same-server disconnect. Joining that pending external Promise
@@ -2491,9 +2770,17 @@ describe("MCPManager event subscription contracts", () => {
 			nestedFinished.resolve();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "A initial event connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"A initial event connection",
+			);
 			await withinHandlerChange(entered.promise, "held A callback");
 			const outerDisconnect = manager.disconnectServer(serverName);
 			release.resolve();
@@ -2527,7 +2814,12 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		const serverB = fakeMcpServer({
 			delivery: "poll",
-			poll: () => ({ events: [event("B-disconnects-A", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 }),
+			poll: () => ({
+				events: [event("B-disconnects-A", "B-cursor")],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
 		});
 		const manager = new MCPManager(process.cwd());
 		let aReleased = false;
@@ -2547,13 +2839,29 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		});
 		try {
-			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "held A connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					aName,
+					managerConfig(serverA, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"held A connection",
+			);
 			await withinHandlerChange(aEntered.promise, "held A callback");
-			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "independent B connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					bName,
+					managerConfig(serverB, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"independent B connection",
+			);
 			await withinHandlerChange(bEntered.promise, "B disconnect request");
 			await delay(50);
 			expect(earlyCompletion).toBe(false);
@@ -2596,15 +2904,30 @@ describe("MCPManager event subscription contracts", () => {
 			poll: () => {
 				aPolls++;
 				return aPolls === 1
-					? { events: [event("before-manual-reconnect", "A-cursor-1")], cursor: "A-page-1", hasMore: false, nextPollMs: 30_000 }
-					: { events: [event("after-manual-reconnect", "A-cursor-2")], cursor: "A-page-2", hasMore: false, nextPollMs: 30_000 };
+					? {
+							events: [event("before-manual-reconnect", "A-cursor-1")],
+							cursor: "A-page-1",
+							hasMore: false,
+							nextPollMs: 30_000,
+						}
+					: {
+							events: [event("after-manual-reconnect", "A-cursor-2")],
+							cursor: "A-page-2",
+							hasMore: false,
+							nextPollMs: 30_000,
+						};
 			},
 		});
 		const bServer = fakeMcpServer({
 			delivery: "poll",
 			poll: () => {
 				bPolls++;
-				return { events: [event("independent-B", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 };
+				return {
+					events: [event("independent-B", "B-cursor")],
+					cursor: "B-page",
+					hasMore: false,
+					nextPollMs: 30_000,
+				};
 			},
 		});
 		const manager = new MCPManager(process.cwd());
@@ -2632,7 +2955,9 @@ describe("MCPManager event subscription contracts", () => {
 				).rejects.toThrow("An MCP event callback cannot await its server's in-flight reconnect");
 				// This callback belongs to the transport being replaced. It must
 				// not replace the handler shared by the new A and unrelated B.
-				manager.setOnEvent(() => { stolen++; });
+				manager.setOnEvent(() => {
+					stolen++;
+				});
 				return;
 			}
 			if (occurrence.eventId === "after-manual-reconnect") {
@@ -2641,11 +2966,26 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		});
 		try {
-			await withinHandlerChange(manager.connectServers({
-				[aName]: managerConfig(aServer, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
-				[bName]: managerConfig(bServer, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
-			}, {}), "two manual-reconnect test servers");
-			await withinHandlerChange(Promise.all([firstEntered.promise, independentDelivered.promise]), "initial A and B event delivery");
+			await withinHandlerChange(
+				manager.connectServers(
+					{
+						[aName]: managerConfig(aServer, {
+							enabled: true,
+							subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+						}),
+						[bName]: managerConfig(bServer, {
+							enabled: true,
+							subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+						}),
+					},
+					{},
+				),
+				"two manual-reconnect test servers",
+			);
+			await withinHandlerChange(
+				Promise.all([firstEntered.promise, independentDelivered.promise]),
+				"initial A and B event delivery",
+			);
 			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(1);
 			expect(manager.getActiveEventSubscriptionCount(bName)).toBe(1);
 
@@ -2677,7 +3017,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
-
 
 	// WHY: after the crash-burst breaker detaches a server transport, its
 	// retired poll key must not prevent an operator's later manual reconnect
@@ -2716,9 +3055,14 @@ describe("MCPManager event subscription contracts", () => {
 		manager.setOnEventCursor(() => {});
 		try {
 			await withinHandlerChange(
-				connect(manager, name, managerConfig(server, {
-					enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-				})),
+				connect(
+					manager,
+					name,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
 				"initial breaker server connection",
 			);
 			await withinHandlerChange(nextDelivery.promise, "initial breaker event delivery");
@@ -2758,7 +3102,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 60_000);
 
-
 	// WHY: an asynchronous descendant inherits AsyncLocalStorage even after its
 	// source event callback has returned. It is not a new external owner and
 	// must not overwrite successor cursor, control or resume-provider handlers.
@@ -2780,14 +3123,22 @@ describe("MCPManager event subscription contracts", () => {
 			delivery: "poll",
 			poll: params => {
 				requestedCursors.push(params.cursor);
-				if (requestedCursors.length === 1) return {
-					events: [event("detached-original", "original-occurrence")],
-					cursor: "original-page", truncated: true, hasMore: false, nextPollMs: 30_000,
-				};
-				if (requestedCursors.length === 2) return {
-					events: [event("detached-successor", "successor-occurrence")],
-					cursor: "successor-page", truncated: true, hasMore: false, nextPollMs: 30_000,
-				};
+				if (requestedCursors.length === 1)
+					return {
+						events: [event("detached-original", "original-occurrence")],
+						cursor: "original-page",
+						truncated: true,
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
+				if (requestedCursors.length === 2)
+					return {
+						events: [event("detached-successor", "successor-occurrence")],
+						cursor: "successor-page",
+						truncated: true,
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
 			},
 		});
@@ -2819,9 +3170,17 @@ describe("MCPManager event subscription contracts", () => {
 			});
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "detached-writer initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"detached-writer initial connection",
+			);
 			// The page-level cursor follows the event callback's completed
 			// #withEventCallback scope; detached work remains deferred here.
 			await withinHandlerChange(firstCommitted.promise, "original page accepted");
@@ -2864,7 +3223,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
-
 	// WHY: a detached async child retains A's callback scope after A returns.
 	// A later explicit B consumer must not be revoked by A's stale stop, while
 	// the existing same-consumer detached-stop/drain contract stays intact.
@@ -2883,13 +3241,23 @@ describe("MCPManager event subscription contracts", () => {
 			poll: () => {
 				pollCount++;
 				if (pollCount === 1) {
-					return { events: [event("from-A", "A-occurrence")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 };
+					return {
+						events: [event("from-A", "A-occurrence")],
+						cursor: "A-page",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				}
 				if (pollCount === 2) {
 					return { events: [event("from-B", "B-occurrence")], cursor: "B-page", hasMore: false, nextPollMs: 50 };
 				}
 				if (allowLaterOccurrence) {
-					return { events: [event("B-still-alive", "B-later")], cursor: "B-later-page", hasMore: false, nextPollMs: 30_000 };
+					return {
+						events: [event("B-still-alive", "B-later")],
+						cursor: "B-later-page",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
 				}
 				return { events: [], cursor: "B-idle", hasMore: false, nextPollMs: 50 };
 			},
@@ -2917,16 +3285,26 @@ describe("MCPManager event subscription contracts", () => {
 			})();
 		});
 		try {
-			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "A poll subscription");
+			await withinHandlerChange(
+				connect(
+					manager,
+					serverName,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"A poll subscription",
+			);
 			await withinHandlerChange(firstCursor.promise, "A first accepted occurrence");
 			expect(detachedScheduled).toBe(true);
 
 			// B is an independent external replacement, not a callback-owned
 			// restart and not merely another event on A's original subscription.
 			manager.setOnEvent(undefined);
-			manager.setOnEvent((_name, occurrence) => { deliveredToB.push(occurrence.eventId); });
+			manager.setOnEvent((_name, occurrence) => {
+				deliveredToB.push(occurrence.eventId);
+			});
 			await withinHandlerChange(successorCursor.promise, "B replacement occurrence and cursor");
 			expect(deliveredToB).toEqual(["from-B"]);
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
@@ -2954,7 +3332,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 20_000);
 
-
 	// A previous stopEvents must not destroy a webhook host or unsubscribe a
 	// successor that starts while the old consumer is still draining. Unlike
 	// handler-clear, the global stop historically omitted the key barrier.
@@ -2978,12 +3355,16 @@ describe("MCPManager event subscription contracts", () => {
 			eventsList: () => {
 				eventListCalls++;
 				if (eventListCalls === 2) replacementEventsListed.resolve();
-				return { events: [{
-					name: EVENT_NAME,
-					description: "private webhook test",
-					inputSchema: { type: "object" },
-					delivery: ["webhook"],
-				}] };
+				return {
+					events: [
+						{
+							name: EVENT_NAME,
+							description: "private webhook test",
+							inputSchema: { type: "object" },
+							delivery: ["webhook"],
+						},
+					],
+				};
 			},
 			webhookSubscribe: async () => {
 				subscribeCount++;
@@ -3015,18 +3396,27 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		let stop: Promise<void> | undefined;
 		try {
-			await withinHandlerChange(connect(manager, name, managerConfig(server, {
-				enabled: true,
-				subscriptions: [{
-					name: EVENT_NAME,
-					mode: "webhook",
-					webhook: {
-						callbackUrl: "https://callback.example.test/events/stopped-owner",
-						secretRef: "$MCP_EVENTS_STOP_HOST_SECRET",
-						listenPort,
-					},
-				}],
-			})), "initial webhook to stop");
+			await withinHandlerChange(
+				connect(
+					manager,
+					name,
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: [
+							{
+								name: EVENT_NAME,
+								mode: "webhook",
+								webhook: {
+									callbackUrl: "https://callback.example.test/events/stopped-owner",
+									secretRef: "$MCP_EVENTS_STOP_HOST_SECRET",
+									listenPort,
+								},
+							},
+						],
+					}),
+				),
+				"initial webhook to stop",
+			);
 			await withinHandlerChange(initialCursor.promise, "initial stopped webhook cursor");
 			stop = manager.stopEvents();
 			await withinHandlerChange(oldUnsubscribeEntered.promise, "old webhook unsubscribe started");
@@ -3087,7 +3477,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 30_000);
-
 
 	// The old global stop used to close *every* loopback host after awaiting a
 	// slow unsubscribe, including a separate newly enrolled webhook owner.
@@ -3166,9 +3555,17 @@ describe("MCPManager event subscription contracts", () => {
 		}));
 		let stopping: Promise<void> | undefined;
 		try {
-			await withinHandlerChange(connect(manager, "independent-stop-webhooks", managerConfig(server, {
-				enabled: true, subscriptions: subs,
-			})), "initial two webhook registrations");
+			await withinHandlerChange(
+				connect(
+					manager,
+					"independent-stop-webhooks",
+					managerConfig(server, {
+						enabled: true,
+						subscriptions: subs,
+					}),
+				),
+				"initial two webhook registrations",
+			);
 			await withinHandlerChange(
 				Promise.all([firstSlow.promise, firstIndependent.promise]),
 				"both initial webhook cursors",
@@ -3197,17 +3594,20 @@ describe("MCPManager event subscription contracts", () => {
 			const signature = createHmac("sha256", Buffer.from(CALLBACK_SECRET.slice("whsec_".length), "base64"))
 				.update(messageId + "." + timestamp + "." + body)
 				.digest("base64");
-			const response = await withinHandlerChange(fetch("http://127.0.0.1:" + listenPort + "/events/independent-stop", {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					"X-MCP-Subscription-Id": "independent-2",
-					"webhook-id": messageId,
-					"webhook-timestamp": timestamp,
-					"webhook-signature": "v1," + signature,
-				},
-				body,
-			}), "independent callback after earlier global stop");
+			const response = await withinHandlerChange(
+				fetch("http://127.0.0.1:" + listenPort + "/events/independent-stop", {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "independent-2",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": "v1," + signature,
+					},
+					body,
+				}),
+				"independent callback after earlier global stop",
+			);
 			expect(response.status).toBe(202);
 			await withinHandlerChange(deliveredIndependent.promise, "surviving independent webhook owner receives event");
 		} finally {
@@ -3222,7 +3622,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 30_000);
-
 
 	// A callback cannot await B's stream drain while B's callback awaits A's:
 	// the two awaited handler promises form a genuine cycle. Reject one edge
@@ -3278,15 +3677,29 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		});
 		try {
-			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
-				enabled: true,
-				subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "reciprocal A connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					aName,
+					managerConfig(serverA, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"reciprocal A connection",
+			);
 			await withinHandlerChange(aEntered.promise, "reciprocal A callback entered");
-			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
-				enabled: true,
-				subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "reciprocal B connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					bName,
+					managerConfig(serverB, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"reciprocal B connection",
+			);
 			await withinHandlerChange(bEntered.promise, "reciprocal B callback entered");
 			releaseBoth.resolve();
 			await withinHandlerChange(Promise.all([aFinished.promise, bFinished.promise]), "reciprocal callbacks settle");
@@ -3316,7 +3729,6 @@ describe("MCPManager event subscription contracts", () => {
 		}
 	}, 25_000);
 
-
 	// A->B->C->A must use reachability, not merely a two-server inverse-edge
 	// check. All initial handler calls arrive before any cross-server teardown.
 	it("breaks a three-server callback disconnect cycle and leaves external recovery possible", async () => {
@@ -3326,15 +3738,17 @@ describe("MCPManager event subscription contracts", () => {
 		const release = Promise.withResolvers<void>();
 		const outcomes: Array<"done" | "cycle"> = [];
 		let settled = false;
-		const servers = names.map((_, index) => fakeMcpServer({
-			delivery: "poll",
-			poll: () => ({
-				events: [event("three-cycle-" + index, "event-" + index)],
-				cursor: "page-" + index,
-				hasMore: false,
-				nextPollMs: 30_000,
+		const servers = names.map((_, index) =>
+			fakeMcpServer({
+				delivery: "poll",
+				poll: () => ({
+					events: [event("three-cycle-" + index, "event-" + index)],
+					cursor: "page-" + index,
+					hasMore: false,
+					nextPollMs: 30_000,
+				}),
 			}),
-		}));
+		);
 		const manager = new MCPManager(process.cwd());
 		manager.setOnEventCursor(() => {});
 		manager.setOnEvent(async (serverName, occurrence) => {
@@ -3361,10 +3775,17 @@ describe("MCPManager event subscription contracts", () => {
 				const name = names[i];
 				const server = servers[i];
 				if (!name || !server) throw new Error("Missing three-server fixture");
-				await withinHandlerChange(connect(manager, name, managerConfig(server, {
-					enabled: true,
-					subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-				})), "three-server startup");
+				await withinHandlerChange(
+					connect(
+						manager,
+						name,
+						managerConfig(server, {
+							enabled: true,
+							subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+						}),
+					),
+					"three-server startup",
+				);
 				if (!entered[i]) throw new Error("Missing three-server entry");
 				await withinHandlerChange(entered[i].promise, "three-server callback entry");
 			}
@@ -3394,7 +3815,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
-
 
 	// A reconnect also drains the retired B event handler before creating a
 	// replacement transport. A->reconnect(B) / B->disconnect(A) is the same
@@ -3459,13 +3879,29 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		});
 		try {
-			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "mixed A initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					aName,
+					managerConfig(serverA, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"mixed A initial connection",
+			);
 			await withinHandlerChange(aEntered.promise, "mixed A entered");
-			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "mixed B initial connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					bName,
+					managerConfig(serverB, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"mixed B initial connection",
+			);
 			await withinHandlerChange(bEntered.promise, "mixed B entered");
 			releaseBoth.resolve();
 			await withinHandlerChange(Promise.all([aFinished.promise, bFinished.promise]), "mixed cycle settles");
@@ -3486,7 +3922,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
-
 
 	// A detached A child can keep a disconnect(B) pending after A's handler
 	// returns. Its inherited ALS scope is INACTIVE, so it must not invent a
@@ -3543,13 +3978,29 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		});
 		try {
-			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "detached-edge B connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					bName,
+					managerConfig(serverB, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"detached-edge B connection",
+			);
 			await withinHandlerChange(bEntered.promise, "held B callback");
-			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
-				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
-			})), "detached-edge A connection");
+			await withinHandlerChange(
+				connect(
+					manager,
+					aName,
+					managerConfig(serverA, {
+						enabled: true,
+						subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+					}),
+				),
+				"detached-edge A connection",
+			);
 			await withinHandlerChange(aPageCommitted.promise, "A callback has finished");
 			releaseB.resolve();
 			await withinHandlerChange(Promise.all([bDone.promise, detachedDone.promise]), "both noncyclic disconnects");
@@ -3566,7 +4017,6 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
-
 
 	// WHY: events/subscribe ids are issued by independent MCP servers and are
 	// not globally namespaced. Sharing an opaque id must never overwrite another
@@ -3595,7 +4045,9 @@ describe("MCPManager event subscription contracts", () => {
 		const readyA = Promise.withResolvers<void>();
 		const readyB = Promise.withResolvers<void>();
 		const received: string[] = [];
-		manager.setOnEvent((serverName, occurrence) => { received.push(`${serverName}:${occurrence.eventId}`); });
+		manager.setOnEvent((serverName, occurrence) => {
+			received.push(`${serverName}:${occurrence.eventId}`);
+		});
 		manager.setOnEventCursor((serverName, _key, cursor) => {
 			if (serverName === "collision-server-A" && cursor === "cursor-A") readyA.resolve();
 			if (serverName === "collision-server-B" && cursor === "cursor-B") readyB.resolve();
@@ -3615,31 +4067,43 @@ describe("MCPManager event subscription contracts", () => {
 			const signature = createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64"))
 				.update(`${eventId}.${timestamp}.${body}`)
 				.digest("base64");
-			const response = await withinHandlerChange(fetch(`http://127.0.0.1:${listenPort}${callbackPath}`, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					"X-MCP-Subscription-Id": remoteId,
-					"webhook-id": eventId,
-					"webhook-timestamp": timestamp,
-					"webhook-signature": `v1,${signature}`,
-				},
-				body,
-			}), `signed webhook ${eventId}`);
+			const response = await withinHandlerChange(
+				fetch(`http://127.0.0.1:${listenPort}${callbackPath}`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": remoteId,
+						"webhook-id": eventId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${signature}`,
+					},
+					body,
+				}),
+				`signed webhook ${eventId}`,
+			);
 			return response.status;
 		};
 		try {
-			await withinHandlerChange(manager.connectServers({
-				"collision-server-A": managerConfig(serverA, {
-					enabled: true,
-					subscriptions: [subscription("/events/opaque-A", "$MCP_EVENTS_ID_COLLISION_A")],
-				}),
-				"collision-server-B": managerConfig(serverB, {
-					enabled: true,
-					subscriptions: [subscription("/events/opaque-B", "$MCP_EVENTS_ID_COLLISION_B")],
-				}),
-			}, {}), "two independent webhook servers with same remote id");
-			await withinHandlerChange(Promise.all([readyA.promise, readyB.promise]), "both independent callback registrations");
+			await withinHandlerChange(
+				manager.connectServers(
+					{
+						"collision-server-A": managerConfig(serverA, {
+							enabled: true,
+							subscriptions: [subscription("/events/opaque-A", "$MCP_EVENTS_ID_COLLISION_A")],
+						}),
+						"collision-server-B": managerConfig(serverB, {
+							enabled: true,
+							subscriptions: [subscription("/events/opaque-B", "$MCP_EVENTS_ID_COLLISION_B")],
+						}),
+					},
+					{},
+				),
+				"two independent webhook servers with same remote id",
+			);
+			await withinHandlerChange(
+				Promise.all([readyA.promise, readyB.promise]),
+				"both independent callback registrations",
+			);
 			expect(manager.getActiveEventSubscriptionCount()).toBe(2);
 			expect(await send("/events/opaque-A", secretA, "collision-A-1")).toBe(202);
 			expect(await send("/events/opaque-B", secretB, "collision-B-1")).toBe(202);
@@ -3666,5 +4130,4 @@ describe("MCPManager event subscription contracts", () => {
 			}
 		}
 	}, 25_000);
-
 });

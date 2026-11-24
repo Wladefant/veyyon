@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prove external Linux dependencies resolve workspace links to the tested source.
+# Prove external Linux dependencies resolve workspace links to the tested source. It stages a fake `@veyyon` package in a temp repo, links it from a temp `node_modules`, and checks inside the bwrap boundary that the link reads the staged source and that the host home stays absent.
+# Usage: bash scripts/test-sandbox/bwrap-deps-proof.sh   (Linux or WSL with bubblewrap; prints `bwrap dependency mount proof: PASS` on success)
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 HOST_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"

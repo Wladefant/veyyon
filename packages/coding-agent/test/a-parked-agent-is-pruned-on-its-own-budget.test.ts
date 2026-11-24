@@ -34,6 +34,7 @@ import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { resolveAgentPruneBudget } from "@veyyon/coding-agent/task/agent-settings";
 import { finalizeSubagentLifecycle, runSubprocess, saysItIsWaitingOnAPeer } from "@veyyon/coding-agent/task/executor";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 import {
 	createAssistantStopMessage,
@@ -113,12 +114,20 @@ function countSchedulerWakes(): { count: () => number; restore: () => void } {
 	return { count: () => spy.mock.calls.length, restore: () => spy.mockRestore() };
 }
 
-/** Advance the clock and let the manager's async park/prune work settle. */
+/** Advance the fake clock without waiting for I/O to nonexistent orphan transcripts. */
 async function advance(ms: number): Promise<void> {
-	vi.advanceTimersByTime(ms);
-	// The expiry handler runs its stages in an async drain, so the microtask queue
-	// has to turn over before the registry reflects them.
-	await drainMicrotasks(8);
+	const open = vi.spyOn(SessionManager, "open").mockResolvedValue({
+		appendCustomMessageEntry: () => "entry",
+		flush: async () => {},
+		close: async () => {},
+	} as unknown as SessionManager);
+	try {
+		vi.advanceTimersByTime(ms);
+		// Park and prune settle on the microtask queue, not on the fake clock.
+		await drainMicrotasks(8);
+	} finally {
+		open.mockRestore();
+	}
 }
 
 /**
@@ -724,17 +733,17 @@ describe("no due deadline survives an expiry unactioned", () => {
 	});
 
 	/**
-	 * The quiet case, which pins the other half: an agent sitting on a future deadline
-	 * must not wake the scheduler at all. Without this, a bound like the one above
-	 * could be satisfied by a manager that simply never schedules anything.
+	 * An idle agent with a future deadline must not add wakes to the orphan sweep.
+	 * The sweep still runs even if every agent deadline is in the future.
 	 */
-	it("does not wake at all while every deadline is in the future", async () => {
+	it("wakes only on the orphan sweep cadence while every deadline is in the future", async () => {
 		adoptIdleAgent("Quiet");
 
 		const armed = wakes.count();
-		await advance(IDLE_TTL_MS - 1_000);
+		const window = IDLE_TTL_MS - 1_000;
+		await advance(window);
 
-		expect(wakes.count()).toBe(armed);
+		expect(wakes.count() - armed).toBe(Math.floor(window / 30_000));
 		expect(AgentRegistry.global().get("Quiet")?.status).toBe("idle");
 	});
 

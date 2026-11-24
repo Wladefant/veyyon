@@ -44,7 +44,7 @@ describe("terminal ownership failure diagnostics", () => {
 				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=EPERM;`,
 			);
 			expect(error.message).toMatch(/elapsed=\d+ms; access denied$/);
-			expect(read).toHaveBeenCalledTimes(1);
+			expect(read.mock.calls).toHaveLength(1);
 		});
 	}
 
@@ -86,6 +86,6 @@ describe("terminal ownership failure diagnostics", () => {
 			.spyOn(utils, "readOwnerOnlyFile")
 			.mockResolvedValue(JSON.stringify({ version: 1, sessionFile, pid: process.pid }));
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("Session is owned by a live terminal");
-		expect(read).toHaveBeenCalledTimes(1);
+		expect(read.mock.calls).toHaveLength(1);
 	});
 });

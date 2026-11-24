@@ -123,6 +123,25 @@
       "risk": "high",
       "components": ["coding-agent", "task"],
       "docs": ["docs/handbook/src/features/agents.md"]
+    },
+    "writetool-windows-stage": {
+      "name": "Windows WriteTool staging",
+      "description": "Create replacement stages with the destination DACL, write through the creating handle, and publish new files without clobbering existing entries.",
+      "entry_files": [
+        "packages/utils/src/windows-file-replace.ts",
+        "packages/utils/src/atomic-write.ts",
+        "packages/coding-agent/src/lsp/writethrough.ts",
+        "packages/coding-agent/src/tools/fs/write.ts",
+        "packages/coding-agent/src/utils/zip.ts"
+      ],
+      "tests": [
+        "packages/utils/test/a-windows-write-keeps-the-destination-dacl.test.ts",
+        "packages/coding-agent/test/writethrough-atomic.test.ts",
+        "packages/coding-agent/test/tools/atomic-write-via-write-tool-adversarial.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1157",
+      "risk": "high",
+      "components": ["utils", "coding-agent"]
     }
   }
 }

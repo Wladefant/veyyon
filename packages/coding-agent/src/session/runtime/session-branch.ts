@@ -20,6 +20,7 @@ import type { AssistantMessage, Model, ServiceTier, SimpleStreamOptions } from "
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { BranchSummaryEntry } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { missingCredentialsMessage } from "../../config/missing-credentials";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -179,7 +180,7 @@ export class SessionBranch {
 
 	/**
 	 * Branch at the live leaf and append a `/btw` question with its answer to the new branch.
-	 * Refuses while a shell or eval run, compaction, handoff or retry is in progress.
+	 * Refuses while a turn, shell or eval run, compaction, handoff or retry is in progress.
 	 */
 	async branchFromBtw(
 		question: string,
@@ -193,14 +194,12 @@ export class SessionBranch {
 			throw new Error("Cannot branch /btw: session is not persisted");
 		}
 
-		const authorized = () =>
-			(!expectedSessionId || session.sessionManager.getSessionId() === expectedSessionId) &&
-			(!expectedLeafId || session.sessionManager.getLeafId() === expectedLeafId);
-		if (!authorized()) {
+		const sessionId = session.sessionManager.getSessionId();
+		const leafId = session.sessionManager.getLeafId();
+		if ((expectedSessionId && sessionId !== expectedSessionId) || (expectedLeafId && leafId !== expectedLeafId)) {
 			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 
-		const leafId = expectedLeafId ?? session.sessionManager.getLeafId();
 		if (!leafId) {
 			throw new Error("Cannot branch /btw: current session has no leaf");
 		}
@@ -211,19 +210,21 @@ export class SessionBranch {
 			return { cancelled: true, sessionFile: previousSessionFile };
 		}
 
-		await this.#host.cancelPostPromptTasks();
-		// A hook or a post-prompt task can start work while the awaits above run.
-		if (!authorized()) {
+		// The branch hook may have let a queued turn start. Do not cancel that turn to promote the aside.
+		this.#assertIdleForBtw();
+		await withTimeout(
+			this.#host.cancelPostPromptTasks(),
+			5_000,
+			"Timed out draining post-prompt tasks before /btw branch",
+		);
+		await session.sessionManager.flush();
+		// A turn or a transcript switch can land while post-prompt work or disk writes settle.
+		if (session.sessionManager.getSessionId() !== sessionId || session.sessionManager.getLeafId() !== leafId) {
 			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 		this.#assertIdleForBtw();
 		this.#host.clearNextTurnMessages();
 		session.agent.replaceQueues([], []);
-		if (session.isStreaming) {
-			await session.abort({ goalReason: "internal", reason: "branching /btw" });
-			session.agent.replaceQueues([], []);
-		}
-		await session.sessionManager.flush();
 		this.#host.cancelOwnAsyncJobs();
 
 		session.sessionManager.createBranchedSession(leafId);
@@ -450,6 +451,7 @@ export class SessionBranch {
 	#assertIdleForBtw(): void {
 		const session = this.#session;
 		if (
+			session.isStreaming ||
 			session.isBashRunning ||
 			session.isEvalRunning ||
 			session.isCompacting ||

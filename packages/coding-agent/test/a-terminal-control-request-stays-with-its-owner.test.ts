@@ -10,7 +10,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { assertNotTerminalOwned } from "@veyyon/kernel/session/terminal-ownership";
 import * as utils from "@veyyon/utils";
 import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
-import { startTerminalControl } from "../src/modes/terminal/terminal-control";
+import { startTerminalControl } from "../src/launch/terminal-control-session";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {

@@ -166,11 +166,28 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		reason:
 			"It is the gate's own suite, and half its subject is the tripwire, which cannot be probed without naming the variable that tells the tripwire what to forbid. What it names is NOT the real config root: every occurrence sets `VEYYON_TEST_REAL_CONFIG_ROOT` to a freshly `mkdtemp`ed directory in the child it spawns, precisely so a door that turns out to be UNGUARDED writes there instead of into the operator's home — which is what makes the red proofs of the six write doors safe to run at all. Each probe removes its own root in a `finally`, and each asserts the root is empty afterwards, so an unguarded door is reported by the absence of the file rather than by damage. The real `~/.veyyon` is never resolved, opened, or written by this file.",
 	},
-	// The ten below are all `unresolved-spawn-target`: a spawn whose command argument is a
-	// variable, a parameter or a property, so no reader of the source alone can say what it
-	// runs. Each reason therefore has to answer the one question the analyzer could not, which
-	// is what the target actually holds at runtime. Two of them genuinely execute a file NAMED
-	// `veyyon`, which is exactly why the rule stops here and asks rather than guessing.
+	// These entries are all `unresolved-spawn-target`: a spawn whose command argument is a
+	// variable, a parameter or a property, so the review must say what it runs.
+	// Two fixtures run a temporary file named `veyyon`, not the installed binary.
+	// Every entry still has to match a finding in its named file.
+	{
+		file: "packages/coding-agent/src/eval/__tests__/runner-request-cancellation.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			'`pythonPath` is `Bun.env.PYTHON ?? "python3"`. It runs this checkout’s `py/runner.py` with `-u` and sends cancellation requests through pipes, without opening the installed CLI.',
+	},
+	{
+		file: "packages/coding-agent/test/a-client-terminal-command-never-waits-for-stdin-or-a-pager.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			"`params.command` is the shell selected by the ACP terminal request. The suite checks that request by running it, with the working directory and all command scripts in the test fixture directory.",
+	},
+	{
+		file: "packages/coding-agent/test/terminal-control-transport.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			"`command` is either PowerShell or whoami.exe under Windows System32. The Windows-only test uses them to query its test pipe ACL and the current process identity.",
+	},
 	{
 		file: "packages/coding-agent/src/eval/py/__tests__/prelude.test.ts",
 		rule: "unresolved-spawn-target",

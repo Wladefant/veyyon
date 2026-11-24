@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { detachedSpawnOptions, exec } from "../src/ptree";
+import { $which } from "../src/which";
 
 // On Windows, Bun maps `detached: true` to DETACHED_PROCESS (no console), so every console
 // grandchild allocates its own conhost and flashes a visible window. detachedSpawnOptions()
@@ -18,12 +19,12 @@ describe("detachedSpawnOptions", () => {
 	});
 });
 
-const python = Bun.which("python");
+const python = $which("python");
 const probe = path.join(import.meta.dir, "../../coding-agent/scripts/console-window-probe.py");
 
 describe.skipIf(process.platform !== "win32" || !python)("ptree.exec detached on Windows", () => {
 	it("gives console grandchildren a shared console, not a new visible one", async () => {
-		const result = await exec([python as string, probe], { detached: true });
+		const result = await exec([python!, probe], { detached: true });
 		const summary = JSON.parse(result.stdout.trim().split(/\r?\n/).pop() ?? "{}") as {
 			n: number;
 			shared: number;

@@ -24,10 +24,11 @@ import { loadArktype } from "@veyyon/ai/utils/schema/arktype";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
+import { BUILTIN_TOOLS, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
 import { EVAL_LANGUAGE_ORDER } from "@veyyon/coding-agent/tools/shell/eval";
 import { TempDir } from "@veyyon/utils";
 import { ArgotSession } from "argot";
+import { constructToolForSchemaSweep } from "../helpers/every-tool";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** A profile with one SSH host, which is what makes the `ssh` factory construct its tool. */
@@ -105,7 +106,7 @@ const SHAPES: Record<string, (overrides: Record<string, unknown>) => ToolSession
 async function buildTools(session: ToolSession): Promise<string[]> {
 	const built: string[] = [];
 	for (const [name, factory] of Object.entries(FACTORIES)) {
-		const tool = (await factory(session)) as Tool | null;
+		const tool = await constructToolForSchemaSweep(name, factory, session);
 		if (!tool) continue;
 		toolWireSchema(tool);
 		built.push(name);
@@ -118,7 +119,7 @@ async function nodesPerTool(session: ToolSession): Promise<Record<string, number
 	const grown: Record<string, number> = {};
 	for (const [name, factory] of Object.entries(FACTORIES)) {
 		const before = registeredNodes();
-		const tool = (await factory(session)) as Tool | null;
+		const tool = await constructToolForSchemaSweep(name, factory, session);
 		if (!tool) continue;
 		toolWireSchema(tool);
 		const added = registeredNodes() - before;

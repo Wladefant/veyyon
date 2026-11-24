@@ -10,12 +10,14 @@
  * a cycle, which must render in full at both places. Every content case drives the real `EvalTool`
  * over the real JS runtime. The stall is bounded at `formatDisplayJsonForText`, the one formatter
  * every displayed JSON value passes through.
+ * Before formatting, the eval executor clones a displayed JSON value through `sanitizeProducerJson`, which runs eval/json-sanitizer in mark mode. The direct cases at the end pin that clone's cycle, key and transform rules.
  *
  * Not covered: a value `structuredClone` cannot copy (a function, a symbol). It never reaches this
  * formatter; `test/core/js-executor.test.ts` covers the text the runtime states for it instead.
  */
 import { afterAll, describe, expect, it } from "bun:test";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
+import { sanitizeJsonValue } from "@veyyon/coding-agent/eval/json-sanitizer";
 import { EvalTool, formatDisplayJsonForText } from "@veyyon/coding-agent/tools/shell/eval";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSessionAt } from "../helpers/tool-session";
@@ -81,5 +83,39 @@ describe("an eval display of a value JSON cannot hold", () => {
 		const elapsed = performance.now() - started;
 		for (const text of texts) expect(text).toContain('"[Circular]"');
 		expect(elapsed).toBeLessThan(200);
+	});
+});
+
+describe("sanitizeJsonValue, called directly", () => {
+	const identity = (text: string) => text;
+
+	it("marks the back-edge of a cycle and still clones a shared reference in full", () => {
+		const shared = { v: 1 };
+		const loop: Record<string, unknown> = { first: shared, second: shared };
+		loop.self = loop;
+		expect(sanitizeJsonValue(loop, identity, { cycles: "mark" })).toEqual({
+			first: { v: 1 },
+			second: { v: 1 },
+			self: "[Circular]",
+		});
+	});
+
+	it("throws on a cycle unless cycles are marked", () => {
+		const loop: Record<string, unknown> = {};
+		loop.self = loop;
+		expect(() => sanitizeJsonValue(loop, identity)).toThrow("JSON value contains a cycle.");
+	});
+
+	it("applies the guard to every string and key, and lets transformValue replace a value first", () => {
+		const sanitize = (text: string) => text.replaceAll("secret", "[x]");
+		const result = sanitizeJsonValue({ "k-secret": "a-secret", n: 2 }, sanitize, {
+			transformValue: value => (value === 2 ? 3 : value),
+		});
+		expect(result).toEqual({ "k-[x]": "a-[x]", n: 3 });
+	});
+
+	it("fails closed when two keys collide after sanitization", () => {
+		const sanitize = (text: string) => text.replaceAll("secret", "[x]");
+		expect(() => sanitizeJsonValue({ "a-secret": 1, "a-[x]": 2 }, sanitize)).toThrow("Sanitized JSON keys collide.");
 	});
 });

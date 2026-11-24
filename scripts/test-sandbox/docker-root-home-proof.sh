@@ -2,6 +2,7 @@
 # docker-root-home-proof.sh
 # Focused standalone shell regression proof for the docker sandbox rung when run as
 # host root (HOST_HOME=/root), as occurs under WSL root invocations.
+# Usage: sudo bash scripts/test-sandbox/docker-root-home-proof.sh   (host uid 0 only; any other user exits 1 before it runs)
 
 set -euo pipefail
 

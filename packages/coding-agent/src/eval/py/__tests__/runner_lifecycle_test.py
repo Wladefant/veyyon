@@ -112,7 +112,8 @@ else:
         import queue
         import threading
         fixture = "runner-startup-owner-probe.ts" if mode in ("startup", "shared") else "runner-owner-probe.ts"
-        probe = Path(os.environ.get("VEYYON_RUNNER_PROBE_PATH", str(RUNNER.parent / "__tests__" / fixture)))
+        default_probe = Path(__file__).resolve().parents[4] / "test" / "fixtures" / fixture
+        probe = Path(os.environ.get("VEYYON_RUNNER_PROBE_PATH", str(default_probe)))
         home = tempfile.TemporaryDirectory(prefix="veyyon-runner-probe-home-")
         env = {**os.environ, "HOME": home.name, "USERPROFILE": home.name, "LOCALAPPDATA": home.name}
         env.pop("VEYYON_CONFIG_DIR", None)

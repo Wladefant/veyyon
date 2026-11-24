@@ -130,7 +130,7 @@ export interface BaseKernelOptions<TExecuteOptions extends KernelExecuteOptions 
 	traceIpc?: boolean;
 	/** Wire payload asking the runner to exit cleanly. */
 	exitPayload?: string;
-	/** How long to wait after SIGINT before escalating to subprocess termination. */
+	/** How long to wait for cancellation before reporting it pending or escalating SIGINT. */
 	interruptEscalationMs?: number;
 	/** Default grace period applied by {@link BaseKernel.shutdown}. */
 	shutdownGraceMs?: number;
