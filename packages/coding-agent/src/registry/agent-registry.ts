@@ -596,6 +596,14 @@ export class AgentRegistry {
 		this.#captureIdentity(ref, session, true);
 	}
 
+	/** Publish a live agent's new transcript without changing its status or scope. */
+	publishSessionFile(id: string, session: AgentSession, sessionFile: string | undefined): void {
+		const ref = this.#refs.get(id);
+		if (sessionFile === undefined || !ref || ref.session !== session || ref.sessionFile === sessionFile) return;
+		this.attachSession(id, session, sessionFile);
+		this.#emit({ type: "status_changed", ref });
+	}
+
 	detachSession(id: string): void {
 		const ref = this.#refs.get(id);
 		if (!ref) return;

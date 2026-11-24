@@ -2178,10 +2178,7 @@ export class AgentSession {
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
 			endConversation: async preserveAgentLineage => {
 				const id = this.#config.agentId;
-				if (preserveAgentLineage && id) {
-					const registry = AgentRegistry.global();
-					if (registry.get(id)?.session === this) registry.attachSession(id, this, this.sessionFile);
-				}
+				if (preserveAgentLineage && id) AgentRegistry.global().publishSessionFile(id, this, this.sessionFile);
 				await this.#conversation.release({ preserveAgentLineage });
 			},
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
@@ -5093,11 +5090,7 @@ export class AgentSession {
 			return false;
 		} finally {
 			if (this.sessionManager.getSessionId() !== sourceSessionId) {
-				const registry = AgentRegistry.global();
-				const ref = agentId ? registry.get(agentId) : undefined;
-				if (agentId && ref?.session === this && ref.sessionFile !== this.sessionFile) {
-					registry.attachSession(agentId, this, this.sessionFile);
-				}
+				if (agentId) AgentRegistry.global().publishSessionFile(agentId, this, this.sessionFile);
 				messages.splice(0, messages.length, ...this.agent.state.messages);
 			}
 		}
