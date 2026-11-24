@@ -108,7 +108,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 		const sessionId = `py-timeout:${crypto.randomUUID()}`;
 
 		const startTime = Date.now();
-		const result = await executePython("import time; time.sleep(10)", {
+		const result = await executePython("import asyncio; await asyncio.sleep(10)", {
 			cwd: tempDir.path(),
 			sessionId,
 			kernelOwnerId: PYTHON_OWNER,
@@ -127,7 +127,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 		const controller = new AbortController();
 
 		const startTime = Date.now();
-		const result = await executePython("import time; print('RUNNING', flush=True); time.sleep(10)", {
+		const result = await executePython("import asyncio; print('RUNNING', flush=True); await asyncio.sleep(10)", {
 			cwd: tempDir.path(),
 			sessionId,
 			kernelOwnerId: PYTHON_OWNER,

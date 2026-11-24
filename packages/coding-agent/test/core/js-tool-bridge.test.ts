@@ -126,7 +126,8 @@ describe("callSessionTool", () => {
 	});
 
 	it("rejects SearchTool arguments with fields from another search type", async () => {
-		const session = createSession([]);
+		using tempDir = TempDir.createSync("@js-tool-bridge-invalid-search-");
+		const session: ToolSession = { ...createSession([]), cwd: tempDir.path() };
 		const registeredSearch: AnyAgentTool = new SearchTool(session);
 		session.getToolByName = name => (name === "search" ? registeredSearch : undefined);
 

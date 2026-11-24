@@ -11,7 +11,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { SecretRequestTool } from "@veyyon/coding-agent/tools/agent/secret-request";
-import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolSession } from "@veyyon/coding-agent/tools/index";
+import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolFactory, type ToolSession } from "@veyyon/coding-agent/tools/index";
 import { GithubTool } from "@veyyon/coding-agent/tools/web/gh";
 import { ArgotSession } from "argot";
 import { makeToolSession } from "./tool-session";
@@ -43,6 +43,16 @@ const CONSTRUCTOR_FALLBACKS: Partial<Record<string, (session: ToolSession) => To
 	github: session => new GithubTool(session),
 	secret_request: session => new SecretRequestTool(session),
 };
+
+export async function constructToolForSchemaSweep(
+	name: string,
+	factory: ToolFactory,
+	session: ToolSession,
+): Promise<Tool | null> {
+	const tool = await factory(session);
+	if (tool || !Object.hasOwn(CONSTRUCTOR_FALLBACKS, name)) return tool;
+	return CONSTRUCTOR_FALLBACKS[name]!(session);
+}
 
 export interface EveryToolSweep {
 	/** Every tool a factory returned, in factory order. */
@@ -84,12 +94,11 @@ export async function constructEveryTool(profileDir: string): Promise<EveryToolS
 	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
 		let tool: Tool | null;
 		try {
-			tool = await factory(session);
+			tool = await constructToolForSchemaSweep(name, factory, session);
 		} catch {
 			sweep.unconstructable.push(name);
 			continue;
 		}
-		if (!tool && Object.hasOwn(CONSTRUCTOR_FALLBACKS, name)) tool = CONSTRUCTOR_FALLBACKS[name]!(session);
 		if (tool) sweep.tools.push(tool);
 		else sweep.notRegistered.push(name);
 	}

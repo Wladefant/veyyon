@@ -82,7 +82,16 @@ describe("browser tool schema", () => {
 		const tool = new BrowserTool(makeSession());
 		const wire = toolWireSchema(tool);
 		const app = (wire.properties as Record<string, { properties?: Record<string, unknown> }>).app;
-		expect(Object.keys(app.properties ?? {}).sort()).toEqual(["args", "cdp_url", "path", "target"]);
+		expect(Object.keys(app.properties ?? {}).sort()).toEqual([
+			"args",
+			"cdp_url",
+			"extension",
+			"instance",
+			"instance_id",
+			"path",
+			"profile",
+			"target",
+		]);
 		expect(validateJsonSchemaValue(wire, { action: "unsupported" }).success).toBe(false);
 		expect(() =>
 			validateToolCall([tool], {
@@ -129,7 +138,7 @@ describe("browser tool schema", () => {
 			arguments: {
 				action: "open",
 				name: "known-route",
-				app: { path: "/valid/app", extension: true, unexpected: true },
+				app: { path: "/valid/app", unexpected: true },
 			},
 		});
 		expect(args).toEqual({
@@ -214,6 +223,7 @@ describe("browser tool schema", () => {
 				code: "return 1;",
 				timeout: null,
 				all: null,
+				approved_tab_ids: null,
 				kill: null,
 			}).success,
 		).toBe(true);

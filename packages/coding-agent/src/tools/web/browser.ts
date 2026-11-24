@@ -197,6 +197,9 @@ function resolveBrowserKind(
 	if (app?.instance || app?.instance_id || app?.profile) {
 		throw new ToolError("app.instance, app.instance_id, and app.profile require app.extension: true.");
 	}
+	if (app !== undefined && !app.path && !app.cdp_url) {
+		throw new ToolError("app requires path, cdp_url, or extension.");
+	}
 	if (app?.cdp_url) {
 		return { kind: "connected", cdpUrl: trimTrailingSlashes(app.cdp_url) };
 	}

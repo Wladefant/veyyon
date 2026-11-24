@@ -12,8 +12,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { parametersWireSchema } from "@veyyon/ai/utils/schema/wire";
-import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, formatDuration, prompt, toError } from "@veyyon/utils";
 import {
 	type BuildIdentity,
 	formatBuildIdentity,
@@ -54,7 +54,7 @@ const DEFAULT_IRC_NOTICE_RUNTIME: IrcNoticeRuntime = {
 	listLiveSessionOwners,
 };
 
-const ircSchema = lazy(() =>
+const ircSchema = toolSchema("irc", () =>
 	type({
 		op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
 		"to?": type("string").describe(
@@ -131,7 +131,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		return ircSchema.value;
 	}
 	get wireParameters(): Record<string, unknown> {
-		return parametersWireSchema(ircSchema.value);
+		return ircSchema.wire;
 	}
 	readonly strict = true;
 	// Keep fire-and-forget delivery results out of the IRC wait interrupt path.

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseInstalledPluginsRegistry } from "@veyyon/kernel/loader/plugins/installed-registry";
-import type { ProjectFileSnapshot } from "./project-trust";
+import { type ProjectFileSnapshot, realProjectPath } from "./project-trust";
 import { hashBoundedFolder } from "./bounded-folder-hash";
 
 export const PROJECT_PLUGIN_LIMITS = { maxDepth: 8, maxFiles: 256, maxFileBytes: 1024 * 1024, maxTotalBytes: 16 * 1024 * 1024 } as const;
@@ -16,7 +16,7 @@ export async function describeProjectPluginRegistry(
 	let realRegistryPath: string;
 	let bytes: Buffer;
 	try {
-		realRegistryPath = await fs.realpath(registryPath);
+		realRegistryPath = await realProjectPath(registryPath);
 		const registryStat = await fs.stat(realRegistryPath);
 		if (!registryStat.isFile()) return null;
 		const relativeRegistry = path.relative(canonicalRoot, realRegistryPath);
@@ -40,7 +40,7 @@ export async function describeProjectPluginRegistry(
 			const resolved = path.resolve(registryDir, entry.installPath);
 			let realPath: string;
 			try {
-				realPath = await fs.realpath(resolved);
+				realPath = await realProjectPath(resolved);
 			} catch {
 				return null;
 			}
