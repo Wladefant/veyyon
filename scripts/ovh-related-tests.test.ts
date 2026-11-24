@@ -77,7 +77,8 @@ describe("OVH related-test selector", () => {
 		const changedTest = "scripts/ovh-test-shards.test.ts";
 		const rootChangelog = "CHANGELOG.md";
 		const memberChangelog = "packages/coding-agent/CHANGELOG.md";
-		const output = runSelector([changedFile, changedTest, rootChangelog, memberChangelog]);
+		const wireChangelog = "contracts/wire/CHANGELOG.md";
+		const output = runSelector([changedFile, changedTest, rootChangelog, memberChangelog, wireChangelog]);
 		const selectedTests = parseSelectedTests(output);
 		const count = selectedTests.length;
 
@@ -90,6 +91,7 @@ describe("OVH related-test selector", () => {
 		expect(selectedTests).toContain(changedTest);
 		expect(output).toContain(`${rootChangelog}: transitive; transitive tests=0; selected=0`);
 		expect(output).toContain(`${memberChangelog}: transitive; transitive tests=6; selected=6`);
+		expect(output).toContain(`${wireChangelog}: transitive; transitive tests=5; selected=5`);
 		expect(selectedTests).toContain("scripts/changelog-version-headings-are-unique.test.ts");
 		expect(selectedTests).toContain("scripts/release-changelog.test.ts");
 		expect(selectedTests).toContain("apps/site/deploy.test.ts");
