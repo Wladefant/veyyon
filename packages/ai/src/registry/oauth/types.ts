@@ -55,6 +55,7 @@ export type OAuthAuthInfo = {
 	 * so viewport truncation cannot corrupt OAuth query parameters. Undefined
 	 * for flows without a loopback callback server (device code, paste-code
 	 * providers with fixed non-loopback redirects, etc.).
+	 * Treat this URL as sensitive: it grants access to the pending authorization URL.
 	 */
 	launchUrl?: string;
 	instructions?: string;

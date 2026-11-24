@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Require a per-attempt token for loopback OAuth launch shortcuts to protect the pending authorization URL ([#1149](https://github.com/Wladefant/veyyon/issues/1149)).
+
 ## [1.12.2] - 2026-11-21
 
 ### Fixed
