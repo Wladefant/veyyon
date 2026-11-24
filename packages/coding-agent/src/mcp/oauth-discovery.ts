@@ -138,18 +138,25 @@ function challengeEndpoints(params: ReadonlyMap<string, string>) {
 	};
 }
 
+function challengeResourceMetadata(params: ReadonlyMap<string, string>): string | undefined {
+	const url = params.get("resource_metadata");
+	return url && /^https?:/i.test(url) && URL.canParse(url) ? url : undefined;
+}
+
 function readBearerParams(error: Error): ReadonlyMap<string, string> {
 	const header = error instanceof MCPHttpFailure ? error.wwwAuthenticate : leadingAuthChallenge(error.message);
-	let fallback: ReadonlyMap<string, string> | undefined;
+	let metadataChallenge: ReadonlyMap<string, string> | undefined;
+	let scopeChallenge: ReadonlyMap<string, string> | undefined;
 	for (const { scheme, params } of header ? readAuthChallenges(header) : []) {
 		if (scheme !== "bearer") continue;
 		const { authorizationUrl, tokenUrl } = challengeEndpoints(params);
 		if (authorizationUrl && tokenUrl && URL.canParse(authorizationUrl) && URL.canParse(tokenUrl)) return params;
-		if (!fallback && (params.has("resource_metadata") || params.has("scope") || params.has("scopes"))) {
-			fallback = params;
-		}
+		// Prefer complete endpoints, then a discovery URL, then scopes alone.
+		// Within a tier, keep the first challenge in the header.
+		if (!metadataChallenge && challengeResourceMetadata(params)) metadataChallenge = params;
+		if (!scopeChallenge && (params.has("scope") || params.has("scopes"))) scopeChallenge = params;
 	}
-	return fallback ?? new Map();
+	return metadataChallenge ?? scopeChallenge ?? new Map();
 }
 
 /** Read the OAuth scope requested by a Bearer challenge, not the response body. */
@@ -297,7 +304,7 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 
 	const authServerUrl = extractMcpAuthServerUrl(error, serverUrl);
 	const challengeValues = readBearerParams(error);
-	const resourceMetadataUrl = challengeValues.get("resource_metadata");
+	const resourceMetadataUrl = challengeResourceMetadata(challengeValues);
 	const oauth = readOAuthEndpoints(error, challengeValues);
 	const challengeScopes = challengeValues.get("scope") ?? challengeValues.get("scopes");
 

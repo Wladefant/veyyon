@@ -262,6 +262,38 @@ describe("WWW-Authenticate scopes", () => {
 		expect(result.oauth).toBeUndefined();
 		expect(result.scopes).toBe("read");
 	});
+
+	const challenges = {
+		direct:
+			'Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=direct',
+		metadata: 'Bearer resource_metadata="https://mcp.example.com/current", scope=metadata',
+		scope: "Bearer scope=standalone",
+		incomplete: 'Bearer realm="https://legacy.example.com/authorize", resource_metadata=invalid',
+	};
+	it.each([
+		["direct", "metadata", "direct"],
+		["metadata", "direct", "direct"],
+		["direct", "scope", "direct"],
+		["scope", "direct", "direct"],
+		["direct", "incomplete", "direct"],
+		["incomplete", "direct", "direct"],
+		["metadata", "scope", "metadata"],
+		["scope", "metadata", "metadata"],
+		["metadata", "incomplete", "metadata"],
+		["incomplete", "metadata", "metadata"],
+		["scope", "incomplete", "scope"],
+		["incomplete", "scope", "scope"],
+	] as const)("selects %s + %s as %s without mixing parameters", (first, second, selected) => {
+		const auth = analyzeAuthError(
+			new Error(`HTTP 401: WWW-Authenticate: ${challenges[first]}, ${challenges[second]}`),
+		);
+		expect(auth.scopes).toBe(selected === "scope" ? "standalone" : selected);
+		expect(auth.resourceMetadataUrl).toBe(selected === "metadata" ? "https://mcp.example.com/current" : undefined);
+		expect(auth.oauth?.authorizationUrl).toBe(
+			selected === "direct" ? "https://auth.example.com/authorize" : undefined,
+		);
+		expect(auth.oauth?.tokenUrl).toBe(selected === "direct" ? "https://auth.example.com/token" : undefined);
+	});
 });
 
 describe("resource_metadata chain", () => {
