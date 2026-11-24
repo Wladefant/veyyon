@@ -128,12 +128,14 @@ export async function postJsonRpc(
 	let response = await sendJsonRpc(target, url, body, signal);
 	const refresh = response.status === 401 || response.status === 403 ? target.authRefresh() : undefined;
 	if (refresh) {
-		const refreshed = await refresh();
+		const refreshed = await untilAborted(signal, refresh);
 		if (refreshed) {
-			await response.body?.cancel();
+			await untilAborted(signal, () => response.body?.cancel() ?? Promise.resolve());
 			target.adoptHeaders(refreshed);
 			const retryBody =
-				"params" in body ? { ...body, params: await rebuildMCPToolCallParamsForAttempt(body.params) } : body;
+				"params" in body
+					? { ...body, params: await untilAborted(signal, () => rebuildMCPToolCallParamsForAttempt(body.params)) }
+					: body;
 			response = await sendJsonRpc(target, url, retryBody, signal);
 		}
 	}

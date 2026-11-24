@@ -2363,6 +2363,7 @@ export class MCPManager {
 
 		const attempt = this.#doReconnect(name);
 		this.#pendingReconnections.set(name, attempt);
+		this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
 		return attempt.finally(() => this.#pendingReconnections.delete(name));
 	}
 

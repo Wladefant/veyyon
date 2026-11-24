@@ -260,7 +260,11 @@ test("MCP proxy tool times out when transport authentication hook stalls", async
 	const timeout = 50;
 	const config = { type: "http" as const, url: `http://127.0.0.1:${port}/mcp`, timeout };
 	const transport = new HttpTransport(config);
-	transport.onAuthError = () => Promise.withResolvers<Record<string, string> | null>().promise;
+	const authHookEntered = Promise.withResolvers<void>();
+	transport.onAuthError = () => {
+		authHookEntered.resolve();
+		return Promise.withResolvers<Record<string, string> | null>().promise;
+	};
 	const manager = new MCPManager(process.cwd());
 	mockSourceTool(manager, {
 		name: "test-server",
@@ -274,13 +278,16 @@ test("MCP proxy tool times out when transport authentication hook stalls", async
 		const [proxy] = createMCPProxyTools(manager);
 		if (!proxy?.execute) throw new Error("Tool execute method missing");
 
-		const result = await proxy.execute("call_stall", {}, undefined, {} as CustomToolContext);
+		const pending = proxy.execute("call_stall", {}, undefined, {} as CustomToolContext);
+		await authHookEntered.promise;
+		const result = await pending;
 		expect(result.details?.isError).toBe(true);
 		const stallContent = result.content[0];
 		if (stallContent?.type !== "text") {
 			throw new Error("Expected text content in stall result");
 		}
-		expect(stallContent.text).toMatch(/did not complete request "tools\/call" within 50ms/);
+		expect(stallContent.text).toContain("outcome unknown");
+		expect(stallContent.text).toContain("Do not automatically repeat this call");
 	} finally {
 		await transport.close();
 		await closeServer(server);
@@ -452,7 +459,8 @@ test("MCP proxy handles concurrent requests where one stalls and times out while
 		if (stallContent?.type !== "text") {
 			throw new Error("Expected text content in stall result");
 		}
-		expect(stallContent.text).toMatch(/did not complete request "tools\/call" within 50ms/);
+		expect(stallContent.text).toContain("outcome unknown");
+		expect(stallContent.text).toContain("Do not automatically repeat this call");
 
 		expect(okResult.details?.isError).not.toBe(true);
 		expect(okResult.content).toEqual([{ type: "text", text: "success" }]);
