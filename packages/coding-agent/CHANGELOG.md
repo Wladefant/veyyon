@@ -11,7 +11,7 @@
 - Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
-- Match CLI help and completion to command flags, separate MCP event wiring from startup, and account for more session subprocesses in the CPU budget ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Match CLI help and completion to command metadata, including the terminal-control summary. Separate MCP event wiring from startup and account for more session subprocesses in the CPU budget ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ## [1.12.3] - 2026-11-21
 

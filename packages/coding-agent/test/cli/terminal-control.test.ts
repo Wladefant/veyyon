@@ -471,7 +471,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 		it("is registered in top-level commands table", () => {
 			const entry = commands.find(e => e.name === "terminal-control");
 			expect(entry).toBeDefined();
-			expect(entry?.summary?.description).toContain("Rotate");
+			expect(entry?.summary?.description).toBe("Manage and rotate terminal control session credentials");
 		});
 
 		it("rotates credentials through runCli, emitting only redacted receipt, changing token, and enabling new ping", async () => {
