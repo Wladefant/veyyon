@@ -37,6 +37,7 @@ import { bashApprovalDecision } from "../src/tools/shell/bash";
 import type { BashRiskSeverity, FlaggedBashPattern } from "../src/tools/shell/bash-guard";
 import {
 	FLAGGED_BASH_PATTERNS,
+	findCriticalBashRisk,
 	findFlaggedBashPattern,
 	PROTECTED_HOME_DIRECTORIES,
 	PROTECTED_ROOTS,
@@ -321,10 +322,11 @@ describe("the yolo floor under a recursive rewrite", () => {
 		expect(rung('chgrp -R staff "$UNSET_PREFIX/"')).toBe("critical");
 	});
 
-	/** Same reasoning for the home directories, reached through the home reading. */
-	it("stops yolo for a credentials or protected home directory under an unset prefix", () => {
+	// Use a fixed home for the classifier, not the host's home directory.
+	it("classifies an unset prefix before a protected home component as critical", () => {
 		for (const directory of [...SECRET_HOME_DIRECTORIES, ...PROTECTED_HOME_DIRECTORIES]) {
-			expect(rung(`chgrp -R staff "$UNSET_PREFIX${HOME}/${directory}"`)).toBe("critical");
+			const risk = findCriticalBashRisk(`chgrp -R staff "$UNSET_PREFIX/${directory}"`, HOME, [], {});
+			expect(risk?.severity).toBe("destroys");
 		}
 	});
 
