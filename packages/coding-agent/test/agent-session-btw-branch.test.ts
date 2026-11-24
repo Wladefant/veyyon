@@ -17,7 +17,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Container, type TUI } from "@veyyon/tui";
-import { Snowflake } from "@veyyon/utils";
+import { Snowflake, withTimeout } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -390,7 +390,9 @@ describe("AgentSession.branchFromBtw", () => {
 			},
 		});
 		const manager = activeSession.sessionManager;
-		manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		const seed = { role: "user" as const, content: "seed", timestamp: Date.now() };
+		manager.appendMessage(seed);
+		activeSession.agent.replaceMessages([seed]);
 		await manager.ensureOnDisk();
 		const originalFile = activeSession.sessionFile;
 		const flushStarted = Promise.withResolvers<void>();
@@ -409,9 +411,9 @@ describe("AgentSession.branchFromBtw", () => {
 			manager.getSessionId(),
 		);
 		try {
-			await flushStarted.promise;
+			await withTimeout(flushStarted.promise, 10_000, "Branch never reached the pending flush");
 			await activeSession.steer("new user work");
-			await providerStarted.promise;
+			await withTimeout(providerStarted.promise, 10_000, "Queued steer never started a provider turn");
 			flushRelease.resolve();
 
 			await expect(branch).rejects.toThrow("Cannot branch /btw");
