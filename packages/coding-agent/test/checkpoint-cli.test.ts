@@ -98,8 +98,11 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 	process.env.VEYYON_CHECKPOINT_KEY = Buffer.alloc(32).toString("base64");
 	process.env.VEYYON_CHECKPOINT_NODE = "transfer-owner";
 	const objects = new Map<string, Uint8Array>();
-	let head: { sequence: number; manifestHash: string; manifest: { objects: { hash: string; size: number }[] } } | null =
-		null;
+	let head: {
+		sequence: number;
+		manifestHash: string;
+		manifest: { objects: { hash: string; size: number }[] };
+	} | null = null;
 	let leaseOwner = "transfer-owner";
 	let leaseEpoch = 1;
 	let staleTransferResponses = 1;
@@ -108,8 +111,7 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 		const path = new URL(String(input)).pathname;
 		if (path.endsWith("/lease")) {
 			const request = JSON.parse(String(init?.body)) as { ownerNode: string };
-			if (request.ownerNode !== leaseOwner)
-				return Response.json({ error: "owned" }, { status: 409 });
+			if (request.ownerNode !== leaseOwner) return Response.json({ error: "owned" }, { status: 409 });
 			return Response.json({
 				ownerNode: leaseOwner,
 				epoch: leaseEpoch,
@@ -187,12 +189,14 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
 		await runCheckpointCommand({ action: "export", sessionFile: source });
 		expect(Buffer.from(await Bun.file(source).arrayBuffer())).toEqual(sourceBytes);
-		await expect(runCheckpointCommand({
-			action: "handoff",
-			id: "transfer",
-			sessionFile: source,
-			targetNode: "destination",
-		})).rejects.toThrow(/409/);
+		await expect(
+			runCheckpointCommand({
+				action: "handoff",
+				id: "transfer",
+				sessionFile: source,
+				targetNode: "destination",
+			}),
+		).rejects.toThrow(/409/);
 		await assertSourceRetained();
 		await runCheckpointCommand({
 			action: "handoff",
@@ -204,7 +208,9 @@ test("an interrupted handoff preserves source journal data and avoids overwritin
 		await assertSourceRetained();
 		process.env.VEYYON_CHECKPOINT_NODE = "destination";
 		await runCheckpointCommand({ action: "restore", id: "transfer", output: destination });
-		const ownership = JSON.parse(await Bun.file(join(destination, "sessions", "checkpoint-ownership.json")).text()) as {
+		const ownership = JSON.parse(
+			await Bun.file(join(destination, "sessions", "checkpoint-ownership.json")).text(),
+		) as {
 			version: number;
 			sessionId: string;
 			targetNode: string;

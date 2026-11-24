@@ -33,19 +33,33 @@ function commitHeadForRequest(init?: RequestInit) {
 describe("cloud checkpoints", () => {
 	test("the shared capture filter rejects private credential material before workspace reads", () => {
 		const privatePaths = [
-			".ssh/id_ed25519", ".ssh/id_rsa", "project/.SSH/config",
-			".npmrc", "src/.netrc", ".pypirc", ".aws/credentials",
-			".azure/accessTokens.json", ".gnupg/private-keys-v1.d/private.key",
-			".kube/config", ".docker/config.json", ".terraform/terraform.tfstate",
-			".terraform.d/credentials.tfrc.json", ".git-credentials", ".gitconfig",
+			".ssh/id_ed25519",
+			".ssh/id_rsa",
+			"project/.SSH/config",
+			".npmrc",
+			"src/.netrc",
+			".pypirc",
+			".aws/credentials",
+			".azure/accessTokens.json",
+			".gnupg/private-keys-v1.d/private.key",
+			".kube/config",
+			".docker/config.json",
+			".terraform/terraform.tfstate",
+			".terraform.d/credentials.tfrc.json",
+			".git-credentials",
+			".gitconfig",
 			"project\\\\.SSH\\\\id_ed25519",
 		];
 		const safePaths = [
-			"src/a.ts", "docs/.ssh-guide.md", "src/npmrc-example.txt",
-			".github/workflows/ci.yml", "src/aws-client.ts",
+			"src/a.ts",
+			"docs/.ssh-guide.md",
+			"src/npmrc-example.txt",
+			".github/workflows/ci.yml",
+			"src/aws-client.ts",
 		];
 		const files = [...privatePaths, ...safePaths].map(path => ({
-			path, content: new Uint8Array(),
+			path,
+			content: new Uint8Array(),
 		}));
 		expect(filterCheckpointFiles(files).map(file => file.path)).toEqual(safePaths);
 	});
@@ -55,37 +69,51 @@ describe("cloud checkpoints", () => {
 			let transfers = 0;
 			const fake: CheckpointFetch = async (input, init) => {
 				const path = new URL(String(input)).pathname;
-				if (path.endsWith("/lease")) return Response.json({
-					ownerNode: "00000000-0000-4000-8000-00000000000a", epoch: 3, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
-				});
+				if (path.endsWith("/lease"))
+					return Response.json({
+						ownerNode: "00000000-0000-4000-8000-00000000000a",
+						epoch: 3,
+						expiresAt: "2099-01-01T00:00:00Z",
+						headSequence: 0,
+						manifestHash: "",
+					});
 				if (path.endsWith("/transfer")) {
 					transfers++;
 					const body = JSON.parse(String(init?.body));
 					expect(body).toMatchObject({
-						ownerNode: "00000000-0000-4000-8000-00000000000a", epoch: 3, targetNode: "target-node",
+						ownerNode: "00000000-0000-4000-8000-00000000000a",
+						epoch: 3,
+						targetNode: "target-node",
 						transferId: "transfer-id",
 					});
 					return Response.json({
-						ownerNode: "target-node", targetNode: "target-node",
-						transferId: "transfer-id", epoch: 4,
-						expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+						ownerNode: "target-node",
+						targetNode: "target-node",
+						transferId: "transfer-id",
+						epoch: 4,
+						expiresAt: "2099-01-01T00:00:00Z",
+						headSequence: 0,
+						manifestHash: "",
 					});
 				}
 				throw new Error("Unexpected authority endpoint");
 			};
 			const client = new CheckpointClient({
-				baseUrl: "https://checkpoint.invalid", token: "test",
-				key: new Uint8Array(32), fetch: fake,
+				baseUrl: "https://checkpoint.invalid",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
 			});
 			if (withCachedSource) await client.acquireLease("s", "00000000-0000-4000-8000-00000000000a");
-			const transferred = await client.transferLease(
-				"s", "target-node", "c".repeat(16), "transfer-id",
-				{ ownerNode: "00000000-0000-4000-8000-00000000000a", epoch: 3 },
-			);
+			const transferred = await client.transferLease("s", "target-node", "c".repeat(16), "transfer-id", {
+				ownerNode: "00000000-0000-4000-8000-00000000000a",
+				epoch: 3,
+			});
 			expect(transferred).toMatchObject({ ownerNode: "target-node", epoch: 4 });
 			expect(transfers).toBe(1);
-			await expect(client.assertWritable("s", 3, "00000000-0000-4000-8000-00000000000a")).rejects.toThrow(/lease lost/);
+			await expect(client.assertWritable("s", 3, "00000000-0000-4000-8000-00000000000a")).rejects.toThrow(
+				/lease lost/,
+			);
 		}
 	});
 
@@ -96,8 +124,11 @@ describe("cloud checkpoints", () => {
 			if (path.endsWith("/lease")) {
 				const { ownerNode } = JSON.parse(String(init?.body));
 				return Response.json({
-					ownerNode, epoch: ownerNode === "00000000-0000-4000-8000-00000000000a" ? 1 : 2,
-					expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
+					ownerNode,
+					epoch: ownerNode === "00000000-0000-4000-8000-00000000000a" ? 1 : 2,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 				});
 			}
 			if (path.endsWith("/transfer")) {
@@ -107,36 +138,47 @@ describe("cloud checkpoints", () => {
 			throw new Error("Unexpected authority endpoint");
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test",
-			key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		const old = await client.acquireLease("s", "00000000-0000-4000-8000-00000000000a");
 		const next = await client.acquireLease("s", "00000000-0000-4000-8000-00000000000b");
-		await expect(client.transferLease(
-			"s", "target-node", "c".repeat(16), "transfer-id",
-			{ ownerNode: old.ownerNode, epoch: old.epoch },
-		)).rejects.toThrow(/source lease changed/);
+		await expect(
+			client.transferLease("s", "target-node", "c".repeat(16), "transfer-id", {
+				ownerNode: old.ownerNode,
+				epoch: old.epoch,
+			}),
+		).rejects.toThrow(/source lease changed/);
 		expect(transfers).toBe(0);
-		await expect(client.assertWritable("s", next.epoch, "00000000-0000-4000-8000-00000000000b")).resolves.toBeUndefined();
+		await expect(
+			client.assertWritable("s", next.epoch, "00000000-0000-4000-8000-00000000000b"),
+		).resolves.toBeUndefined();
 	});
 
 	test("a late valid or invalid lease reply cannot change a newer owner's fence", async () => {
 		for (const staleReply of ["valid", "wrong-owner"] as const) {
 			let releaseOld!: (response: Response) => void;
-			const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+			const pendingOld = new Promise<Response>(resolve => {
+				releaseOld = resolve;
+			});
 			const grant = (ownerNode: string, epoch: number) => ({
-				ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0, manifestHash: "",
+				ownerNode,
+				epoch,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
 			});
 			const fake: CheckpointFetch = async (_input, init) => {
 				const { ownerNode } = JSON.parse(String(init?.body));
-				return ownerNode === "owner-old"
-					? pendingOld
-					: Response.json(grant("owner-new", 9));
+				return ownerNode === "owner-old" ? pendingOld : Response.json(grant("owner-new", 9));
 			};
 			const client = new CheckpointClient({
-				baseUrl: "https://checkpoint.invalid", token: "test",
-				key: new Uint8Array(32), fetch: fake,
+				baseUrl: "https://checkpoint.invalid",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
 			});
 			const earlier = client.acquireLease("s", "owner-old");
 			const later = await client.acquireLease("s", "owner-new");
@@ -151,7 +193,9 @@ describe("cloud checkpoints", () => {
 
 	test("a pending one-use claim blocks competing claims, leases and transfers before dispatch", async () => {
 		let releaseGrant!: (result: Response) => void;
-		const pendingGrant = new Promise<Response>(resolve => { releaseGrant = resolve; });
+		const pendingGrant = new Promise<Response>(resolve => {
+			releaseGrant = resolve;
+		});
 		const requests: string[] = [];
 		const fake: CheckpointFetch = async input => {
 			const action = new URL(String(input)).pathname.split("/").pop()!;
@@ -160,24 +204,51 @@ describe("cloud checkpoints", () => {
 			throw new Error(`Unexpected overlapping authority request: ${action}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test",
-			key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
-		const primary = client.claimTransfer("s", "target-node", "transfer-id", "c".repeat(16), 4, "00000000-0000-4000-8000-00000000000a");
-		await expect(client.claimTransfer(
-			"s", "target-node", "transfer-id", "c".repeat(16), 4, "00000000-0000-4000-8000-00000000000b",
-		)).rejects.toThrow(/transfer admission already in flight/);
-		await expect(client.acquireLease("s", "00000000-0000-4000-8000-00000000000b")).rejects.toThrow(/transfer admission already in flight/);
-		await expect(client.transferLease(
-			"s", "target-node", "c".repeat(16), "transfer-id",
-			{ ownerNode: "00000000-0000-4000-8000-00000000000a", epoch: 4 },
-		)).rejects.toThrow(/transfer admission already in flight/);
+		const primary = client.claimTransfer(
+			"s",
+			"target-node",
+			"transfer-id",
+			"c".repeat(16),
+			4,
+			"00000000-0000-4000-8000-00000000000a",
+		);
+		await expect(
+			client.claimTransfer(
+				"s",
+				"target-node",
+				"transfer-id",
+				"c".repeat(16),
+				4,
+				"00000000-0000-4000-8000-00000000000b",
+			),
+		).rejects.toThrow(/transfer admission already in flight/);
+		await expect(client.acquireLease("s", "00000000-0000-4000-8000-00000000000b")).rejects.toThrow(
+			/transfer admission already in flight/,
+		);
+		await expect(
+			client.transferLease("s", "target-node", "c".repeat(16), "transfer-id", {
+				ownerNode: "00000000-0000-4000-8000-00000000000a",
+				epoch: 4,
+			}),
+		).rejects.toThrow(/transfer admission already in flight/);
 		expect(requests).toEqual(["claim"]);
-		releaseGrant(Response.json({
-			ownerNode: "00000000-0000-4000-8000-00000000000a", targetNode: "target-node", transferId: "transfer-id",
-			resumeToken: "r".repeat(16), epoch: 5,
-			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
-		}));
+		releaseGrant(
+			Response.json({
+				ownerNode: "00000000-0000-4000-8000-00000000000a",
+				targetNode: "target-node",
+				transferId: "transfer-id",
+				resumeToken: "r".repeat(16),
+				epoch: 5,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+			}),
+		);
 		const granted = await primary;
 		expect(granted.resumeToken).toBe("r".repeat(16));
 		await expect(client.assertWritable("s", 5, "00000000-0000-4000-8000-00000000000a")).resolves.toBeUndefined();
@@ -187,11 +258,16 @@ describe("cloud checkpoints", () => {
 	test("two actual guards retain winner admission and renewal after late former lease", async () => {
 		for (const staleReply of ["valid", "invalid"] as const) {
 			let releaseOld!: (reply: Response) => void;
-			const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+			const pendingOld = new Promise<Response>(resolve => {
+				releaseOld = resolve;
+			});
 			const actions: string[] = [];
 			const grant = (ownerNode: string, epoch: number) => ({
-				ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0, manifestHash: "",
+				ownerNode,
+				epoch,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
 			});
 			const fake: CheckpointFetch = async (input, init) => {
 				const path = new URL(String(input)).pathname;
@@ -208,14 +284,18 @@ describe("cloud checkpoints", () => {
 				throw new Error("Unexpected authority endpoint");
 			};
 			const client = new CheckpointClient({
-				baseUrl: "https://checkpoint.invalid", token: "test",
-				key: new Uint8Array(32), fetch: fake,
+				baseUrl: "https://checkpoint.invalid",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
 			});
 			const old = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000a");
 			const winner = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000b");
 			const firstAdmission = old.admit();
 			await winner.admit();
-			releaseOld(Response.json(grant(staleReply === "valid" ? "00000000-0000-4000-8000-00000000000a" : "foreign", 1)));
+			releaseOld(
+				Response.json(grant(staleReply === "valid" ? "00000000-0000-4000-8000-00000000000a" : "foreign", 1)),
+			);
 			await expect(firstAdmission).rejects.toThrow(/admission superseded/);
 			await client.assertWritable("s", 2, "00000000-0000-4000-8000-00000000000b");
 			await winner.admit();
@@ -231,29 +311,43 @@ describe("cloud checkpoints", () => {
 	test("a late transfer-claim reply settles only its own grant while competing admissions are refused", async () => {
 		for (const staleReply of ["valid", "wrong-transfer"] as const) {
 			let releaseClaim!: (response: Response) => void;
-			const pendingClaim = new Promise<Response>(resolve => { releaseClaim = resolve; });
+			const pendingClaim = new Promise<Response>(resolve => {
+				releaseClaim = resolve;
+			});
 			const fake: CheckpointFetch = async input => {
 				const path = new URL(String(input)).pathname;
 				if (path.endsWith("/claim")) return pendingClaim;
-				if (path.endsWith("/lease")) return Response.json({
-					ownerNode: "owner-new", epoch: 9, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
-				});
+				if (path.endsWith("/lease"))
+					return Response.json({
+						ownerNode: "owner-new",
+						epoch: 9,
+						expiresAt: "2099-01-01T00:00:00Z",
+						headSequence: 0,
+						manifestHash: "",
+					});
 				throw new Error("Unexpected authority endpoint");
 			};
 			const client = new CheckpointClient({
-				baseUrl: "https://checkpoint.invalid", token: "test",
-				key: new Uint8Array(32), fetch: fake,
+				baseUrl: "https://checkpoint.invalid",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
 			});
 			const claim = client.claimTransfer("s", "target-node", "transfer-id", "c".repeat(16), 4, "owner-old");
 			// An unresolved one-use claim is not superseded: a competing admission is refused before dispatch.
 			await expect(client.acquireLease("s", "owner-new")).rejects.toThrow(/transfer admission already in flight/);
-			releaseClaim(Response.json({
-				ownerNode: "owner-old", targetNode: "target-node",
-				transferId: staleReply === "valid" ? "transfer-id" : "different-transfer",
-				resumeToken: "r".repeat(16), epoch: 5,
-				expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
-			}));
+			releaseClaim(
+				Response.json({
+					ownerNode: "owner-old",
+					targetNode: "target-node",
+					transferId: staleReply === "valid" ? "transfer-id" : "different-transfer",
+					resumeToken: "r".repeat(16),
+					epoch: 5,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+				}),
+			);
 			if (staleReply === "valid") {
 				await expect(claim).resolves.toMatchObject({
 					lease: { ownerNode: "owner-old", epoch: 5 },
@@ -263,7 +357,10 @@ describe("cloud checkpoints", () => {
 				await expect(claim).rejects.toThrow(/transfer grant identity mismatch/);
 			}
 			// Only after the claim settles can an ordinary admission take the fence.
-			await expect(client.acquireLease("s", "owner-new")).resolves.toMatchObject({ ownerNode: "owner-new", epoch: 9 });
+			await expect(client.acquireLease("s", "owner-new")).resolves.toMatchObject({
+				ownerNode: "owner-new",
+				epoch: 9,
+			});
 			await expect(client.assertWritable("s", 9, "owner-new")).resolves.toBeUndefined();
 			await expect(client.assertWritable("s", 5, "owner-old")).rejects.toThrow(/lease lost/);
 		}
@@ -271,17 +368,26 @@ describe("cloud checkpoints", () => {
 
 	test("explicit lease loss invalidates a still-pending admission response", async () => {
 		let releaseOld!: (response: Response) => void;
-		const pendingOld = new Promise<Response>(resolve => { releaseOld = resolve; });
+		const pendingOld = new Promise<Response>(resolve => {
+			releaseOld = resolve;
+		});
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test",
-			key: new Uint8Array(32), fetch: async () => pendingOld,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: async () => pendingOld,
 		});
 		const earlier = client.acquireLease("s", "owner-old");
 		client.loseLease("s");
-		releaseOld(Response.json({
-			ownerNode: "owner-old", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-			headSequence: 0, manifestHash: "",
-		}));
+		releaseOld(
+			Response.json({
+				ownerNode: "owner-old",
+				epoch: 1,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+			}),
+		);
 		await expect(earlier).rejects.toThrow(/admission superseded/);
 		await expect(client.assertWritable("s", 1, "owner-old")).rejects.toThrow(/lease lost/);
 	});
@@ -293,8 +399,11 @@ describe("cloud checkpoints", () => {
 			requests.push(path);
 			if (path.endsWith("/lease"))
 				return Response.json({
-					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 99, manifestHash: "",
+					ownerNode: "node-a",
+					epoch: 1,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 99,
+					manifestHash: "",
 				});
 			if (path.includes("/objects/")) return new Response(null, { status: 201 });
 			if (path.endsWith("/commit")) {
@@ -306,7 +415,10 @@ describe("cloud checkpoints", () => {
 			throw new Error(`Unexpected checkpoint request: ${path}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		await client.acquireLease("s", "node-a");
 		for (const invalidId of ["", "bad/path", "x".repeat(129)]) {
@@ -315,19 +427,36 @@ describe("cloud checkpoints", () => {
 		for (const invalidHead of [-1, 0.5, 100, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
 			await expect(client.commit("s", bundle, invalidHead)).rejects.toThrow(/Invalid checkpoint expected head/);
 		}
-		await expect(client.commit("s", {
-			...bundle, native: { ...bundle.native, sessionId: "foreign" },
-		}, 0)).rejects.toThrow(/bundle session identity mismatch/);
-		await expect(client.commit("s", {
-			...bundle, native: { ...bundle.native, header: { ...bundle.native.header, id: "foreign" } },
-		}, 0)).rejects.toThrow(/bundle session identity mismatch/);
+		await expect(
+			client.commit(
+				"s",
+				{
+					...bundle,
+					native: { ...bundle.native, sessionId: "foreign" },
+				},
+				0,
+			),
+		).rejects.toThrow(/bundle session identity mismatch/);
+		await expect(
+			client.commit(
+				"s",
+				{
+					...bundle,
+					native: { ...bundle.native, header: { ...bundle.native.header, id: "foreign" } },
+				},
+				0,
+			),
+		).rejects.toThrow(/bundle session identity mismatch/);
 		expect(requests).toEqual(["/v1/sessions/s/lease"]);
 		// The last legal cloud head still permits sequence 100.
 		expect(await client.commit("s", bundle, 99)).toMatchObject({ sequence: 100 });
 		expect(requests.filter(path => path.includes("/objects/"))).toHaveLength(1);
 		expect(requests.filter(path => path.endsWith("/commit"))).toHaveLength(1);
 		const disabled = new CheckpointClient({
-			baseUrl: "", token: "", key: new Uint8Array(), fetch: fake,
+			baseUrl: "",
+			token: "",
+			key: new Uint8Array(),
+			fetch: fake,
 		});
 		await expect(disabled.commit("s", bundle, 0)).rejects.toThrow(/disabled or not configured/);
 		expect(requests).toHaveLength(3);
@@ -385,14 +514,21 @@ describe("cloud checkpoints", () => {
 		let commits = 0;
 		let releaseReply!: () => void;
 		let commitEntered!: () => void;
-		const replyGate = new Promise<void>(resolve => { releaseReply = resolve; });
-		const entered = new Promise<void>(resolve => { commitEntered = resolve; });
+		const replyGate = new Promise<void>(resolve => {
+			releaseReply = resolve;
+		});
+		const entered = new Promise<void>(resolve => {
+			commitEntered = resolve;
+		});
 		const fake: CheckpointFetch = async (input, init) => {
 			const path = new URL(String(input)).pathname;
 			if (path.endsWith("/lease"))
 				return Response.json({
-					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					ownerNode: "node-a",
+					epoch: 1,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 				});
 			if (path.includes("/objects/")) {
 				uploads++;
@@ -407,7 +543,10 @@ describe("cloud checkpoints", () => {
 			throw new Error(`Unexpected fake authority path: ${path}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		await client.acquireLease("s", "node-a");
 		const first = client.commit("s", bundle, 0);
@@ -430,8 +569,11 @@ describe("cloud checkpoints", () => {
 			const path = new URL(String(input)).pathname;
 			if (path.endsWith("/lease"))
 				return Response.json({
-					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					ownerNode: "node-a",
+					epoch: 1,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 				});
 			if (path.includes("/objects/")) {
 				uploads++;
@@ -444,7 +586,10 @@ describe("cloud checkpoints", () => {
 			throw new Error(`Unexpected fake authority path: ${path}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		await client.acquireLease("s", "node-a");
 		const first = client.commit("s", bundle, 0);
@@ -460,8 +605,11 @@ describe("cloud checkpoints", () => {
 			const path = new URL(String(input)).pathname;
 			if (path.endsWith("/lease"))
 				return Response.json({
-					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					ownerNode: "node-a",
+					epoch: 1,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 				});
 			if (path.includes("/objects/")) return new Response(null, { status: 201 });
 			if (path.endsWith("/commit")) {
@@ -472,7 +620,10 @@ describe("cloud checkpoints", () => {
 			throw new Error(`Unexpected fake authority path: ${path}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		await client.acquireLease("s", "node-a");
 		const first = client.commit("s", bundle, 0);
@@ -486,19 +637,35 @@ describe("cloud checkpoints", () => {
 	test("an unverified 200 commit receipt retains the original idempotency key for reconciliation", async () => {
 		const corruptions = [
 			{ name: "missing receipt", change: (_head: ReturnType<typeof commitHeadForRequest>) => null },
-			{ name: "wrong sequence", change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, sequence: head.sequence + 1 }) },
-			{ name: "wrong manifest hash", change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, manifestHash: "0".repeat(64) }) },
-			{ name: "wrong manifest", change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, manifest: { ...head.manifest, sessionId: "other-session" } }) },
+			{
+				name: "wrong sequence",
+				change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, sequence: head.sequence + 1 }),
+			},
+			{
+				name: "wrong manifest hash",
+				change: (head: ReturnType<typeof commitHeadForRequest>) => ({ ...head, manifestHash: "0".repeat(64) }),
+			},
+			{
+				name: "wrong manifest",
+				change: (head: ReturnType<typeof commitHeadForRequest>) => ({
+					...head,
+					manifest: { ...head.manifest, sessionId: "other-session" },
+				}),
+			},
 		];
 		for (const corruption of corruptions) {
 			let commitCalls = 0;
 			const keys: string[] = [];
 			const fake: CheckpointFetch = async (input, init) => {
 				const path = new URL(String(input)).pathname;
-				if (path.endsWith("/lease")) return Response.json({
-					ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
-				});
+				if (path.endsWith("/lease"))
+					return Response.json({
+						ownerNode: "node-a",
+						epoch: 1,
+						expiresAt: "2099-01-01T00:00:00Z",
+						headSequence: 0,
+						manifestHash: "",
+					});
 				if (path.includes("/objects/")) return new Response(null, { status: 201 });
 				if (path.endsWith("/commit")) {
 					keys.push(JSON.parse(String(init?.body)).idempotencyKey);
@@ -508,7 +675,10 @@ describe("cloud checkpoints", () => {
 				throw new Error(`Unexpected authority call in ${corruption.name}: ${path}`);
 			};
 			const client = new CheckpointClient({
-				baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+				baseUrl: "https://checkpoint.invalid",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
 			});
 			await client.acquireLease("s", "node-a");
 			await expect(client.commit("s", bundle, 0)).rejects.toThrow(/commit receipt mismatch/);
@@ -562,16 +732,16 @@ describe("cloud checkpoints", () => {
 		await expect(client.assertWritable("s1", lease.epoch)).rejects.toThrow(/lease/i);
 	});
 
-
 	test("unparseable lease deadlines cannot authorize checkpoint writes", async () => {
 		let expiresAt = "2099-01-01T00:00:00Z";
-		const fake: CheckpointFetch = async () => Response.json({
-			ownerNode: "node-a",
-			epoch: 4,
-			expiresAt,
-			headSequence: 0,
-			manifestHash: "",
-		});
+		const fake: CheckpointFetch = async () =>
+			Response.json({
+				ownerNode: "node-a",
+				epoch: 4,
+				expiresAt,
+				headSequence: 0,
+				manifestHash: "",
+			});
 		const client = new CheckpointClient({
 			baseUrl: "https://checkpoint.invalid",
 			token: "test",
@@ -590,18 +760,27 @@ describe("cloud checkpoints", () => {
 	});
 	test("rejects invalid authority lease epochs before opening a writable lease", async () => {
 		let epoch: unknown = 4;
-		const fake: CheckpointFetch = async () => Response.json({
-			ownerNode: "node-a", epoch, expiresAt: "2099-01-01T00:00:00Z",
-			headSequence: 0, manifestHash: "",
-		});
+		const fake: CheckpointFetch = async () =>
+			Response.json({
+				ownerNode: "node-a",
+				epoch,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+			});
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		for (const [index, invalid] of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, "4", null].entries()) {
 			epoch = invalid;
 			const id = `invalid-epoch-${index}`;
 			await expect(client.acquireLease(id, "node-a")).rejects.toThrow(/lease fence invalid/);
-			await expect(client.assertWritable(id, typeof invalid === "number" ? invalid : 4)).rejects.toThrow(/lease lost/);
+			await expect(client.assertWritable(id, typeof invalid === "number" ? invalid : 4)).rejects.toThrow(
+				/lease lost/,
+			);
 		}
 		for (const valid of [0, 4]) {
 			epoch = valid;
@@ -612,11 +791,19 @@ describe("cloud checkpoints", () => {
 	});
 	test("renewal rejects an expired authority fence and immediately loses local writability", async () => {
 		let expiresAt = "2099-01-01T00:00:00Z";
-		const fake: CheckpointFetch = async () => Response.json({
-			ownerNode: "node-a", epoch: 4, expiresAt, headSequence: 0, manifestHash: "",
-		});
+		const fake: CheckpointFetch = async () =>
+			Response.json({
+				ownerNode: "node-a",
+				epoch: 4,
+				expiresAt,
+				headSequence: 0,
+				manifestHash: "",
+			});
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		const acquired = await client.acquireLease("s", "node-a");
 		await expect(client.assertWritable("s", acquired.epoch)).resolves.toBeUndefined();
@@ -624,7 +811,6 @@ describe("cloud checkpoints", () => {
 		await expect(client.renewLease("s")).rejects.toThrow(/lease fence invalid/);
 		await expect(client.assertWritable("s", acquired.epoch)).rejects.toThrow(/lease lost/);
 	});
-
 });
 
 test("lease response body remains inside the checkpoint timeout", async () => {
@@ -633,24 +819,38 @@ test("lease response body remains inside the checkpoint timeout", async () => {
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {
 				const timer = setTimeout(() => {
-					controller.enqueue(new TextEncoder().encode(JSON.stringify({
-						ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-						headSequence: 0, manifestHash: "",
-					})));
+					controller.enqueue(
+						new TextEncoder().encode(
+							JSON.stringify({
+								ownerNode: "node-a",
+								epoch: 1,
+								expiresAt: "2099-01-01T00:00:00Z",
+								headSequence: 0,
+								manifestHash: "",
+							}),
+						),
+					);
 					controller.close();
 				}, 200);
-				init?.signal?.addEventListener("abort", () => {
-					aborted = true;
-					clearTimeout(timer);
-					controller.error(new DOMException("synthetic response-body abort", "AbortError"));
-				}, { once: true });
+				init?.signal?.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						clearTimeout(timer);
+						controller.error(new DOMException("synthetic response-body abort", "AbortError"));
+					},
+					{ once: true },
+				);
 			},
 		});
 		return new Response(stream, { status: 200, headers: { "content-type": "application/json" } });
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 40,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 40,
 	});
 	await expect(client.acquireLease("s", "node-a")).rejects.toThrow();
 	expect(aborted).toBe(true);
@@ -659,15 +859,25 @@ test("lease response body remains inside the checkpoint timeout", async () => {
 
 test("checkpoint authority JSON refuses an oversized first chunk without consuming a second", async () => {
 	let pulls = 0;
-	const fake: CheckpointFetch = async () => new Response(new ReadableStream<Uint8Array>({
-		pull(controller) {
-			pulls++;
-			if (pulls === 1) controller.enqueue(new Uint8Array(256 * 1024 + 1));
-			else controller.error(new Error("oversized JSON reader consumed a second chunk"));
-		},
-	}, { highWaterMark: 0 }), { status: 200 });
+	const fake: CheckpointFetch = async () =>
+		new Response(
+			new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						pulls++;
+						if (pulls === 1) controller.enqueue(new Uint8Array(256 * 1024 + 1));
+						else controller.error(new Error("oversized JSON reader consumed a second chunk"));
+					},
+				},
+				{ highWaterMark: 0 },
+			),
+			{ status: 200 },
+		);
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	await expect(client.acquireLease("s", "node-a")).rejects.toThrow(/JSON exceeds 256 KiB/);
 	expect(pulls).toBe(1);
@@ -676,19 +886,29 @@ test("checkpoint authority JSON refuses an oversized first chunk without consumi
 
 test("checkpoint authority JSON accepts a valid response split across streaming chunks", async () => {
 	const receipt = {
-		ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-		headSequence: 0, manifestHash: "",
+		ownerNode: "node-a",
+		epoch: 1,
+		expiresAt: "2099-01-01T00:00:00Z",
+		headSequence: 0,
+		manifestHash: "",
 	};
 	const bytes = new TextEncoder().encode(JSON.stringify(receipt));
-	const fake: CheckpointFetch = async () => new Response(new ReadableStream<Uint8Array>({
-		start(controller) {
-			controller.enqueue(bytes.subarray(0, 7));
-			controller.enqueue(bytes.subarray(7));
-			controller.close();
-		},
-	}), { status: 200 });
+	const fake: CheckpointFetch = async () =>
+		new Response(
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(bytes.subarray(0, 7));
+					controller.enqueue(bytes.subarray(7));
+					controller.close();
+				},
+			}),
+			{ status: 200 },
+		);
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	expect(await client.acquireLease("s", "node-a")).toEqual(receipt);
 	await expect(client.assertWritable("s", receipt.epoch)).resolves.toBeUndefined();
@@ -703,8 +923,11 @@ test("checkpoint control headers fail closed when custom fetch ignores abort", a
 		return new Promise<Response>(() => {});
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 30,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 30,
 	});
 	await expect(client.acquireLease("s", "node-a")).rejects.toThrow(/timed out/);
 	expect(calls).toBe(1);
@@ -714,7 +937,9 @@ test("checkpoint control headers fail closed when custom fetch ignores abort", a
 
 test("checkpoint object GET headers have a deadline when custom fetch ignores abort", async () => {
 	const manifest = {
-		version: 1, sessionId: "s", sequence: 1,
+		version: 1,
+		sessionId: "s",
+		sequence: 1,
 		objects: [{ hash: "a".repeat(64), size: 32 }],
 	};
 	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
@@ -729,8 +954,11 @@ test("checkpoint object GET headers have a deadline when custom fetch ignores ab
 		throw new Error("Unexpected checkpoint request");
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 30,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 30,
 	});
 	await expect(client.restore("s")).rejects.toThrow(/timed out/);
 	expect(objectGets).toBe(1);
@@ -743,8 +971,11 @@ test("checkpoint object PUT headers have a deadline without acknowledging a comm
 		const path = new URL(String(input)).pathname;
 		if (path.endsWith("/lease"))
 			return Response.json({
-				ownerNode: "node-a", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0, manifestHash: "",
+				ownerNode: "node-a",
+				epoch: 1,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
 			});
 		if (path.includes("/objects/") && init?.method === "PUT") {
 			uploads++;
@@ -754,8 +985,11 @@ test("checkpoint object PUT headers have a deadline without acknowledging a comm
 		throw new Error("Unexpected checkpoint request");
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 30,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 30,
 	});
 	await client.acquireLease("s", "node-a");
 	await expect(client.commit("s", bundle, 0)).rejects.toThrow(/timed out/);
@@ -766,16 +1000,28 @@ test("checkpoint object PUT headers have a deadline without acknowledging a comm
 test("checkpoint JSON reader fails on deadline when fake stream ignores abort", async () => {
 	let cancelled = 0;
 	let pulls = 0;
-	const fake: CheckpointFetch = async () => new Response(new ReadableStream<Uint8Array>({
-		pull() {
-			pulls++;
-			return new Promise<void>(() => {});
-		},
-		cancel() { cancelled++; },
-	}, { highWaterMark: 0 }), { status: 200 });
+	const fake: CheckpointFetch = async () =>
+		new Response(
+			new ReadableStream<Uint8Array>(
+				{
+					pull() {
+						pulls++;
+						return new Promise<void>(() => {});
+					},
+					cancel() {
+						cancelled++;
+					},
+				},
+				{ highWaterMark: 0 },
+			),
+			{ status: 200 },
+		);
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 30,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 30,
 	});
 	await expect(client.acquireLease("s", "node-a")).rejects.toThrow(/timed out/);
 	expect(pulls).toBe(1);
@@ -785,7 +1031,9 @@ test("checkpoint JSON reader fails on deadline when fake stream ignores abort", 
 
 test("checkpoint object reader fails on deadline when fake stream ignores abort", async () => {
 	const manifest = {
-		version: 1, sessionId: "s", sequence: 1,
+		version: 1,
+		sessionId: "s",
+		sequence: 1,
 		objects: [{ hash: "a".repeat(64), size: 32 }],
 	};
 	const manifestHash = new Bun.SHA256().update(JSON.stringify(manifest)).digest("hex");
@@ -796,16 +1044,29 @@ test("checkpoint object reader fails on deadline when fake stream ignores abort"
 		if (path.endsWith("/head")) return Response.json({ sequence: 1, manifestHash, manifest });
 		if (path.includes("/objects/")) {
 			objectGets++;
-			return new Response(new ReadableStream<Uint8Array>({
-				pull() { return new Promise<void>(() => {}); },
-				cancel() { cancelled++; },
-			}, { highWaterMark: 0 }), { status: 200 });
+			return new Response(
+				new ReadableStream<Uint8Array>(
+					{
+						pull() {
+							return new Promise<void>(() => {});
+						},
+						cancel() {
+							cancelled++;
+						},
+					},
+					{ highWaterMark: 0 },
+				),
+				{ status: 200 },
+			);
 		}
 		throw new Error("Unexpected checkpoint request");
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 30,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 30,
 	});
 	await expect(client.restore("s")).rejects.toThrow(/timed out/);
 	expect(objectGets).toBe(1);
@@ -822,20 +1083,26 @@ test("restoration rejects an oversized streaming object without consuming a seco
 		const path = new URL(String(input)).pathname;
 		if (path.endsWith("/head")) return Response.json({ sequence: 1, manifestHash, manifest });
 		if (path.includes("/objects/")) {
-			const stream = new ReadableStream<Uint8Array>({
-				pull(controller) {
-					pulls++;
-					if (pulls === 1) controller.enqueue(new Uint8Array([1, 2]));
-					else controller.error(new Error("an unbounded reader consumed a second object chunk"));
+			const stream = new ReadableStream<Uint8Array>(
+				{
+					pull(controller) {
+						pulls++;
+						if (pulls === 1) controller.enqueue(new Uint8Array([1, 2]));
+						else controller.error(new Error("an unbounded reader consumed a second object chunk"));
+					},
 				},
-			}, { highWaterMark: 0 });
+				{ highWaterMark: 0 },
+			);
 			return new Response(stream, { status: 200 });
 		}
 		return new Response(null, { status: 404 });
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 1000,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 1000,
 	});
 	await expect(client.restore("s")).rejects.toThrow(/Checkpoint object integrity check failed/);
 	expect(pulls).toBe(1);
@@ -857,11 +1124,15 @@ test("restoration aborts a stalled object body before its eventual bytes", async
 						controller.enqueue(new Uint8Array([1]));
 						controller.close();
 					}, 200);
-					init?.signal?.addEventListener("abort", () => {
-						aborted = true;
-						clearTimeout(timer);
-						controller.error(new DOMException("synthetic object-body abort", "AbortError"));
-					}, { once: true });
+					init?.signal?.addEventListener(
+						"abort",
+						() => {
+							aborted = true;
+							clearTimeout(timer);
+							controller.error(new DOMException("synthetic object-body abort", "AbortError"));
+						},
+						{ once: true },
+					);
 				},
 			});
 			return new Response(stream, { status: 200 });
@@ -869,8 +1140,11 @@ test("restoration aborts a stalled object body before its eventual bytes", async
 		return new Response(null, { status: 404 });
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32),
-		fetch: fake, timeoutMs: 40,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
+		timeoutMs: 40,
 	});
 	await expect(client.restore("s")).rejects.toThrow();
 	expect(aborted).toBe(true);
@@ -883,25 +1157,33 @@ test("malformed transfer identities and capabilities fail before a claim request
 		throw new Error("Invalid transfer must never reach the authority");
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	const claim = "a-long-enough-claim-token";
 	const resume = "a-long-enough-resume-capability";
 	for (const epoch of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-		await expect(client.claimTransfer("s", "destination", "transfer-1", claim, epoch, "00000000-0000-4000-8000-00000000000a"))
-			.rejects.toThrow(/Invalid checkpoint transfer identity/);
-		await expect(client.resumeTransfer("s", "destination", "transfer-1", resume, epoch, "00000000-0000-4000-8000-00000000000a"))
-			.rejects.toThrow(/Invalid checkpoint transfer identity/);
+		await expect(
+			client.claimTransfer("s", "destination", "transfer-1", claim, epoch, "00000000-0000-4000-8000-00000000000a"),
+		).rejects.toThrow(/Invalid checkpoint transfer identity/);
+		await expect(
+			client.resumeTransfer("s", "destination", "transfer-1", resume, epoch, "00000000-0000-4000-8000-00000000000a"),
+		).rejects.toThrow(/Invalid checkpoint transfer identity/);
 	}
 	for (const transferId of ["", "path/escape", "space id", "x".repeat(129)]) {
-		await expect(client.claimTransfer("s", "destination", transferId, claim, 2, "00000000-0000-4000-8000-00000000000a"))
-			.rejects.toThrow(/Invalid checkpoint transfer identity/);
+		await expect(
+			client.claimTransfer("s", "destination", transferId, claim, 2, "00000000-0000-4000-8000-00000000000a"),
+		).rejects.toThrow(/Invalid checkpoint transfer identity/);
 	}
 	for (const capability of ["", "short", "x".repeat(129)]) {
-		await expect(client.claimTransfer("s", "destination", "transfer-1", capability, 2, "00000000-0000-4000-8000-00000000000a"))
-			.rejects.toThrow(/Invalid checkpoint transfer capability/);
-		await expect(client.resumeTransfer("s", "destination", "transfer-1", capability, 2, "00000000-0000-4000-8000-00000000000a"))
-			.rejects.toThrow(/Invalid checkpoint transfer capability/);
+		await expect(
+			client.claimTransfer("s", "destination", "transfer-1", capability, 2, "00000000-0000-4000-8000-00000000000a"),
+		).rejects.toThrow(/Invalid checkpoint transfer capability/);
+		await expect(
+			client.resumeTransfer("s", "destination", "transfer-1", capability, 2, "00000000-0000-4000-8000-00000000000a"),
+		).rejects.toThrow(/Invalid checkpoint transfer capability/);
 	}
 	expect(calls).toBe(0);
 });
@@ -911,18 +1193,39 @@ test("checkpoint transfer grants reject an authority response for a different ru
 	const fake: CheckpointFetch = async input => {
 		actions.push(new URL(String(input)).pathname.split("/").pop()!);
 		return Response.json({
-			ownerNode: "00000000-0000-4000-8000-00000000000b", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
-			headSequence: 0, manifestHash: "", resumeToken: "a-long-enough-resume-capability",
+			ownerNode: "00000000-0000-4000-8000-00000000000b",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+			resumeToken: "a-long-enough-resume-capability",
 		});
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	await expect(
-		client.claimTransfer("s1", "destination", "transfer-1", "a-long-enough-claim-token", 4, "00000000-0000-4000-8000-00000000000a"),
+		client.claimTransfer(
+			"s1",
+			"destination",
+			"transfer-1",
+			"a-long-enough-claim-token",
+			4,
+			"00000000-0000-4000-8000-00000000000a",
+		),
 	).rejects.toThrow(/lease owner mismatch/);
 	await expect(
-		client.resumeTransfer("s2", "destination", "transfer-2", "a-long-enough-resume-capability", 4, "00000000-0000-4000-8000-00000000000a"),
+		client.resumeTransfer(
+			"s2",
+			"destination",
+			"transfer-2",
+			"a-long-enough-resume-capability",
+			4,
+			"00000000-0000-4000-8000-00000000000a",
+		),
 	).rejects.toThrow(/lease owner mismatch/);
 	await expect(client.assertWritable("s1", 5)).rejects.toThrow(/lease lost/);
 	await expect(client.assertWritable("s2", 5)).rejects.toThrow(/lease lost/);
@@ -935,19 +1238,40 @@ test("checkpoint transfer grants reject an authority response for a different ru
 test("claim and resume refuse the unredeemed transfer epoch under HTTP 200", async () => {
 	for (const action of ["claim", "resume"] as const) {
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test",
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
 			key: new Uint8Array(32),
-			fetch: async () => Response.json({
-				ownerNode: "00000000-0000-4000-8000-00000000000c", targetNode: "destination-device",
-				transferId: "transfer-id", resumeToken: "r".repeat(16),
-				// Reservation epoch 4 is not the claimed runtime lease (>= 5).
-			epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0, manifestHash: "",
-			}),
+			fetch: async () =>
+				Response.json({
+					ownerNode: "00000000-0000-4000-8000-00000000000c",
+					targetNode: "destination-device",
+					transferId: "transfer-id",
+					resumeToken: "r".repeat(16),
+					// Reservation epoch 4 is not the claimed runtime lease (>= 5).
+					epoch: 4,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+				}),
 		});
-		const grant = action === "claim"
-			? client.claimTransfer("s", "destination-device", "transfer-id", "c".repeat(16), 4, "00000000-0000-4000-8000-00000000000c")
-			: client.resumeTransfer("s", "destination-device", "transfer-id", "r".repeat(16), 4, "00000000-0000-4000-8000-00000000000c");
+		const grant =
+			action === "claim"
+				? client.claimTransfer(
+						"s",
+						"destination-device",
+						"transfer-id",
+						"c".repeat(16),
+						4,
+						"00000000-0000-4000-8000-00000000000c",
+					)
+				: client.resumeTransfer(
+						"s",
+						"destination-device",
+						"transfer-id",
+						"r".repeat(16),
+						4,
+						"00000000-0000-4000-8000-00000000000c",
+					);
 		await expect(grant).rejects.toThrow(/invalid lease fence/);
 		await expect(client.assertWritable("s", 4, "00000000-0000-4000-8000-00000000000c")).rejects.toThrow(/lease lost/);
 	}
@@ -966,19 +1290,40 @@ test("claim and resume receipts bind the requested target and transfer identity"
 			const fake: CheckpointFetch = async input => {
 				expect(new URL(String(input)).pathname.endsWith("/claim")).toBe(true);
 				return Response.json({
-					ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					ownerNode: "00000000-0000-4000-8000-00000000000c",
+					epoch: 5,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 					...(scenario.targetNode === undefined ? {} : { targetNode: scenario.targetNode }),
 					...(scenario.transferId === undefined ? {} : { transferId: scenario.transferId }),
 					resumeToken: "a-long-enough-pending-resume-capability",
 				});
 			};
 			const client = new CheckpointClient({
-				baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+				baseUrl: "https://checkpoint.invalid",
+				token: "test",
+				key: new Uint8Array(32),
+				fetch: fake,
 			});
-			const grant = action === "claim"
-				? client.claimTransfer("identity-s", "destination-device", "transfer-1", "a-long-enough-claim-capability", 4, "00000000-0000-4000-8000-00000000000c")
-				: client.resumeTransfer("identity-s", "destination-device", "transfer-1", "a-long-enough-resume-capability", 4, "00000000-0000-4000-8000-00000000000c");
+			const grant =
+				action === "claim"
+					? client.claimTransfer(
+							"identity-s",
+							"destination-device",
+							"transfer-1",
+							"a-long-enough-claim-capability",
+							4,
+							"00000000-0000-4000-8000-00000000000c",
+						)
+					: client.resumeTransfer(
+							"identity-s",
+							"destination-device",
+							"transfer-1",
+							"a-long-enough-resume-capability",
+							4,
+							"00000000-0000-4000-8000-00000000000c",
+						);
 			if (scenario.valid) {
 				const accepted = await grant;
 				expect(accepted.lease.targetNode).toBe("destination-device");
@@ -1008,10 +1353,20 @@ test("an overlong authority resume capability cannot replace a one-time transfer
 		});
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	await expect(
-		client.claimTransfer("session-a", "destination", "transfer-1", "a-long-enough-claim-token", 4, "00000000-0000-4000-8000-00000000000a"),
+		client.claimTransfer(
+			"session-a",
+			"destination",
+			"transfer-1",
+			"a-long-enough-claim-token",
+			4,
+			"00000000-0000-4000-8000-00000000000a",
+		),
 	).rejects.toThrow(/valid resume capability/);
 	await expect(client.assertWritable("session-a", 5)).rejects.toThrow(/lease lost/);
 	expect(calls).toBe(1);
@@ -1019,12 +1374,19 @@ test("an overlong authority resume capability cannot replace a one-time transfer
 
 test("checkpoint renewal refuses a changed authority owner and revokes its cached lease", async () => {
 	let wrongOwner = false;
-	const fake: CheckpointFetch = async () => Response.json({
-		ownerNode: wrongOwner ? "00000000-0000-4000-8000-00000000000b" : "00000000-0000-4000-8000-00000000000a",
-		epoch: 1, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
-	});
+	const fake: CheckpointFetch = async () =>
+		Response.json({
+			ownerNode: wrongOwner ? "00000000-0000-4000-8000-00000000000b" : "00000000-0000-4000-8000-00000000000a",
+			epoch: 1,
+			expiresAt: "2099-01-01T00:00:00Z",
+			headSequence: 0,
+			manifestHash: "",
+		});
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	const valid = await client.acquireLease("s", "00000000-0000-4000-8000-00000000000a");
 	await expect(client.assertWritable("s", valid.epoch)).resolves.toBeUndefined();
@@ -1035,15 +1397,22 @@ test("checkpoint renewal refuses a changed authority owner and revokes its cache
 test("an uncertain transfer fences the old writer before the remote answer and never reacquires after two errors", async () => {
 	let signalFirst!: () => void;
 	let finishFirst!: () => void;
-	const firstStarted = new Promise<void>(resolve => { signalFirst = resolve; });
-	const firstComplete = new Promise<void>(resolve => { finishFirst = resolve; });
+	const firstStarted = new Promise<void>(resolve => {
+		signalFirst = resolve;
+	});
+	const firstComplete = new Promise<void>(resolve => {
+		finishFirst = resolve;
+	});
 	let transfers = 0;
 	const fake: CheckpointFetch = async input => {
 		const action = new URL(String(input)).pathname.split("/").pop()!;
 		if (action === "lease")
 			return Response.json({
-				ownerNode: "source", epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0, manifestHash: "",
+				ownerNode: "source",
+				epoch: 4,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
 			});
 		if (action !== "transfer") throw new Error(`Unexpected authority call: ${action}`);
 		transfers++;
@@ -1054,12 +1423,18 @@ test("an uncertain transfer fences the old writer before the remote answer and n
 		throw new Error(`synthetic transport failure ${transfers}`);
 	};
 	const client = new CheckpointClient({
-		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+		baseUrl: "https://checkpoint.invalid",
+		token: "test",
+		key: new Uint8Array(32),
+		fetch: fake,
 	});
 	const grant = await client.acquireLease("ambiguous-transfer", "source");
 	await expect(client.assertWritable("ambiguous-transfer", grant.epoch)).resolves.toBeUndefined();
 	const transfer = client.transferLease(
-		"ambiguous-transfer", "destination", "a-long-enough-claim-token", "transfer-1",
+		"ambiguous-transfer",
+		"destination",
+		"a-long-enough-claim-token",
+		"transfer-1",
 	);
 	try {
 		await firstStarted;
@@ -1073,18 +1448,60 @@ test("an uncertain transfer fences the old writer before the remote answer and n
 });
 
 test("transfer receipt must bind target identity, transfer ID, next epoch, and live deadline", async () => {
-	const scenarios: Array<{ name: string; ownerNode: string; epoch: number | undefined; expiresAt: string; valid: boolean; targetNode?: string; transferId?: string }> = [
+	const scenarios: Array<{
+		name: string;
+		ownerNode: string;
+		epoch: number | undefined;
+		expiresAt: string;
+		valid: boolean;
+		targetNode?: string;
+		transferId?: string;
+	}> = [
 		{ name: "valid", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", valid: true },
 		{ name: "wrong-owner", ownerNode: "foreign", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", valid: false },
 		{ name: "stale-epoch", ownerNode: "destination", epoch: 4, expiresAt: "2099-01-01T00:00:00Z", valid: false },
 		{ name: "skipped-epoch", ownerNode: "destination", epoch: 6, expiresAt: "2099-01-01T00:00:00Z", valid: false },
-		{ name: "missing-epoch", ownerNode: "destination", epoch: undefined, expiresAt: "2099-01-01T00:00:00Z", valid: false },
+		{
+			name: "missing-epoch",
+			ownerNode: "destination",
+			epoch: undefined,
+			expiresAt: "2099-01-01T00:00:00Z",
+			valid: false,
+		},
 		{ name: "expired", ownerNode: "destination", epoch: 5, expiresAt: "2000-01-01T00:00:00Z", valid: false },
 		{ name: "malformed-expiry", ownerNode: "destination", epoch: 5, expiresAt: "not-a-date", valid: false },
-		{ name: "wrong-target", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", targetNode: "other-device", valid: false },
-		{ name: "missing-target", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", targetNode: undefined, valid: false },
-		{ name: "wrong-transfer", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", transferId: "other-transfer", valid: false },
-		{ name: "missing-transfer", ownerNode: "destination", epoch: 5, expiresAt: "2099-01-01T00:00:00Z", transferId: undefined, valid: false },
+		{
+			name: "wrong-target",
+			ownerNode: "destination",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			targetNode: "other-device",
+			valid: false,
+		},
+		{
+			name: "missing-target",
+			ownerNode: "destination",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			targetNode: undefined,
+			valid: false,
+		},
+		{
+			name: "wrong-transfer",
+			ownerNode: "destination",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			transferId: "other-transfer",
+			valid: false,
+		},
+		{
+			name: "missing-transfer",
+			ownerNode: "destination",
+			epoch: 5,
+			expiresAt: "2099-01-01T00:00:00Z",
+			transferId: undefined,
+			valid: false,
+		},
 	];
 	for (const scenario of scenarios) {
 		let transfers = 0;
@@ -1092,33 +1509,47 @@ test("transfer receipt must bind target identity, transfer ID, next epoch, and l
 			const action = new URL(String(input)).pathname.split("/").pop()!;
 			if (action === "lease")
 				return Response.json({
-					ownerNode: "source", epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					ownerNode: "source",
+					epoch: 4,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 				});
 			if (action !== "transfer") throw new Error(`Unexpected authority call: ${action}`);
 			transfers++;
 			return Response.json({
-				ownerNode: scenario.ownerNode, epoch: scenario.epoch, expiresAt: scenario.expiresAt,
+				ownerNode: scenario.ownerNode,
+				epoch: scenario.epoch,
+				expiresAt: scenario.expiresAt,
 				targetNode: "targetNode" in scenario ? scenario.targetNode : "destination",
 				transferId: "transferId" in scenario ? scenario.transferId : "transfer-2",
-				headSequence: 0, manifestHash: "",
+				headSequence: 0,
+				manifestHash: "",
 			});
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		const sessionId = `transfer-receipt-${scenario.name}`;
 		const grant = await client.acquireLease(sessionId, "source");
 		if (scenario.valid) {
-			const receipt = await client.transferLease(sessionId, "destination", "a-long-enough-claim-token", "transfer-2");
+			const receipt = await client.transferLease(
+				sessionId,
+				"destination",
+				"a-long-enough-claim-token",
+				"transfer-2",
+			);
 			expect(receipt.ownerNode).toBe("destination");
 			expect(receipt.targetNode).toBe("destination");
 			expect(receipt.transferId).toBe("transfer-2");
 			expect(receipt.epoch).toBe(5);
 		} else {
-			await expect(client.transferLease(
-				sessionId, "destination", "a-long-enough-claim-token", "transfer-2",
-			)).rejects.toThrow(/transfer receipt mismatch/);
+			await expect(
+				client.transferLease(sessionId, "destination", "a-long-enough-claim-token", "transfer-2"),
+			).rejects.toThrow(/transfer receipt mismatch/);
 		}
 		expect(transfers).toBe(1);
 		await expect(client.assertWritable(sessionId, grant.epoch)).rejects.toThrow(/lease lost/);
@@ -1130,16 +1561,27 @@ test("transfer receipt must bind target identity, transfer ID, next epoch, and l
 // live checkpoint authority or a network timeout/reconciliation outcome.
 test("definite transfer refusals are not replayed while ambiguous statuses retry at most once", async () => {
 	for (const [status, expectedCalls] of [
-		[400, 1], [401, 1], [403, 1], [404, 1], [409, 1], [422, 1],
-		[408, 2], [429, 2], [500, 2], [503, 2],
+		[400, 1],
+		[401, 1],
+		[403, 1],
+		[404, 1],
+		[409, 1],
+		[422, 1],
+		[408, 2],
+		[429, 2],
+		[500, 2],
+		[503, 2],
 	] as const) {
 		let transfers = 0;
 		const fake: CheckpointFetch = async input => {
 			const action = new URL(String(input)).pathname.split("/").pop();
 			if (action === "lease")
 				return Response.json({
-					ownerNode: "source", epoch: 4, expiresAt: "2099-01-01T00:00:00Z",
-					headSequence: 0, manifestHash: "",
+					ownerNode: "source",
+					epoch: 4,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
 				});
 			if (action === "transfer") {
 				transfers++;
@@ -1148,7 +1590,10 @@ test("definite transfer refusals are not replayed while ambiguous statuses retry
 			throw new Error(`Unexpected authority call: ${action}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		const sessionId = `definite-refusal-${status}`;
 		const grant = await client.acquireLease(sessionId, "source");
@@ -1159,7 +1604,6 @@ test("definite transfer refusals are not replayed while ambiguous statuses retry
 		await expect(client.assertWritable(sessionId, grant.epoch)).rejects.toThrow(/lease lost/);
 	}
 });
-
 
 // WHY: HTTP 200 from /finalize does not prove the one-use resume capability
 // was promoted. A false-success receipt must not unlock the transferred session.
@@ -1176,26 +1620,42 @@ test("checkpoint finalization accepts only affirmative authority receipts", asyn
 		const fake: CheckpointFetch = async input => {
 			const action = new URL(String(input)).pathname.split("/").pop()!;
 			actions.push(action);
-			if (action === "claim") return Response.json({
-				ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
-				headSequence: 0, manifestHash: "",
-				targetNode: "destination-device", transferId: "transfer-1",
-				resumeToken: "a-long-enough-pending-resume-capability",
-			});
+			if (action === "claim")
+				return Response.json({
+					ownerNode: "00000000-0000-4000-8000-00000000000c",
+					epoch: 5,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+					targetNode: "destination-device",
+					transferId: "transfer-1",
+					resumeToken: "a-long-enough-pending-resume-capability",
+				});
 			if (action === "finalize") return Response.json(scenario.receipt);
 			throw new Error(`Unexpected fake authority call: ${action}`);
 		};
 		const client = new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		});
 		const sessionId = `confirm-${scenario.name}`;
 		const grant = await client.claimTransfer(
-			sessionId, "destination-device", "transfer-1",
-			"a-long-enough-claim-capability", 4, "00000000-0000-4000-8000-00000000000c",
+			sessionId,
+			"destination-device",
+			"transfer-1",
+			"a-long-enough-claim-capability",
+			4,
+			"00000000-0000-4000-8000-00000000000c",
 		);
 		const request = client.finalizeTransfer(
-			sessionId, "destination-device", "transfer-1",
-			4, grant.lease.epoch, grant.resumeToken,
+			sessionId,
+			"destination-device",
+			"transfer-1",
+			4,
+			grant.lease.epoch,
+			grant.resumeToken,
 		);
 		if (scenario.valid) await expect(request).resolves.toBeUndefined();
 		else await expect(request).rejects.toThrow(/finalization receipt mismatch/);
@@ -1212,30 +1672,48 @@ test("nonconfirming transfer finalization fences session admission but permits o
 		const action = new URL(String(input)).pathname.split("/").pop()!;
 		actions.push(action);
 		if (action === "finalize") return Response.json({ ok: false });
-		if (action === "claim") return Response.json({
-			ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: 5, expiresAt: "2099-01-01T00:00:00Z",
-			headSequence: 0, manifestHash: "",
-			targetNode: "destination-device", transferId: "transfer-1",
-			resumeToken: "a-long-enough-pending-resume-capability",
-		});
-		if (action === "release") return Response.json({
-			ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: 6, expiresAt: "1970-01-01T00:00:00Z",
-			headSequence: 0, manifestHash: "",
-		});
+		if (action === "claim")
+			return Response.json({
+				ownerNode: "00000000-0000-4000-8000-00000000000c",
+				epoch: 5,
+				expiresAt: "2099-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+				targetNode: "destination-device",
+				transferId: "transfer-1",
+				resumeToken: "a-long-enough-pending-resume-capability",
+			});
+		if (action === "release")
+			return Response.json({
+				ownerNode: "00000000-0000-4000-8000-00000000000c",
+				epoch: 6,
+				expiresAt: "1970-01-01T00:00:00Z",
+				headSequence: 0,
+				manifestHash: "",
+			});
 		throw new Error(`Unexpected fake authority call: ${action}`);
 	};
 	const session = new SynchronizedSession(
 		"nonconfirming-finalize",
 		new CheckpointClient({
-			baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
+			baseUrl: "https://checkpoint.invalid",
+			token: "test",
+			key: new Uint8Array(32),
+			fetch: fake,
 		}),
 		{
-			version: 1, sessionId: "nonconfirming-finalize", targetNode: "destination-device",
-			transferId: "transfer-1", transferEpoch: 4,
-			claimToken: "a-long-enough-claim-capability", epoch: 4,
+			version: 1,
+			sessionId: "nonconfirming-finalize",
+			targetNode: "destination-device",
+			transferId: "transfer-1",
+			transferEpoch: 4,
+			claimToken: "a-long-enough-claim-capability",
+			epoch: 4,
 		},
 		"00000000-0000-4000-8000-00000000000c",
-		async () => { persisted++; },
+		async () => {
+			persisted++;
+		},
 	);
 	try {
 		await expect(session.admit()).rejects.toThrow(/finalization receipt mismatch/);
@@ -1256,7 +1734,9 @@ test("nonconfirming transfer finalization fences session admission but permits o
  */
 test("restoration rejects malformed and foreign heads before any object GET", async () => {
 	const good = {
-		version: 1, sessionId: "s", sequence: 1,
+		version: 1,
+		sessionId: "s",
+		sequence: 1,
 		objects: [{ hash: "a".repeat(64), size: 1 }],
 	};
 	const cases: Array<{
