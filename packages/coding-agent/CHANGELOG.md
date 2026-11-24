@@ -6,7 +6,7 @@
 
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
-- Keep long streamed tool previews current without repeatedly parsing the whole call. Use the shared atomic writer for checkpoint records and the history directory cache. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 
 ## [1.12.3] - 2026-11-21
 

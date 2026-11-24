@@ -1,9 +1,9 @@
-import { type FileHandle, open } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { SESSION_TITLE_SLOT_BYTES } from "@veyyon/kernel/session/session-entries";
 import { parseTitleSlotLine } from "@veyyon/kernel/session/session-title-slot";
+import { type FileHandle, open, rename, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
-import { atomicWriteFile } from "@veyyon/utils";
 
 export interface SessionOwnershipMarker extends SessionHandoffIdentity {
 	sessionId: string;
@@ -33,11 +33,9 @@ function isSessionOwnershipMarker(value: unknown): value is SessionOwnershipMark
 		typeof value.epoch !== "number" ||
 		!Number.isSafeInteger(value.epoch) ||
 		value.epoch < value.transferEpoch ||
-		("claimToken" in value &&
-			(typeof value.claimToken !== "string" || value.claimToken.length < 16 || value.claimToken.length > 128)) ||
-		("resumeToken" in value &&
-			(typeof value.resumeToken !== "string" || value.resumeToken.length < 16 || value.resumeToken.length > 128)) ||
-		Boolean("claimToken" in value) === Boolean("resumeToken" in value)
+		("claimToken" in value && (typeof value.claimToken !== "string" || value.claimToken.length < 16 || value.claimToken.length > 128)) ||
+		("resumeToken" in value && (typeof value.resumeToken !== "string" || value.resumeToken.length < 16 || value.resumeToken.length > 128)) ||
+		(Boolean("claimToken" in value) === Boolean("resumeToken" in value))
 	)
 		return false;
 	return true;
@@ -151,10 +149,7 @@ async function readBoundedOwnershipJson(path: string): Promise<unknown> {
 	}
 }
 
-export async function readSessionOwnershipMarker(
-	sessionFile: string,
-	sessionId: string,
-): Promise<{
+export async function readSessionOwnershipMarker(sessionFile: string, sessionId: string): Promise<{
 	path: string;
 	marker: SessionOwnershipMarker;
 } | null> {
@@ -189,7 +184,8 @@ export async function readSessionOwnershipMarker(
 			throw new Error("Transferred session ownership marker is unreadable", { cause: error });
 	}
 	if (!identity && recovery?.checkpointTransfer !== true) {
-		if (markerValue !== undefined) throw new Error("Transferred session native handoff identity is missing");
+		if (markerValue !== undefined)
+			throw new Error("Transferred session native handoff identity is missing");
 		return null;
 	}
 	if (!identity || !isSessionOwnershipMarker(markerValue))
@@ -224,12 +220,36 @@ export async function persistSessionResumeCapability(
 		throw new Error("Invalid checkpoint resume capability or fencing epoch");
 	const consumed: SessionOwnershipMarker = { ...marker, resumeToken, epoch };
 	delete consumed.claimToken;
+	const temporary = `${path}.${randomUUID()}.tmp`;
 	try {
 		// The one-time authority claim must not be finalized before its rotated
-		// recovery capability has been flushed to the source file. The owner flushes
-		// the temp file before rename and the directory entry after it.
-		await atomicWriteFile(path, JSON.stringify(consumed), { mode: 0o600, requireAtomicReplace: true });
+		// recovery capability has at least been flushed to the source file.
+		const file = await open(temporary, "wx", 0o600);
+		try {
+			await file.writeFile(JSON.stringify(consumed));
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		await rename(temporary, path);
+		// Flush renamed directory metadata where directory handles support sync.
+		// Windows post-rename power-loss durability still requires host proof.
+		if (process.platform !== "win32") {
+			const directory = await open(dirname(path), "r");
+			try {
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+		}
 	} catch (error) {
+		try {
+			await rm(temporary, { force: true });
+		} catch (cleanupError) {
+			throw new Error("Could not persist or clean up the rotated session resume capability", {
+				cause: new AggregateError([error, cleanupError]),
+			});
+		}
 		throw new Error("Could not persist the rotated session resume capability", { cause: error });
 	}
 }
