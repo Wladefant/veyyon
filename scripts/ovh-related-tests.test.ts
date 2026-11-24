@@ -86,7 +86,6 @@ describe("OVH related-test selector", () => {
 		expect(output).toContain(": transitive;");
 		expect(output).toContain("packages/coding-agent/test/config-hot-reload.test.ts");
 		expect(selectedTests).toContain(changedTest);
-
 	}, 120000);
 
 	describe("git fixture regressions", () => {
@@ -99,6 +98,15 @@ describe("OVH related-test selector", () => {
 				"tsconfig.json": JSON.stringify({
 					compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext" },
 				}),
+				"CHANGELOG.md": "# Changelog\n",
+				"docs/guide.md": "# Guide\n",
+				"packages/pkg-a/CHANGELOG.md": "# Package changelog\n",
+				"packages/pkg-a/src/doc-references.ts":
+					'export const paths = ["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md", "docs/guide.md"];\n',
+				"packages/pkg-a/test/doc-reference-consumer.test.ts":
+					'import { paths } from "../src/doc-references.js";\nexport const references = paths;\n',
+				"packages/pkg-a/test/guide-reader.test.ts":
+					'import { readFileSync } from "node:fs";\nexport const guide = readFileSync("docs/guide.md", "utf8");\n',
 				"packages/pkg-a/package.json": JSON.stringify({ name: "@fixture/pkg-a", version: "1.0.0" }),
 				"packages/pkg-a/src/mod-a.ts": 'export const a = "alpha";\n',
 				"packages/pkg-a/src/mod-b.ts": 'console.log("barrel side effect");\nexport const b = "beta";\n',
@@ -124,6 +132,18 @@ describe("OVH related-test selector", () => {
 
 		afterAll(() => {
 			cleanupFixture?.();
+		});
+
+		it.each(["CHANGELOG.md", "packages/pkg-a/CHANGELOG.md"])(
+			"does not follow incidental references to %s through source imports",
+			file => {
+				expect(parseSelectedTests(runSelector([file], { cwd: fixtureDir }))).toEqual([]);
+			},
+		);
+
+		it("selects a direct guide reader without following incidental references through source imports", () => {
+			const output = runSelector(["docs/guide.md"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual(["packages/pkg-a/test/guide-reader.test.ts"]);
 		});
 
 		it("retains consumer when importing a value re-exported by a barrel from changed module", () => {
