@@ -159,9 +159,12 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 		const stream = transport.streamRequest("events/subscribe", { eventId: "test" }, notification =>
 			notifications.push(notification),
 		);
-		await expect(withPendingGuard(Promise.resolve().then(() => stream.done), "stream")).rejects.toThrow(
-			`stayed pending past ${GUARD_TIMEOUT_MS}ms`,
-		);
+		await expect(
+			withPendingGuard(
+				Promise.resolve().then(() => stream.done),
+				"stream",
+			),
+		).rejects.toThrow(`stayed pending past ${GUARD_TIMEOUT_MS}ms`);
 		stream.cancel();
 		await withPendingGuard(stream.done, "cancelled stream");
 		expect(requestBody).toMatchObject({
