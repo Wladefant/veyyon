@@ -888,6 +888,12 @@ export class AuthStorage {
 		return provider === "openai-codex" && type === "oauth" && this.isLoadBalancingEnabled();
 	}
 
+	/** Status and peek have no model context. Codex shares quota blocks across models. */
+	#codexPreferenceBlockScope(provider: string, type: AuthCredential["type"]): string | undefined {
+		if (!this.#codexSelectionIsPreference(provider, type)) return undefined;
+		return this.#rankingStrategyResolver?.(provider)?.blockScope?.({});
+	}
+
 	/** A balanced Codex turn can use a sibling without changing the provider preference. */
 	#routedCredential(provider: string, sessionId: string | undefined): RoutedCredential | undefined {
 		const served = this.#codexSelectionIsPreference(provider, "oauth")
@@ -1027,6 +1033,7 @@ export class AuthStorage {
 				provider,
 				getProviderTypeKey(provider, stored[pin.index]!.credential.type),
 				pin.index,
+				this.#codexPreferenceBlockScope(provider, pin.type),
 			);
 			if (blockedUntil !== undefined) routing.selectedBlockedUntilMs = blockedUntil;
 			const soft = sessionPin === undefined && this.#codexSelectionIsPreference(provider, pin.type);
@@ -1064,8 +1071,12 @@ export class AuthStorage {
 
 	/** Whether one stored credential is free of a live rate-limit block right now. */
 	#credentialUsableNow(provider: string, entry: StoredCredential, index: number): boolean {
-		const providerKey = getProviderTypeKey(provider, entry.credential.type);
-		return this.credentialBlockedUntil(provider, providerKey, index) === undefined;
+		const type = entry.credential.type;
+		const providerKey = getProviderTypeKey(provider, type);
+		return (
+			this.credentialBlockedUntil(provider, providerKey, index, this.#codexPreferenceBlockScope(provider, type)) ===
+			undefined
+		);
 	}
 
 	/**
@@ -1111,7 +1122,12 @@ export class AuthStorage {
 			// No choice promotion here, and none is missing: `sessionCredentialRouting` answers with the
 			// explicit choice (pin, else provider selection) and returns before it ever asks for a
 			// prediction, so every path that reaches this line has no live choice to promote.
-			const ordered = this.#orderByBlockAvailability(provider, providerKey, rotated);
+			const ordered = this.#orderByBlockAvailability(
+				provider,
+				providerKey,
+				rotated,
+				this.#codexPreferenceBlockScope(provider, type),
+			);
 			// A grant the provider REFUSED is not a candidate, and a block is not the same fact: a hold
 			// is this product's prediction about a working account, while a refusal is the provider's
 			// verdict about the grant itself. Availability ordering only knows about holds, so a dead
@@ -1206,6 +1222,7 @@ export class AuthStorage {
 				provider,
 				providerKey,
 				order.map(idx => credentials[idx]),
+				this.#codexPreferenceBlockScope(provider, type),
 			),
 			this.#homeIndex(provider, sessionId, type),
 		);

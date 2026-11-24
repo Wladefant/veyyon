@@ -32,6 +32,7 @@ import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
+import { codexRankingStrategy } from "../src/usage/openai-codex";
 
 const PROVIDER = "unit-durable-selection";
 const OTHER_PROVIDER = "unit-durable-selection-sibling";
@@ -305,7 +306,7 @@ describe("an account choice outlives the session that made it", () => {
 		const balanced = new AuthStorage(store, {
 			loadBalancing: true,
 			usageProviderResolver: () => undefined,
-			rankingStrategyResolver: () => undefined,
+			rankingStrategyResolver: name => (name === provider ? codexRankingStrategy : undefined),
 		});
 		await balanced.reload();
 
@@ -317,6 +318,16 @@ describe("an account choice outlives the session that made it", () => {
 		expect(
 			(await balanced.markUsageLimitReached(provider, SESSION_ID, { credentialId: preferred!.id })).switched,
 		).toBe(true);
+		expect(store.listCredentialBlocks([preferred!.id])).toContainEqual(
+			expect.objectContaining({ blockScope: "shared" }),
+		);
+		expect(await balanced.peekApiKey(provider)).toBe("access-fallback");
+		expect(balanced.sessionCredentialRouting(provider, SESSION_ID)).toMatchObject({
+			selectedCredentialId: preferred!.id,
+			selectedBlockedUntilMs: expect.any(Number),
+			activeCredentialId: fallback!.id,
+		});
+		expect(balanced.sessionCredentialRouting(provider, undefined)?.activeCredentialId).toBe(fallback!.id);
 		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-fallback");
 		expect(await balanced.getApiKey(provider, OTHER_SESSION_ID)).toBe("access-fallback");
 		expect(await balanced.getApiKey(provider)).toBe("access-fallback");
