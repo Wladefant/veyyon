@@ -231,11 +231,12 @@ export class InProcessBackend implements ExecutionBackend {
 
 		const { promise: deadlinePromise, reject: rejectDeadline } = Promise.withResolvers<never>();
 		const interrupt = (reason: string): void => {
-			timeoutAbort.abort();
+			const error = new Error(reason);
+			timeoutAbort.abort(error);
 			try {
 				client.abort?.();
 			} catch {}
-			rejectDeadline(new Error(reason));
+			rejectDeadline(error);
 		};
 		const timeoutTimer = setTimeout(() => {
 			timedOut = true;
