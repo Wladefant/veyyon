@@ -61,6 +61,7 @@ jobs:
     outputs:
       matrix: ${{ steps.planner.outputs.matrix }}
       native_ready: ${{ steps.native.outputs.native_ready || 'false' }}
+      workflow_only: ${{ steps.changed.outputs.workflow_only }}
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -108,9 +109,15 @@ jobs:
           base="$(git merge-base "$PINNED_BASE" HEAD)"
           echo "PINNED_BASE=$PINNED_BASE" >> "$GITHUB_ENV"
           echo "DIFF_BASE=$base" >> "$GITHUB_ENV"
-          workflow_changes="$(git diff --name-only "$base" HEAD -- .github/workflows/ovh-ci.yml scripts/validate-ovh-pr-workflow.ts)"
+          workflow_paths=(.github/workflows/ci.yml .github/workflows/ovh-ci.yml scripts/validate-ovh-pr-workflow.ts)
+          workflow_changes="$(git diff --name-only --no-renames "$base" HEAD -- "${workflow_paths[@]}")"
           if [[ -n "$workflow_changes" ]]; then
             echo 'workflow_changed=true' >> "$GITHUB_OUTPUT"
+            # Compare both lists. A mixed PR still needs product tests.
+            if [[ "$GITHUB_EVENT_NAME" == pull_request &&
+                  "$(git diff --name-only --no-renames "$base" HEAD)" == "$workflow_changes" ]]; then
+              echo 'workflow_only=true' >> "$GITHUB_OUTPUT"
+            fi
           else
             echo 'workflow_changed=false' >> "$GITHUB_OUTPUT"
           fi
@@ -163,7 +170,7 @@ jobs:
         run: bun scripts/validate-ovh-pr-workflow.ts
       - name: Resolve related test graph
         id: selection
-        if: steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
+        if: steps.changed.outputs.workflow_only != 'true' && steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
@@ -228,7 +235,7 @@ jobs:
           fi
       - name: Build and verify native addon
         id: native
-        if: steps.install.outcome == 'success'
+        if: steps.changed.outputs.workflow_only != 'true' && steps.install.outcome == 'success'
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           CARGO_BUILD_JOBS: "2"
@@ -306,6 +313,7 @@ jobs:
           fi
       - name: Plan test shards
         id: planner
+        if: steps.changed.outputs.workflow_only != 'true'
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           INPUT_FILE: ${{ runner.temp }}/ovh-related-tests
@@ -334,6 +342,7 @@ jobs:
           git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
           bash "$cleanup_script" --cleanup
       - name: Upload selection plan artifact
+        if: steps.changed.outputs.workflow_only != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
@@ -362,6 +371,7 @@ jobs:
     needs: prepare
     if: >-
       needs.prepare.result == 'success' &&
+      needs.prepare.outputs.workflow_only != 'true' &&
       ((github.event_name == 'workflow_dispatch' && !inputs.typecheck) ||
        (github.event_name == 'pull_request' &&
        !github.event.pull_request.draft &&
