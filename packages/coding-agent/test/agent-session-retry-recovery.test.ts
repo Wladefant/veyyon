@@ -185,6 +185,7 @@ function createRetryFixture(continuationScheduler?: (options: ScheduledAgentCont
 		setModelWithProviderSessionReset: () => {},
 		resetCurrentResponsesProviderSession: () => {},
 		maybeAutoRedeemCodexReset: async () => false,
+		tryRetractRetryDraft: async () => false,
 		removeAssistantMessageFromActiveContext: () => {},
 		persistLifecycleErrorMessage: async () => {},
 		resetSessionStopContinuationState: () => {},
