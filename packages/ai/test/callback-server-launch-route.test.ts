@@ -4,7 +4,7 @@ import type { OAuthAuthInfo, OAuthCredentials } from "@veyyon/ai/registry/oauth/
 
 /**
  * Regression harness for #4418 — the `/launch` route the callback server hosts
- * so UIs can advertise a short (~30-char) copy target that survives TUI viewport
+ * so UIs can advertise a short copy target that survives TUI viewport
  * truncation. Without it, the full authorize URL (~260+ chars on Linear/GitHub/…)
  * gets silently truncated mid-parameter and downgrades the flow to plain PKCE.
  */
@@ -73,7 +73,7 @@ describe("OAuthCallbackFlow /launch route", () => {
 			// Contract 1 — launch URL is a tokenized loopback `/launch` URL that
 			// remains much shorter than the full provider authorization URL.
 			expect(info.launchUrl).toBeDefined();
-			expect(info.launchUrl).toMatch(/^http:\/\/localhost:\d+\/launch\?token=[A-Za-z0-9_-]{22}$/);
+			expect(info.launchUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/launch\?token=[A-Za-z0-9_-]{22}$/);
 			expect(info.launchUrl!.length).toBeLessThan(info.url.length);
 
 			// Contract 2 — GET /launch returns 302 pointing at the pending authorize URL,
@@ -94,9 +94,7 @@ describe("OAuthCallbackFlow /launch route", () => {
 		abort.abort("test done");
 		await login;
 
-		// Server has stopped and `#pendingAuthUrl` was cleared — the launch URL
-		// no longer connects. The correct end-state is that the redirect NEVER
-		// points at a stale URL; the loopback socket is gone so `fetch` rejects.
+		// The stopped server can no longer redirect to a stale authorization URL.
 		await expect(fetch(info.launchUrl!)).rejects.toThrow();
 	});
 
