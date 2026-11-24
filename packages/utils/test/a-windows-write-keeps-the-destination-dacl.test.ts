@@ -337,19 +337,21 @@ process.exit(23);
 		"refuses to publish a stage on another volume without copying or removing either original",
 		async () => {
 			if (!otherVolume) throw new Error("The cross-volume check needs a second scratch volume.");
+			const packageSid = process.env.VEYYON_TEST_PACKAGE_SID;
+			if (!packageSid) throw new Error("The cross-volume check needs the AppContainer package SID.");
 			const foreignDir = fs.mkdtempSync(path.join(otherVolume, "w-dacl-"));
 			const target = path.join(dir, "destination.txt");
-			const foreign = path.join(foreignDir, path.basename(target));
+			const foreign = path.join(foreignDir, "foreign.txt");
 			try {
 				fs.writeFileSync(target, "destination\n");
 				fs.writeFileSync(foreign, "foreign\n");
-				// Match the file DACLs explicitly so the rename reaches the volume check,
-				// regardless of inheritance or ACE order on the two scratch volumes.
-				const aclFile = path.join(dir, "cross-volume-acl.txt");
-				icacls(target, "/inheritance:d");
-				icacls(target, "/save", aclFile);
-				icacls(foreignDir, "/restore", aclFile);
-				fs.unlinkSync(aclFile);
+				// Give both new test files the same protected DACL. Grant only the
+				// owner and this AppContainer, independent of the parent directories.
+				for (const file of [target, foreign]) {
+					icacls(file, "/grant", "*S-1-3-4:(F)", `*${packageSid}:(F)`);
+					icacls(file, "/inheritance:r");
+				}
+				expect(dacl(foreign)).toBe(dacl(target));
 				const destination = reserveWindowsWriteStage(target);
 				try {
 					const source = reserveWindowsWriteStage(foreign);
@@ -367,7 +369,7 @@ process.exit(23);
 				}
 				expect(fs.readFileSync(target, "utf8")).toBe("destination\n");
 				expect(fs.readFileSync(foreign, "utf8")).toBe("foreign\n");
-				expect(fs.readdirSync(foreignDir)).toEqual([path.basename(foreign)]);
+				expect(fs.readdirSync(foreignDir)).toEqual(["foreign.txt"]);
 				expect(leftovers()).toEqual([]);
 			} finally {
 				await removeWithRetries(foreignDir);

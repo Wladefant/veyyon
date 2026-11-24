@@ -581,6 +581,7 @@ child.on('error', (err) => {
     $cleanEnv["TEMP"] = $guestTmp
     if ($secondaryScratch) {
         $cleanEnv["VEYYON_TEST_SECONDARY_TEMP"] = $secondaryScratch
+        $cleanEnv["VEYYON_TEST_PACKAGE_SID"] = $sidStr
     }
     $cleanEnv["GUEST_CONFIG_PATH"] = $cmdJsonPath
 
