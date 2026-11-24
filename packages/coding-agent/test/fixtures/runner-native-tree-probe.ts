@@ -18,7 +18,7 @@ const native: {
 assert.equal(typeof native.__veyyonNativesV1_12_3, "function");
 
 // This OS integration needs a real termination deadline, not a simulated clock.
-const runner = spawn("python", ["-u", fileURLToPath(new URL("../runner.py", import.meta.url))], {
+const runner = spawn("python", ["-u", fileURLToPath(new URL("../../src/eval/py/runner.py", import.meta.url))], {
 	cwd: process.cwd(),
 	windowsHide: true,
 	stdio: ["pipe", "pipe", "pipe"],

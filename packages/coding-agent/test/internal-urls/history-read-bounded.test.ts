@@ -9,6 +9,7 @@
  * 4. Nested dotted IDs (e.g. Parent.Child) and missing IDs with actionable diagnostic.
  * 5. Selector suffix and multi-target skill/history via real ReadTool.
  * 6. Hard 5-second deadline wrapping HistoryProtocolHandler.resolve with actionable error.
+ * 7. Directory listings for ID resolution go through internal-urls/history-directory-index, whose stamp-keyed cache the scan-once cases exercise. The direct cases at the end pin its listing and invalidation.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as nodeFs from "node:fs";
@@ -19,6 +20,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import { InternalUrlRouter, parseInternalUrl } from "@veyyon/coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
+import { HistoryDirectoryIndex } from "@veyyon/coding-agent/internal-urls/history-directory-index";
 import { readLiveHistoryEntry, searchLiveHistoryEntries } from "@veyyon/coding-agent/internal-urls/history-exact";
 import {
 	formatSessionHistoryMarkdown,
@@ -40,7 +42,7 @@ import {
 } from "@veyyon/kernel/session/session-loader";
 import * as sessionLoaderModule from "@veyyon/kernel/session/session-loader";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
-import { removeWithRetries } from "@veyyon/utils";
+import { getAgentDir, removeWithRetries, setAgentDir } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -310,7 +312,7 @@ describe("history read bounded regressions", () => {
 				}
 
 				expect(thrownError).toBe(callerReason);
-				expect(readdirSpy).not.toHaveBeenCalled();
+				expect(readdirSpy.mock.calls).toHaveLength(0);
 			} finally {
 				readdirSpy.mockRestore();
 			}
@@ -1088,5 +1090,48 @@ describe("history read bounded regressions", () => {
 		} finally {
 			Array.isArray = origIsArray;
 		}
+	});
+});
+
+describe("history directory index", () => {
+	let root: string;
+	let previousAgentDir: string;
+	beforeEach(async () => {
+		root = await fs.mkdtemp(path.join(os.tmpdir(), "history-directory-index-"));
+		previousAgentDir = getAgentDir();
+		setAgentDir(path.join(root, "agent"));
+	});
+	afterEach(async () => {
+		setAgentDir(previousAgentDir);
+		await removeWithRetries(root);
+	});
+
+	it("lists a directory's children by kind, and an absent directory as empty", async () => {
+		const dir = path.join(root, "artifacts");
+		await fs.mkdir(path.join(dir, "nested"), { recursive: true });
+		await fs.writeFile(path.join(dir, "note.txt"), "x");
+		const index = new HistoryDirectoryIndex([dir]);
+		await index.load();
+		const listed = (await index.entries(dir)).sort((a, b) => a.name.localeCompare(b.name));
+		expect(listed).toEqual([
+			{ name: "nested", kind: "d" },
+			{ name: "note.txt", kind: "f" },
+		]);
+		expect(await index.entries(path.join(dir, "absent"))).toEqual([]);
+	});
+
+	it("does not reuse a saved listing once the directory has changed", async () => {
+		const dir = path.join(root, "artifacts");
+		await fs.mkdir(dir, { recursive: true });
+		await fs.writeFile(path.join(dir, "a.txt"), "a");
+		const first = new HistoryDirectoryIndex([dir]);
+		await first.load();
+		expect((await first.entries(dir)).map(entry => entry.name)).toEqual(["a.txt"]);
+		await first.save();
+
+		await fs.writeFile(path.join(dir, "b.txt"), "b");
+		const second = new HistoryDirectoryIndex([dir]);
+		await second.load();
+		expect((await second.entries(dir)).map(entry => entry.name).sort()).toEqual(["a.txt", "b.txt"]);
 	});
 });

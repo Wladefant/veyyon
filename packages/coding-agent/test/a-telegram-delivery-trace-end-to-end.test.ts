@@ -19,7 +19,7 @@ import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { serveTerminalControl, type TerminalOwner } from "../src/launch/terminal-control";
 import { submitInteractiveInput } from "../src/main";
 import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
-import { startTerminalControl } from "../src/modes/terminal/terminal-control";
+import { startTerminalControl } from "../src/launch/terminal-control-session";
 import type { SubmittedUserInput } from "../src/modes/terminal/types";
 import { AgentSession } from "../src/session/agent-session";
 import { OperatorAnswerInbox } from "../src/session/operator-answer-inbox";

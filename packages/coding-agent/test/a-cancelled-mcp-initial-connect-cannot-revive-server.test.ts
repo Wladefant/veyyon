@@ -980,10 +980,10 @@ it("a single-server MCP disconnect joins bulk-owned close without another transp
 			);
 			expect(manager.getLastError(names.a)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 			expect(manager.getLastError(names.b)).toBeUndefined();
-			expect(warnings).toHaveBeenCalledWith("MCP bulk disconnect did not close every server cleanly", {
-				path: "mcp:disconnectAll",
-				failedCloses: 1,
-			});
+			expect(warnings.mock.calls).toContainEqual([
+				"MCP bulk disconnect did not close every server cleanly",
+				{ path: "mcp:disconnectAll", failedCloses: 1 },
+			]);
 			expect(JSON.stringify(warnings.mock.calls)).not.toContain("TEST_ONLY_PRIVATE_CLOSE_DETAIL");
 		} finally {
 			warnings.mockRestore();

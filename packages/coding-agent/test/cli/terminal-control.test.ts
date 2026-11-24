@@ -1,6 +1,10 @@
 /**
  * Observable receipt, auth behavior, and registered CLI smoke contract tests
  * for `terminal-control rotate <session-id>`.
+ *
+ * The registered CLI cases run the Command in packages/coding-agent/src/commands/terminal-control.ts through
+ * the real cli.ts entry. The rotate success and the absent-session error come from that command's run();
+ * the unknown-action and extra-flag refusals are rejected by argument parsing with exit code 2.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as crypto from "node:crypto";

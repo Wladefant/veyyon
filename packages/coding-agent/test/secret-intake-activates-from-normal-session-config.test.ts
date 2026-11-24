@@ -2,6 +2,7 @@
  * WHY: A trusted profile config must activate the real session's secret_request tool before any
  * actor binds, while an unconfigured session must not expose it. This closes startup wiring gaps;
  * it does not test Bitwarden actor registration or any real vault operation.
+ * The config is read by secrets/intake-host (`prepareSecretIntakeHost`), which sdk.ts calls for the root session. The cases below run through that call.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";

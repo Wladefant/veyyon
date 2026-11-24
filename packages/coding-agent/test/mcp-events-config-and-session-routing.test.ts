@@ -419,7 +419,7 @@ describe("MCP event prompt receipts and session isolation", () => {
 		});
 		try {
 			await expect(owner.accept(occurrence("evt-fsync"))).rejects.toThrow("fsync failed");
-			expect(fsync).toHaveBeenCalled();
+			expect(fsync.mock.calls.length).toBeGreaterThan(0);
 			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
 			expect(receipts(owner.journal)).toHaveLength(0);
 		} finally {
@@ -437,7 +437,7 @@ describe("MCP event prompt receipts and session isolation", () => {
 		const fsync = spyOn(fs, "fsyncSync").mockImplementation(fd => writeFsync(fd));
 		try {
 			await owner.journal.sync();
-			expect(fsync).toHaveBeenCalledTimes(1);
+			expect(fsync.mock.calls).toHaveLength(1);
 		} finally {
 			fsync.mockRestore();
 		}
@@ -453,7 +453,7 @@ describe("MCP event prompt receipts and session isolation", () => {
 		const fsync = spyOn(fs, "fsyncSync").mockImplementation(fd => writeFsync(fd));
 		try {
 			await owner.journal.sync();
-			expect(fsync).toHaveBeenCalledTimes(1);
+			expect(fsync.mock.calls).toHaveLength(1);
 		} finally {
 			fsync.mockRestore();
 		}
@@ -470,7 +470,7 @@ describe("MCP event prompt receipts and session isolation", () => {
 		const fsync = spyOn(fs, "fsyncSync").mockImplementation(fd => writeFsync(fd));
 		try {
 			await owner.journal.sync();
-			expect(fsync).toHaveBeenCalledTimes(1);
+			expect(fsync.mock.calls).toHaveLength(1);
 		} finally {
 			fsync.mockRestore();
 		}
@@ -488,7 +488,7 @@ describe("MCP event prompt receipts and session isolation", () => {
 
 		await owner.session.yieldQueue.flush("idle");
 		await owner.session.waitForIdle();
-		expect(prompt).toHaveBeenCalledTimes(2);
+		expect(prompt.mock.calls).toHaveLength(2);
 		expect(receipts(owner.journal)).toHaveLength(1);
 	});
 
@@ -537,8 +537,8 @@ describe("MCP event prompt receipts and session isolation", () => {
 			});
 			await owner.session.yieldQueue.flush("idle");
 			await owner.session.waitForIdle();
-			expect(prompt).toHaveBeenCalledTimes(1);
-			expect(sync).toHaveBeenCalledTimes(2);
+			expect(prompt.mock.calls).toHaveLength(1);
+			expect(sync.mock.calls).toHaveLength(2);
 			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
 			expect(owner.session.yieldQueue.has("mcp-notification")).toBe(false);
 			expect(receipts(owner.journal)).toHaveLength(1);
@@ -558,13 +558,13 @@ describe("MCP event prompt receipts and session isolation", () => {
 		try {
 			await owner.session.yieldQueue.flush("idle");
 			await owner.session.waitForIdle();
-			expect(prompt).toHaveBeenCalledTimes(1);
-			expect(sync).toHaveBeenCalledTimes(2);
+			expect(prompt.mock.calls).toHaveLength(1);
+			expect(sync.mock.calls).toHaveLength(2);
 			expect(owner.session.yieldQueue.has("mcp-event")).toBe(false);
-			expect(warn).toHaveBeenCalledWith(
+			expect(warn.mock.calls).toContainEqual([
 				"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event",
 				expect.objectContaining({ error: "permanent receipt fsync failure" }),
-			);
+			]);
 		} finally {
 			sync.mockRestore();
 			warn.mockRestore();

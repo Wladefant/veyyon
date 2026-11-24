@@ -176,7 +176,7 @@ import { countRunningAgentBadgeAgents, getRunningAgentBadgeRegistry } from "./ru
 import { SessionObserverRegistry } from "./session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
-import { startTerminalControl } from "./terminal-control";
+import { startTerminalControl } from "../../launch/terminal-control-session";
 import { consumeRelaunchMarker, flushPendingTtyInput, RELAUNCH_MARKER } from "./tty-input-flush";
 import type {
 	CompactionQueuedMessage,

@@ -170,14 +170,16 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",
 				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",
 				"sdk.ts:taskTool",
-				"session/agent-session.ts:loaded.command",
+				// The authenticated intake broker runs an allowlisted secret operation, not an AgentTool.
+				"secrets/intake-broker.ts:this.#options.protection",
+				// A loaded slash command receives the command context, not an AgentTool invocation.
+				"session/agent-session-commands.ts:loaded.command",
 				"session/factory-tools.ts:tool",
 				"session/runtime/session-approvals.ts:target",
 				"session/runtime/session-approvals.ts:target",
 				"session/runtime/session-approvals.ts:target",
 				"task/executor.ts:source",
 				"tools/core/execution-registry.ts:tool",
-				"tools/fs/read.ts:this",
 				"tools/shell/eval.ts:backend",
 			]
 				.map(site => `packages/coding-agent/src/${site}`)

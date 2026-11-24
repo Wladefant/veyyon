@@ -1474,7 +1474,7 @@ describe("executeBash drain reconciliation regressions", () => {
 			controller.abort();
 			save.resolve("saved-raw");
 			const result = await pending;
-			expect(abort).not.toHaveBeenCalled();
+			expect(abort.mock.calls).toHaveLength(0);
 			expect(result.cancelled).toBe(false);
 			expect(result.exitCode).toBe(31);
 			await executeBash("printf reuse", { cwd: os.tmpdir(), sessionKey: "settled-save-no-abort" });

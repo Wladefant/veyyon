@@ -125,8 +125,7 @@ function runScript(script: string, project?: string, target: TestWorkspace = wor
 	if (project === undefined) delete env.VEYYON_PAGES_PROJECT;
 	else env.VEYYON_PAGES_PROJECT = project;
 
-	const executable = script === target.buildScript ? findExternalNodeExecutable() : process.execPath;
-	const run = Bun.spawnSync([executable, script, ...(script === target.deployScript ? ["--dry-run"] : [])], {
+	const run = Bun.spawnSync([process.execPath, script, ...(script === target.deployScript ? ["--dry-run"] : [])], {
 		cwd: target.workspaceRoot,
 		env,
 		stdout: "pipe",
@@ -178,15 +177,15 @@ describe("website deploy dry run", () => {
 
 		const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-isolated-path-"));
 		try {
-			// Link node and sh into an isolated bin directory that contains no mdbook
-			const nodeExe = findExternalNodeExecutable();
-			fs.symlinkSync(nodeExe, path.join(isolatedDir, path.basename(nodeExe)));
+			// Link the current Bun executable and sh into an isolated bin directory that contains no mdbook
+			const bunExecutable = process.execPath;
+			fs.symlinkSync(bunExecutable, path.join(isolatedDir, path.basename(bunExecutable)));
 			const shPath = "/bin/sh";
 			if (fs.existsSync(shPath)) {
 				fs.symlinkSync(shPath, path.join(isolatedDir, "sh"));
 			}
 
-			const run = Bun.spawnSync([nodeExe, workspace.buildScript], {
+			const run = Bun.spawnSync([process.execPath, workspace.buildScript], {
 				cwd: workspace.workspaceRoot,
 				env: testSubprocessEnv({ PATH: isolatedDir }),
 				stdout: "pipe",
@@ -204,8 +203,8 @@ describe("website deploy dry run", () => {
 	it("fails the site build with specific diagnostic when mdbook build fails with non-zero exit", () => {
 		const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-failing-mdbook-"));
 		try {
-			const nodeExe = findExternalNodeExecutable();
-			fs.symlinkSync(nodeExe, path.join(isolatedDir, path.basename(nodeExe)));
+			const bunExecutable = process.execPath;
+			fs.symlinkSync(bunExecutable, path.join(isolatedDir, path.basename(bunExecutable)));
 			const shPath = "/bin/sh";
 			if (fs.existsSync(shPath)) {
 				fs.symlinkSync(shPath, path.join(isolatedDir, "sh"));
@@ -213,7 +212,7 @@ describe("website deploy dry run", () => {
 			const mdbookScript = path.join(isolatedDir, "mdbook");
 			fs.writeFileSync(mdbookScript, '#!/bin/sh\necho "mdbook: failed to parse book.toml" >&2\nexit 1\n');
 			fs.chmodSync(mdbookScript, 0o755);
-			const run = Bun.spawnSync([nodeExe, workspace.buildScript], {
+			const run = Bun.spawnSync([process.execPath, workspace.buildScript], {
 				cwd: workspace.workspaceRoot,
 				env: testSubprocessEnv({ PATH: isolatedDir }),
 				stdout: "pipe",

@@ -93,7 +93,7 @@ describe("CommandController /move", () => {
 			expect(ctx.sessionManager.dropSession).not.toHaveBeenCalled();
 			expect(ctx.updateEditorBorderColor).toHaveBeenCalledTimes(1);
 			expect(ctx.reloadTodos).toHaveBeenCalledTimes(1);
-			expect(ctx.ui.requestRender).toHaveBeenCalledTimes(1);
+			expect(ctx.ui.requestRender.mock.calls).toHaveLength(1);
 			expect(present).toHaveBeenCalled();
 			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {

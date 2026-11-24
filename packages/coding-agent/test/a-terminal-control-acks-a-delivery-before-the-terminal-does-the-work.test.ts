@@ -10,7 +10,7 @@ import * as utils from "@veyyon/utils";
 import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
-import { startTerminalControl } from "../src/modes/terminal/terminal-control";
+import { startTerminalControl } from "../src/launch/terminal-control-session";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {

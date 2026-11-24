@@ -66,19 +66,19 @@ describe("browser registry sweep — close browsers when session releases tabs",
 		const owned = await acquireBrowser(kind, { cwd: "/tmp", ownerSessionId: "session-owner" });
 		// Another session reuses that browser before the owner's hold lands.
 		const reused = await acquireBrowser(kind, { cwd: "/tmp", ownerSessionId: "session-reuser" });
-		expect(launchSpy).toHaveBeenCalledTimes(1);
+		expect(launchSpy.mock.calls).toHaveLength(1);
 		expect(reused).toBe(owned);
 
 		// The owner session releases now. The reuser's lease must keep the browser open.
 		await releaseTabsForOwner("session-owner", { kill: true });
-		expect(closeSpy).not.toHaveBeenCalled();
+		expect(closeSpy.mock.calls).toHaveLength(0);
 		expect(getBrowsersMapForTest().get(owned.key)).toBe(owned);
 
 		// The browser closes only when the last lease is released.
 		await releaseBrowser(owned, { kill: true });
-		expect(closeSpy).not.toHaveBeenCalled();
+		expect(closeSpy.mock.calls).toHaveLength(0);
 		await releaseBrowser(reused, { kill: true });
-		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(closeSpy.mock.calls).toHaveLength(1);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
@@ -108,11 +108,11 @@ describe("browser registry sweep — close browsers when session releases tabs",
 			tool.execute("call-1", { action: "open", name: "fail-tab", url: "https://example.com" }),
 		).rejects.toThrow("Simulated tab worker init failure");
 
-		expect(launchSpy).toHaveBeenCalledTimes(1);
-		expect(acquireTabSpy).toHaveBeenCalledTimes(1);
+		expect(launchSpy.mock.calls).toHaveLength(1);
+		expect(acquireTabSpy.mock.calls).toHaveLength(1);
 		// Before fix: browser was acquired at refCount 0, sat in browsers map, close was never called.
 		// After fix: finally block in #open ensures the browser is closed and evicted.
-		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(closeSpy.mock.calls).toHaveLength(1);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 });
@@ -146,7 +146,7 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 		await expect(releaseTabsForOwner("s-sweep", { kill: false })).resolves.toBe(0);
 
 		// Before fix: the first close threw, so the second zero-ref browser was never closed.
-		expect(closeSpy).toHaveBeenCalledTimes(2);
+		expect(closeSpy.mock.calls).toHaveLength(2);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
@@ -172,7 +172,7 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 
 		// Before fix: the tab's failed surface close threw out of the owner loop, so the zero-ref
 		// browser was never swept. Two closes are expected: the tab's browser, then the orphan.
-		expect(closeSpy).toHaveBeenCalledTimes(2);
+		expect(closeSpy.mock.calls).toHaveLength(2);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
@@ -194,8 +194,8 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 
 		expect(getTabsMapForTest().has("other-tab")).toBe(true);
 		expect(getBrowsersMapForTest().size).toBe(2);
-		expect(closeSpy).not.toHaveBeenCalled();
-		expect(requestSpy).not.toHaveBeenCalledWith("surface.close", expect.anything(), expect.anything());
+		expect(closeSpy.mock.calls).toHaveLength(0);
+		expect(requestSpy.mock.calls).not.toContainEqual(["surface.close", expect.anything(), expect.anything()]);
 	});
 
 	it.each([false, true])("cleans only its spawned process when puppeteer loading fails (reused=%s)", async reused => {
@@ -218,9 +218,9 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 			acquireBrowser({ kind: "spawned", path: process.execPath }, { cwd: process.cwd() }),
 		).rejects.toThrow("puppeteer import failed");
 
-		expect(spawnSpy).toHaveBeenCalledTimes(reused ? 0 : 1);
-		expect(killSpy).toHaveBeenCalledTimes(reused ? 0 : 1);
-		if (!reused) expect(killSpy).toHaveBeenCalledWith(pid);
+		expect(spawnSpy.mock.calls).toHaveLength(reused ? 0 : 1);
+		expect(killSpy.mock.calls).toHaveLength(reused ? 0 : 1);
+		if (!reused) expect(killSpy.mock.calls).toContainEqual([pid]);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 });

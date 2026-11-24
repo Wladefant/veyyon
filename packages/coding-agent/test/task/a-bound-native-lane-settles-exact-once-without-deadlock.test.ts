@@ -206,7 +206,7 @@ describe("native replenishment lifecycle contracts", () => {
 		});
 
 		// Recovery takes a separate ledger lock before entering replenishment.
-		expect(recovery).toHaveBeenCalledTimes(1);
+		expect(recovery.mock.calls).toHaveLength(1);
 		await recovery.mock.results[0]!.value;
 		recovery.mockRestore();
 		if (options?.initialRequests) {
@@ -269,7 +269,7 @@ if Path(sys.argv[0]).name == "native-ledger-bridge.py" and operation in keys:
 		try {
 			expect((await harness.engine.replenish([])).dispatchedCount).toBe(1);
 			await harness.session.asyncJobManager!.waitForAll();
-			expect(run).toHaveBeenCalledTimes(1);
+			expect(run.mock.calls).toHaveLength(1);
 			expect((await fs.readdir(harness.root)).filter(name => name.endsWith("-reply-dropped")).sort()).toEqual([
 				"claim-reply-dropped",
 				"record-dispatch-reply-dropped",
@@ -513,7 +513,7 @@ if Path(sys.argv[0]).name == "native-ledger-bridge.py" and operation in keys:
 
 		expect(job.status).toBe("failed");
 		expect(job.errorText).toContain("Native dispatch not admitted");
-		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect(runSpy.mock.calls).toHaveLength(1);
 		expect((await harness.readLedger()).requests["ticket-admit"].native_claim?.run_id).toBe("replacement-run");
 	}, 15_000);
 
@@ -559,7 +559,7 @@ if Path(sys.argv[0]).name == "native-ledger-bridge.py" and operation in keys:
 
 		await harness.session.asyncJobManager!.waitForAll();
 
-		expect(runSpy).not.toHaveBeenCalled();
+		expect(runSpy.mock.calls).toHaveLength(0);
 		expect(startFailedCount).toBe(1);
 		expect(completeCount).toBe(0);
 
@@ -579,7 +579,7 @@ if Path(sys.argv[0]).name == "native-ledger-bridge.py" and operation in keys:
 		const retryOutcome = await harness.engine.replenish([]);
 		expect(retryOutcome.status).toBe("replenished");
 		await harness.session.asyncJobManager!.waitForAll();
-		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect(runSpy.mock.calls).toHaveLength(1);
 		expect(completeCount).toBe(1);
 	}, 15_000);
 

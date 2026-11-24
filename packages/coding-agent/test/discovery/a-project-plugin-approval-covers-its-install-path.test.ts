@@ -6,6 +6,7 @@
  * Negative controls: bypass payload hashing, containment, or current-profile trust;
  * the changed-file, escape, and other-profile cases must fail respectively.
  * Gap: this is startup discovery proof, not a sandbox against writes after loading.
+ * Payload digests come from config/bounded-folder-hash (`hashBoundedFolder`), which config/project-plugin-registry-trust (`describeProjectPluginRegistry`) runs for each installPath. trust-cli and discovery/helpers both call it.
  */
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";

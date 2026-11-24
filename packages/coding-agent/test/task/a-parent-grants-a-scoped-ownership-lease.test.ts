@@ -1,5 +1,6 @@
 // WHY: a child mistook ancestor-handed dirty files for a competing writer.
 // Drive TaskTool through its real spawn boundary; the external child process is controlled.
+// The runtime lease is built by task/ownership-lease (`createOwnershipLease`). The symlink, expiry and path cases below test its containment and expiry checks.
 // This proves runtime scope and context delivery, not a model's decision to follow the context.
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -141,7 +142,7 @@ for (const [name, paths, expiry] of [
 			task: "Continue",
 			ownershipLease: { paths: [...paths], expiresAt: expiry },
 		});
-		expect(run).not.toHaveBeenCalled();
+		expect(run.mock.calls).toHaveLength(0);
 		expect(result.content).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ type: "text", text: expect.stringContaining("ownership-lease") }),
@@ -168,7 +169,7 @@ test("a symlink cannot carry a lease outside the child's worktree", async () => 
 		task: "Continue",
 		ownershipLease: { paths: ["escape/new.txt"], expiresAt: "2099-01-01T00:00:00.000Z" },
 	});
-	expect(run).not.toHaveBeenCalled();
+	expect(run.mock.calls).toHaveLength(0);
 	expect(result.content).toEqual(
 		expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("outside") })]),
 	);
@@ -183,7 +184,7 @@ test("an isolated spawn cannot inherit an ancestor's dirty-path lease", async ()
 		isolated: true,
 		ownershipLease: { paths: ["owned.txt"], expiresAt: "2099-01-01T00:00:00.000Z" },
 	});
-	expect(run).not.toHaveBeenCalled();
+	expect(run.mock.calls).toHaveLength(0);
 	expect(result.content).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({ type: "text", text: expect.stringContaining("ownership-lease") }),
@@ -201,7 +202,7 @@ test("a batch writes one runtime-bound lease receipt per child", async () => {
 			{ agent: "task", name: "Second", task: "Second path", ownershipLease: { paths: ["second.txt"], expiresAt } },
 		],
 	});
-	expect(run).toHaveBeenCalledTimes(2);
+	expect(run.mock.calls).toHaveLength(2);
 	const names = (await readdir(artifacts)).filter(name => name.endsWith(".ownership-lease.json"));
 	expect(names).toHaveLength(2);
 	const leases = await Promise.all(names.map(async name => JSON.parse(await readFile(join(artifacts, name), "utf8"))));
@@ -254,7 +255,7 @@ test("a lease that expires during path resolution cannot start its child", async
 		task: "Continue",
 		ownershipLease: { paths: ["owned.txt"], expiresAt: new Date(expiry).toISOString() },
 	});
-	expect(run).not.toHaveBeenCalled();
+	expect(run.mock.calls).toHaveLength(0);
 	expect(result.content).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({ type: "text", text: expect.stringContaining("expired") }),
@@ -280,7 +281,7 @@ test("a stale receipt cannot authorize a spawn or be overwritten", async () => {
 		task: "Continue",
 		ownershipLease: { paths: ["owned.txt"], expiresAt: "2099-01-01T00:00:00.000Z" },
 	});
-	expect(run).not.toHaveBeenCalled();
+	expect(run.mock.calls).toHaveLength(0);
 	expect(result.isError).toBe(true);
 	expect(JSON.parse(await readFile(receipt, "utf8"))).toEqual(stale);
 });
@@ -301,6 +302,6 @@ test("a lease that expires while its receipt is persisted cannot start its child
 		task: "Continue",
 		ownershipLease: { paths: ["owned.txt"], expiresAt: new Date(expiry).toISOString() },
 	});
-	expect(run).not.toHaveBeenCalled();
+	expect(run.mock.calls).toHaveLength(0);
 	expect(result.isError).toBe(true);
 });

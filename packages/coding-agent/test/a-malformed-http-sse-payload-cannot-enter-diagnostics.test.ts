@@ -81,10 +81,10 @@ describe("MCP HTTP GET SSE malformed JSON diagnostics", () => {
 				expect(observed).toHaveLength(1);
 				expect(error.message).toBe("MCP HTTP SSE stream received malformed JSON");
 				expect(error.stack ?? "").not.toContain("FAKE_PRIVA");
-				expect(debug).toHaveBeenCalledWith("HTTP SSE stream error", {
-					url: transport.url,
-					error: "MCP HTTP SSE stream received malformed JSON",
-				});
+				expect(debug.mock.calls).toContainEqual([
+					"HTTP SSE stream error",
+					{ url: transport.url, error: "MCP HTTP SSE stream received malformed JSON" },
+				]);
 				expect(JSON.stringify(debug.mock.calls)).not.toContain("FAKE_PRIVA");
 				expect(JSON.stringify(debug.mock.calls)).not.toContain(marker);
 			});

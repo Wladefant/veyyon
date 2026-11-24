@@ -212,6 +212,18 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: true,
 		reason: "the vault CLI bridge process is adopted",
 	},
+	"packages/coding-agent/src/launch/build-info.ts": {
+		wired: true,
+		reason: "the installed-version probe the irc tool runs is adopted into the root session's budget",
+	},
+	"packages/coding-agent/src/task/provider-error-reporter.ts": {
+		wired: true,
+		reason: "the model routing record-error script is adopted into the root budget; reportProviderError has no session id to charge",
+	},
+	"packages/coding-agent/src/secrets/intake-vault.ts": {
+		wired: true,
+		reason: "every bw-us vault CLI run is adopted into the root budget; the intake host has no single session to charge",
+	},
 
 	// Exempt. Each of these is either not started by a session, or is not a
 	// process a per-process cgroup can hold. docs/handbook/src/features/cpu-limit.md
@@ -241,11 +253,6 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/cli/supervisor/process.ts": {
 		wired: false,
 		reason: "out-of-process crash supervisor; spawns the main veyyon process itself, outside any session budget",
-	},
-	"packages/coding-agent/src/config/model-registry.ts": {
-		wired: false,
-		reason:
-			"execSync `!command` config values the model registry resolves at CLI/model discovery time, before the first session registers",
 	},
 	"packages/coding-agent/src/modes/terminal/interactive-mode.ts": {
 		wired: false,
@@ -305,6 +312,29 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/utils/shell-snapshot.ts": {
 		wired: false,
 		reason: "one-shot shell env capture at startup",
+	},
+	"packages/coding-agent/src/checkpoints/native-recovery.ts": {
+		wired: false,
+		reason:
+			"the checkpoint CLI's `git rev-parse HEAD` pin read is a synchronous execFileSync with a 3 s timeout; the child has exited before the call returns, so there is no pid to adopt",
+	},
+	"packages/coding-agent/src/cli/supervisor/session-stderr.ts": {
+		wired: false,
+		reason: "imports ChildProcess as a type only and spawns nothing; the supervisor's process.ts spawns the child and is exempt",
+	},
+	"packages/coding-agent/src/config/resolve-config-value-sync.ts": {
+		wired: false,
+		reason:
+			"`!command` values run through execSync, which returns only after the child exited, so there is no pid to adopt; capped at 10 s and a success is cached",
+	},
+	"packages/coding-agent/src/launch/terminal-control-transport.ts": {
+		wired: false,
+		reason: "the Windows broker that serves the harness's terminal-control pipe; the operator's control channel, and a budget kill would sever it",
+	},
+	"packages/coding-agent/src/tools/web/browser/extension-session.ts": {
+		wired: false,
+		reason:
+			"hands the connect URL to the operator's own Chrome and exits; the browser is the operator's application (as utils/open.ts). Gap: agent browser work over the extension relay is not capped by this launch",
 	},
 
 	// Outside the CLI package. The session spine, the hosts and the plugins are

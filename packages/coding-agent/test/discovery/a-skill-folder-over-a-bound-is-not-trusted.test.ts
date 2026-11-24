@@ -9,6 +9,7 @@
  *
  * A refused scan must reach operators: project skill loading logs a warning, and `veyyon trust`
  * lists the candidate as unreadable even though the bounded scanner returns `null`.
+ * The bounded scan is config/bounded-folder-hash (`scanBoundedFolder`), which describeProjectSkill in config/project-skill-trust calls.
  *
  * Gaps: the suite does not test CLI argument parsing or the slash-command registry.
  * It does not measure scan cost or detect same-size edits during a read.
@@ -85,7 +86,7 @@ describe("a skill folder over a bound is not trusted", () => {
 			const message = `project-skills: ${relativePath} was not loaded because the skill folder is unsafe or unreadable.`;
 
 			expect(result.warnings).toContain(message);
-			expect(warning).toHaveBeenCalledWith(message, { path: skillPath, relativePath });
+			expect(warning.mock.calls).toContainEqual([message, { path: skillPath, relativePath }]);
 			expect(listed.unreadable).toContain(skillPath);
 		} finally {
 			warning.mockRestore();

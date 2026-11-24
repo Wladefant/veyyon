@@ -2,6 +2,7 @@ import { withFileLock } from "@veyyon/utils";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 
 export interface IntakeVaultIdentity {
 	projectId: string;
@@ -218,6 +219,7 @@ export class BitwardenUsIntakeVault implements IntakeVault {
 			windowsVerbatimArguments: this.#config.windowsUsWrapper === true,
 			stdio: ["pipe", "pipe", "ignore"],
 		});
+		if (child.pid !== undefined) adoptIntoPrimarySessionCpuBudget(child.pid);
 		const chunks: Buffer[] = [];
 		let size = 0;
 		let settled = false;

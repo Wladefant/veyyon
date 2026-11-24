@@ -298,7 +298,7 @@ describe("agent runtime model resolution", () => {
 		expect(result.error).toContain("openai-codex/gpt-6-luna:medium: not found in the model catalog");
 		expect(result.error).toContain("google-antigravity/gemini-3.8-flash:high: not found in the model catalog");
 		expect(result.error).toContain("anthropic/claude-haiku-5-5:max: not found in the model catalog");
-		expect(createSessionSpy).not.toHaveBeenCalled();
+		expect(createSessionSpy.mock.calls).toHaveLength(0);
 	});
 	it("surfaces authenticated built-in discovery failures as safe spawn errors", async () => {
 		const authStorage = await AuthStorage.create(":memory:");

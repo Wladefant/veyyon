@@ -4,11 +4,13 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
+import { writeExtensionToken } from "@veyyon/coding-agent/tools/web/browser/extension-policy";
 import {
 	buildConnectUrl,
 	ExtensionRelay,
 	type NavigationAudit,
 } from "@veyyon/coding-agent/tools/web/browser/extension-relay";
+import { EXTENSION_SETUP_HINT, openExtensionSession } from "@veyyon/coding-agent/tools/web/browser/extension-session";
 import { logger, setAgentDir } from "@veyyon/utils";
 
 const EXTENSION_TOKEN = "extension-token-SECRET-0123456789";
@@ -1228,5 +1230,38 @@ describe("secrets stay out of logs", () => {
 				timers?.mockRestore();
 			}
 		});
+	});
+});
+
+describe("openExtensionSession", () => {
+	test("refuses before starting a relay when no token is stored", async () => {
+		await expect(openExtensionSession({ kind: "extension" })).rejects.toThrow(EXTENSION_SETUP_HINT);
+	});
+
+	test("gives Chrome a connect URL with the stored token and the relay the extension dials", async () => {
+		writeExtensionToken(undefined, EXTENSION_TOKEN);
+		let connectUrl = "";
+		const session = await openExtensionSession(
+			{ kind: "extension" },
+			{
+				timeoutMs: 2000,
+				launchConnect: async url => {
+					connectUrl = url;
+					await FakeExtension.connect(new URL(url).searchParams.get("mcpRelayUrl") ?? "");
+				},
+			},
+		);
+		relay = session;
+		const sent = new URL(connectUrl);
+		expect(sent.searchParams.get("token")).toBe(EXTENSION_TOKEN);
+		expect(sent.searchParams.get("mcpRelayUrl")).toBe(session.extensionUrl);
+		expect(session.extensionConnected).toBe(true);
+	});
+
+	test("a connect page that never reaches the relay fails at the timeout", async () => {
+		writeExtensionToken(undefined, EXTENSION_TOKEN);
+		await expect(
+			openExtensionSession({ kind: "extension" }, { timeoutMs: 20, launchConnect: async () => {} }),
+		).rejects.toThrow("Could not connect to the Chrome extension");
 	});
 });

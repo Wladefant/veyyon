@@ -44,7 +44,8 @@ describe("explicit native session cancellation", () => {
 			expect(result.isError).toBe(false);
 			const missing = await tool.execute(input.toolCallId, { worker: "pc2" }, undefined, undefined,
 				{ sessionManager: { getSessionFile: () => undefined } });
-			expect(missing.isError).toBe(true); expect(mock).toHaveBeenCalledTimes(1);
+			expect(missing.isError).toBe(true);
+			expect(mock.mock.calls).toHaveLength(1);
 		} finally {
 			mock.mockRestore();
 			if (oldURL === undefined) delete process.env.MAINPLANE_BRIDGE_URL; else process.env.MAINPLANE_BRIDGE_URL = oldURL;

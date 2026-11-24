@@ -135,7 +135,7 @@ describe("task spawn executor cwd routing", () => {
 		expect(invalid.isError).toBe(true);
 		expect(firstToolResultText(invalid)).toMatch(/task cwd does not exist/);
 
-		expect(sdkSpy).toHaveBeenCalledTimes(3);
+		expect(sdkSpy.mock.calls).toHaveLength(3);
 		expect(createdCwds).toEqual([explicitCwd, nestedCwd, explicitCwd]);
 		expect(
 			sdkSpy.mock.calls.map(([options]) => {

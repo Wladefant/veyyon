@@ -1,4 +1,4 @@
-import { PythonKernel } from "../kernel";
+import { PythonKernel } from "../../src/eval/py/kernel";
 
 const kernel = await PythonKernel.start({ cwd: process.cwd() });
 await kernel.execute("import os; print(os.getpid())", {

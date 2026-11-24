@@ -1047,7 +1047,7 @@ describe("MCPManager event subscription contracts", () => {
 				.map(r => r.method)
 				.filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
-			expect(onEvent).not.toHaveBeenCalled();
+			expect(onEvent.mock.calls).toHaveLength(0);
 			expect(server.streamControllers).toHaveLength(0);
 		} finally {
 			await manager.stopEvents();
@@ -1122,7 +1122,7 @@ describe("MCPManager event subscription contracts", () => {
 				.map(r => r.method)
 				.filter(m => m === "events/poll" || m === "events/stream" || m === "events/subscribe");
 			expect(subscriptionMethods).toEqual([]);
-			expect(onEvent).not.toHaveBeenCalled();
+			expect(onEvent.mock.calls).toHaveLength(0);
 			expect(server.streamControllers).toHaveLength(0);
 		} finally {
 			await manager.stopEvents();
@@ -1249,13 +1249,13 @@ describe("MCPManager event subscription contracts", () => {
 
 			await secondPollRequested.promise;
 
-			expect(onEvent).toHaveBeenCalledTimes(1);
-			expect(onEvent).toHaveBeenCalledWith(
+			expect(onEvent.mock.calls).toHaveLength(1);
+			expect(onEvent.mock.calls).toContainEqual([
 				serverName,
 				expect.objectContaining({ eventId: "valid-1", name: EVENT_NAME }),
 				expect.any(String),
-			);
-			expect(onCursor).toHaveBeenCalledWith(serverName, expect.any(String), "cursor-1");
+			]);
+			expect(onCursor.mock.calls).toContainEqual([serverName, expect.any(String), "cursor-1"]);
 		} finally {
 			await manager.stopEvents();
 			server.stop();

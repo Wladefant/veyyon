@@ -1,4 +1,5 @@
 // The preloads every `bun test` process the repository starts receives on its command line.
+// Usage: not run directly. It exports `testPreloadArgs`, the `--preload` pair that `scripts/ci-test-ts.ts` builds for its own `bun test` children.
 //
 // Bun reads bunfig.toml from the cwd only. Suites run with their member directory as cwd, so the
 // repository-root preload is invisible from packages/<name>, and a member whose bunfig.toml omits a
@@ -6,8 +7,7 @@
 // unprotected, which surfaced when the tripwire's own suite wrote its probe files into the real
 // config root. Passing the paths explicitly makes the set independent of the cwd.
 //
-// This module has no side effects, so the suite runner (`ci-test-ts.ts`) and the leak tracer
-// (`test-sandbox/find-test-leaks.ts`) both import it without importing each other.
+// This module has no side effects. Nothing imports it today: `scripts/ci-test-ts.ts` builds the same pair in its own `preloadArgs`.
 
 import * as path from "node:path";
 

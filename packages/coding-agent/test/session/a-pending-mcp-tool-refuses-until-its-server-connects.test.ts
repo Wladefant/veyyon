@@ -20,11 +20,11 @@ import type { HookCommandContext } from "../../src/extensibility/custom-commands
 import type { MCPManager } from "../../src/mcp";
 import {
 	applyMCPEnvironment,
-	buildMCPPromptCommands,
 	collectPendingMCPToolNames,
 	createPendingMCPTool,
 	MAX_MCP_INSTRUCTIONS_LENGTH,
 } from "../../src/session/factory-mcp";
+import { buildMCPPromptCommands } from "../../src/session/reactive-mcp";
 
 describe("a pending MCP tool refuses until its server connects", () => {
 	it("answers as an error naming the server that is still connecting", async () => {

@@ -1147,7 +1147,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			try {
 				acknowledgement.resolve({ ok: true });
 				await expect(pending).rejects.toThrow(/disable superseded by newer state/i);
-				expect(upload).not.toHaveBeenCalled();
+				expect(upload.mock.calls).toHaveLength(0);
 				expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
 				expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
 					access: "access-new", refresh: REMOTE_REFRESH_SENTINEL,
