@@ -45,6 +45,7 @@ function fixture(explicit = true, global = false) {
 		"retry.fallbackChains": { [selectors[0]]: selectors.slice(1), default: ["unrelated/model"] },
 	});
 	const cooldowns = new Map<string, number>();
+	const cooldownKey = (selector: string) => selector.split(":")[0]!;
 	const events: AgentSessionEvent[] = [];
 	const session = {
 		agent: new Agent({ initialState: { model: models[0], messages: [], tools: [] } }),
@@ -60,8 +61,9 @@ function fixture(explicit = true, global = false) {
 			getApiKey: async () => "fake-key",
 			refreshSelectedModelMetadata: async (model: (typeof models)[number]) => model,
 			authStorage: { markUsageLimitReached: async () => ({ switched: false }) },
-			isSelectorSuppressed: (selector: string) => (cooldowns.get(selector.split(":")[0]) ?? 0) > Date.now(),
-			suppressSelector: (selector: string, until: number) => cooldowns.set(selector.split(":")[0], until),
+			normalizeSuppressedSelector: cooldownKey,
+			isSelectorSuppressed: (selector: string) => (cooldowns.get(cooldownKey(selector)) ?? 0) > Date.now(),
+			suppressSelector: (selector: string, until: number) => cooldowns.set(cooldownKey(selector), until),
 		} as unknown as ModelRegistry,
 		model: models[0],
 		thinkingLevel: undefined,
@@ -81,6 +83,7 @@ function fixture(explicit = true, global = false) {
 		promptGeneration: () => 0,
 		scheduleAgentContinue: () => {},
 		abortIsDeliberate: () => false,
+		tryRetractRetryDraft: () => true,
 		resetCurrentResponsesProviderSession: () => {},
 		maybeAutoRedeemCodexReset: async () => false,
 		removeAssistantMessageFromActiveContext: () => {},
@@ -137,44 +140,53 @@ describe("spawn quota fallback", () => {
 		}
 	});
 
-	it.each([{ tail: [] }, { tail: ["unavailable/full-model"] }])("keeps a resolved explicit list closed when no tail resolves (%j)", async ({ tail }) => {
-		const { runtime, session, settings, events } = fixture(false, true);
-		try {
-			const selection = await StartupModelSelection.begin({
-				options: { modelPattern: [selectors[0], ...tail], modelPatternFallbackChain: true },
-				settings,
-				modelRegistry: session.modelRegistry,
-				sessionManager: session.sessionManager,
-				existingSession: {} as StartupModelInputs["existingSession"],
-				hasExistingSession: false,
-				hasThinkingEntry: false,
-			});
-			await selection.completeAfterExtensions();
-			Object.assign(session, { model: selection.model, modelPatternFallbackKey: selection.modelPatternFallbackKey });
-			expect(await runtime.recoverFailedTurn(quota())).toBe(false);
-			expect(session.model).toBe(models[0]);
-			expect(events.filter(event => event.type === "retry_fallback_applied")).toEqual([]);
-		} finally {
-			runtime.abort();
-		}
-	});
+	it.each([{ tail: [] }, { tail: ["unavailable/full-model"] }])(
+		"keeps a resolved explicit list closed when no tail resolves (%j)",
+		async ({ tail }) => {
+			const { runtime, session, settings, events } = fixture(false, true);
+			try {
+				const selection = await StartupModelSelection.begin({
+					options: { modelPattern: [selectors[0], ...tail], modelPatternFallbackChain: true },
+					settings,
+					modelRegistry: session.modelRegistry,
+					sessionManager: session.sessionManager,
+					existingSession: {} as StartupModelInputs["existingSession"],
+					hasExistingSession: false,
+					hasThinkingEntry: false,
+				});
+				await selection.completeAfterExtensions();
+				Object.assign(session, {
+					model: selection.model,
+					modelPatternFallbackKey: selection.modelPatternFallbackKey,
+				});
+				expect(await runtime.recoverFailedTurn(quota())).toBe(false);
+				expect(session.model).toBe(models[0]);
+				expect(events.filter(event => event.type === "retry_fallback_applied")).toEqual([]);
+			} finally {
+				runtime.abort();
+			}
+		},
+	);
 
-	it.each([false, true])("keeps an empty or missing explicit chain closed before global Flash (missing=%s)", async missing => {
-		const { runtime, session, settings, events } = fixture(true, true);
-		settings.override("retry.fallbackChains", {
-			...(missing ? {} : { [selectors[0]]: [] }),
-			"openai-codex/*": [selectors[1]],
-			default: [selectors[1]],
-		});
-		try {
-			expect(await runtime.recoverFailedTurn(quota())).toBe(false);
-			expect(session.model).toBe(models[0]);
-			expect(events.filter(event => event.type === "retry_fallback_applied")).toEqual([]);
-			expect(runtime.isRetrying).toBe(false);
-		} finally {
-			runtime.abort();
-		}
-	});
+	it.each([false, true])(
+		"keeps an empty or missing explicit chain closed before global Flash (missing=%s)",
+		async missing => {
+			const { runtime, session, settings, events } = fixture(true, true);
+			settings.override("retry.fallbackChains", {
+				...(missing ? {} : { [selectors[0]]: [] }),
+				"openai-codex/*": [selectors[1]],
+				default: [selectors[1]],
+			});
+			try {
+				expect(await runtime.recoverFailedTurn(quota())).toBe(false);
+				expect(session.model).toBe(models[0]);
+				expect(events.filter(event => event.type === "retry_fallback_applied")).toEqual([]);
+				expect(runtime.isRetrying).toBe(false);
+			} finally {
+				runtime.abort();
+			}
+		},
+	);
 
 	it("does not enable inherited chains for a session without an explicit list", async () => {
 		const { runtime, session } = fixture(false);
