@@ -870,7 +870,9 @@ export class AgentSession {
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
 	 * the displayed session is always a top-level one, so a spawned agent's capture has no reader.
 	 */
-	readonly rawSseDebugBuffer: RawSseDebugBuffer | undefined;
+	get rawSseDebugBuffer(): RawSseDebugBuffer | undefined {
+		return this.#transport.rawSse;
+	}
 
 	#resetPromptMaintenanceState(): void {
 		this.#stopRetries.resetForPrompt();

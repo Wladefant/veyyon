@@ -10,6 +10,7 @@ import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
 
 interface FakeSession {
 	session: AgentSession;
@@ -74,11 +75,13 @@ function makeToolSession(registry: AgentRegistry, agentId: string): ToolSession 
 	};
 }
 
-function createRealSession(overrides: Partial<Record<SettingPath, unknown>> = {}): {
+function createRealSession(
+	overrides: Partial<Record<SettingPath, unknown>> = {},
+	sessionManager = SessionManager.inMemory("/tmp"),
+): {
 	session: AgentSession;
 	sessionManager: SessionManager;
 } {
-	const sessionManager = SessionManager.inMemory("/tmp");
 	const session = new AgentSession({
 		agent: new Agent({
 			initialState: {
@@ -99,6 +102,7 @@ describe("IRC", () => {
 	let bus: IrcBus;
 
 	const sessions: AgentSession[] = [];
+	const tempDirs: TempDir[] = [];
 	beforeEach(() => {
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
@@ -111,6 +115,7 @@ describe("IRC", () => {
 		for (const session of sessions.splice(0)) {
 			await session.dispose();
 		}
+		for (const temp of tempDirs.splice(0)) await temp.remove();
 	});
 
 	describe("IrcBus", () => {
@@ -1071,10 +1076,12 @@ describe("IRC", () => {
 		});
 
 		it("queues parent IRC as steering while an agent turn is streaming", async () => {
-			const { session } = createRealSession();
+			const temp = TempDir.createSync("irc-parent-steering-");
+			tempDirs.push(temp);
+			const { session, sessionManager } = createRealSession({}, SessionManager.create(temp.path(), temp.path()));
 			sessions.push(session);
 			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
-			Object.defineProperty(session, "isStreaming", { value: true, configurable: true });
+			session.agent.state.isStreaming = true;
 			registry.register({ id: "0-Child", displayName: "task", kind: "sub", parentId: "Main", session });
 			registry.register({ id: "Main", displayName: "main", kind: "main", session: null });
 
@@ -1085,6 +1092,14 @@ describe("IRC", () => {
 				body: "change approach",
 				ts: Date.now(),
 			});
+			session.agent.state.isStreaming = false;
+			expect(sessionManager.getEntries()).toContainEqual(
+				expect.objectContaining({
+					type: "custom",
+					customType: "irc:continuation-phase",
+					data: expect.objectContaining({ phaseId: "msg-parent" }),
+				}),
+			);
 			const queued = session.agent.peekSteeringQueue();
 			expect(outcome).toBe("injected");
 			expect(promptSpy).not.toHaveBeenCalled();
