@@ -38,7 +38,7 @@ const exportLeafCache = new Map();
 const moduleResolutionCaches = new WeakMap();
 const moduleLeafCache = new Map();
 
-for (const file of allTracked.filter(file => file.endsWith('package.json'))) {
+for (const file of allTracked.filter(file => file === 'package.json' || file.endsWith('/package.json'))) {
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(file, 'utf8'));

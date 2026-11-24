@@ -119,6 +119,7 @@ describe("OVH related-test selector", () => {
 				}),
 				"CHANGELOG.md": "# Changelog\n",
 				"docs/CHANGELOG.md": "# Documentation history\n",
+				"docs/example-package.json": JSON.stringify({ name: "example-package" }),
 				"scripts/docs-history.test.ts":
 					'import { readFileSync } from "node:fs";\nexport const history = readFileSync("docs/CHANGELOG.md", "utf8");\n',
 				"packages/pkg-a/CHANGELOG.md": "# Package changelog\n",
@@ -160,7 +161,7 @@ describe("OVH related-test selector", () => {
 			},
 		);
 
-		it("keeps ordinary readers for a changelog outside a package", () => {
+		it("keeps ordinary changelog readers when a sibling only looks like a package manifest", () => {
 			const output = runSelector(["docs/CHANGELOG.md"], { cwd: fixtureDir });
 			expect(parseSelectedTests(output)).toEqual(["scripts/docs-history.test.ts"]);
 		});
