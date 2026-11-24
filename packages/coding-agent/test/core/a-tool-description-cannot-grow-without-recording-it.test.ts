@@ -89,7 +89,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/search-tool-bm25": 359,
 	"tools/set-cwd": 449,
 	"tools/ssh": 236,
-	"tools/task": 1018,
+	"tools/task": 1071,
 	"tools/task-summary": 151,
 	// 500 -> 505: the `pending` op row and the concurrent in-progress rule the todo tool gained.
 	"tools/todo": 505,
@@ -105,7 +105,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 22316;
+const RECORDED_TOTAL = 22369;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

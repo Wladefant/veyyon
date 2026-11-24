@@ -11,14 +11,14 @@ Returns after all agents finish.{{/if}}
 {{#if batchEnabled}}
 - `context`: Shared goal, constraints, and interfaces. Do not repeat them per task.
 - `tasks[]`: One entry per agent; optional stable `name` (CamelCase, ≤32 characters) for IRC and jobs.
-  - `agent`: Enabled type.{{#if hasDefaultAgent}} Defaults to `{{defaultAgent}}`.{{else}} Required.{{/if}}
+  - `agent`: Enabled type.{{#if hasDefaultAgent}} Omitting it uses the configured default (`{{defaultAgent}}`).{{else}} Required.{{/if}}{{#if allowedAgentsText}} Enabled and allowed: {{allowedAgentsText}}.{{/if}}
 - `task`: Self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
 {{#if isolationEnabled}}
   - `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
 {{/if}}
 {{else}}
 - `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
-- `agent`: Enabled type.{{#if hasDefaultAgent}} Defaults to `{{defaultAgent}}`.{{else}} Required.{{/if}}
+- `agent`: Enabled type.{{#if hasDefaultAgent}} Omitting it uses the configured default (`{{defaultAgent}}`).{{else}} Required.{{/if}}{{#if allowedAgentsText}} Enabled and allowed: {{allowedAgentsText}}.{{/if}}
 - `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
 {{#if isolationEnabled}}
 - `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
