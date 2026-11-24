@@ -58,6 +58,7 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@veyyon/ai/utils/harmony-leak";
+import { getOpenAIStreamFirstEventTimeoutMs } from "@veyyon/ai/utils/idle-iterator";
 import { carryRequiredToolCall } from "@veyyon/ai/utils/tool-choice";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -76,6 +77,8 @@ import {
 	structuredCloneJSON,
 	transferTelegramTrace,
 } from "@veyyon/utils";
+import { untilAborted } from "@veyyon/utils/abortable";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { type AgentPauseGate, agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
@@ -1479,11 +1482,45 @@ async function resolveTurnOptions(
 	const serviceTier = config.getServiceTier ? config.getServiceTier(model) : config.serviceTier;
 	const inbandSignal = turn.inband?.abort.signal;
 	const providerSignal = signal && inbandSignal ? AbortSignal.any([signal, inbandSignal]) : (signal ?? inbandSignal);
-	const requestApiKey = (config.getApiKey ? await config.getApiKey(model) : undefined) ?? config.apiKey;
+	const credentialBudgetMs =
+		model.api === "openai-codex-responses"
+			? config.streamFirstEventTimeoutMs || getOpenAIStreamFirstEventTimeoutMs() || 300_000
+			: undefined;
+	const credentialDeadline =
+		credentialBudgetMs === undefined ? undefined : scopedTimeoutSignal(credentialBudgetMs, providerSignal);
+	let requestApiKey: SimpleStreamOptions["apiKey"];
+	let resolvedApiKey: string | undefined;
 	let credentialId: string | undefined;
-	const resolvedApiKey = await resolveApiKeyOnce(requestApiKey, providerSignal, id => {
-		credentialId = id;
-	});
+	try {
+		const resolveCredential = async () => {
+			requestApiKey = (config.getApiKey ? await config.getApiKey(model) : undefined) ?? config.apiKey;
+			credentialDeadline?.signal.throwIfAborted();
+			resolvedApiKey = await resolveApiKeyOnce(requestApiKey, credentialDeadline?.signal ?? providerSignal, id => {
+				credentialId = id;
+			});
+		};
+		if (credentialDeadline) {
+			await untilAborted(credentialDeadline.signal, resolveCredential);
+			logger.debug("Codex credential ready", {
+				sessionId: config.sessionId,
+				step: run.stepCounter.count,
+				model: model.id,
+				deadlineMs: credentialBudgetMs,
+			});
+		} else {
+			await resolveCredential();
+		}
+	} catch (error) {
+		if (credentialDeadline?.signal.aborted && !providerSignal?.aborted) {
+			throw new DOMException(
+				`OpenAI Codex timed out after ${credentialBudgetMs} ms resolving credentials`,
+				"TimeoutError",
+			);
+		}
+		throw error;
+	} finally {
+		credentialDeadline?.cancel();
+	}
 	return {
 		...config,
 		apiKey: isApiKeyResolver(requestApiKey)

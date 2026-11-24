@@ -46,6 +46,7 @@ function attach(): Attached {
 				unsubscribed++;
 			};
 		},
+		setRetryDraftRetraction: () => () => {},
 	} as unknown as AgentSession;
 	controller.attachTo(target);
 	return {

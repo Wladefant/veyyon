@@ -666,6 +666,7 @@ export class AgentSession {
 			this.#abortInProgress ||
 			this.#isDisposed ||
 			this.#streamingEdit.abortTriggered,
+		tryRetractRetryDraft: persistenceKey => this.#retryDraftRetraction?.(persistenceKey) === true,
 		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 		resetCurrentResponsesProviderSession: reason => this.#providerSessions.resetResponses(this.model, reason),
 		maybeAutoRedeemCodexReset: () => this.#usage.maybeAutoRedeemCodexReset(),
@@ -2356,6 +2357,19 @@ export class AgentSession {
 
 	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
 		this.#standingResolveHandler = handler ?? undefined;
+	}
+
+	#retryDraftRetraction: ((persistenceKey: string) => boolean) | undefined;
+
+	/**
+	 * Bind a display's synchronous check-and-retract operation. Without
+	 * this proof, leave the draft alone: append-only displays cannot erase it.
+	 */
+	setRetryDraftRetraction(retract: (persistenceKey: string) => boolean): () => void {
+		this.#retryDraftRetraction = retract;
+		return () => {
+			if (this.#retryDraftRetraction === retract) this.#retryDraftRetraction = undefined;
+		};
 	}
 
 	#sessionSwitchReconciler: (() => Promise<void>) | undefined;
