@@ -175,10 +175,54 @@ describe("/mcp auth commands", () => {
 		expect(savedServer?.auth).toBeUndefined();
 	});
 
+	type ScopeScenario = {
+		name: string;
+		expected: string | null;
+		configured?: string;
+		endpoint?: string;
+		scope?: string;
+		scopes?: string;
+		prmScopes?: string[] | null;
+		supportedScopes?: string[] | null;
+		direct?: boolean;
+		nested?: boolean;
+		recursive?: boolean;
+		challenge?: string;
+		header?: boolean;
+	};
+
+	const precedenceCases: ScopeScenario[] = [
+		{
+			name: "configuration over every advertised scope",
+			configured: "configured",
+			endpoint: "?scope=url",
+			expected: "configured",
+		},
+		{
+			name: "URL scope when configuration is blank",
+			configured: " \t",
+			endpoint: "?scope=url",
+			expected: "url",
+		},
+		{ name: "resource scopes when URL scope is empty", endpoint: "?scope=", expected: "read profile" },
+		{ name: "resource scopes when URL scope is blank", endpoint: "?scope=%20", expected: "read profile" },
+		{ name: "server scopes when resource scopes are absent", prmScopes: null, expected: "read profile admin" },
+		{ name: "server scopes when resource scopes are blank", prmScopes: [" ", "\t"], expected: "read profile admin" },
+		{ name: "no scopes when none are advertised", prmScopes: null, supportedScopes: null, expected: null },
+		{
+			name: "no scopes when every source is blank",
+			configured: " ",
+			endpoint: "?scope=%20",
+			prmScopes: [" "],
+			supportedScopes: [" ", "\t"],
+			expected: null,
+		},
+	];
+
 	// WHY: drive real reauth discovery, DCR and authorize construction for both managed transports.
 	// Only network and browser callback boundaries are replaced; live provider consent is not covered.
 	for (const transport of ["http", "sse"] as const) {
-		for (const scenario of [
+		const scenarios: ScopeScenario[] = [
 			{ name: "configured scopes", configured: "read", expected: "read" },
 			{ name: "embedded scope", endpoint: "?scope=read", expected: "read" },
 			{ name: "explicit scope", scope: "read", expected: "read" },
@@ -202,7 +246,7 @@ describe("/mcp auth commands", () => {
 			{
 				name: "JSON supported scopes with blank PRM scopes",
 				direct: true,
-				blankPrm: true,
+				prmScopes: [" ", "\t"],
 				expected: "read profile admin",
 			},
 			{ name: "JSON configured scopes", direct: true, configured: "read", expected: "read" },
@@ -266,8 +310,14 @@ describe("/mcp auth commands", () => {
 				endpoint: "?scope=default",
 				expected: "required default",
 			},
-		]) {
+			...precedenceCases.flatMap(scenario => [
+				{ ...scenario, name: `direct precedence: ${scenario.name}`, direct: true },
+				{ ...scenario, name: `well-known precedence: ${scenario.name}` },
+			]),
+		];
+		for (const scenario of scenarios) {
 			test(`${transport} reauth preserves ${scenario.name} through DCR and authorization`, async () => {
+				const { prmScopes = ["read", "profile"], supportedScopes = ["read", "profile", "admin"] } = scenario;
 				const authStorage = freshAuthStorage();
 				await authStorage.reload();
 				const credentialId = oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL);
@@ -290,7 +340,7 @@ describe("/mcp auth commands", () => {
 					authorization_endpoint: `https://auth.example.com/authorize${scenario.endpoint ?? ""}`,
 					token_endpoint: "https://auth.example.com/token",
 					registration_endpoint: "https://auth.example.com/register",
-					scopes_supported: ["read", "profile", "admin"],
+					scopes_supported: supportedScopes ?? undefined,
 					scope: scenario.scope,
 					scopes: scenario.scopes,
 				};
@@ -321,7 +371,7 @@ describe("/mcp auth commands", () => {
 								resourceMetadataRequests += 1;
 								return Response.json({
 									authorization_servers: ["https://auth.example.com"],
-									scopes_supported: scenario.blankPrm ? [" ", "\t"] : ["read", "profile"],
+									scopes_supported: prmScopes ?? undefined,
 								});
 							}
 							if (url === "https://auth.example.com/.well-known/oauth-authorization-server")
@@ -346,8 +396,8 @@ describe("/mcp auth commands", () => {
 				const { controller, showError } = createController(authStorage);
 				await controller.handle("reauth envserver");
 				expect(authorizationScopes).toEqual([scenario.expected]);
-				expect(registeredScopes).toEqual([scenario.expected]);
-				if (scenario.direct && scenario.configured) expect(resourceMetadataRequests).toBe(0);
+				expect(registeredScopes).toEqual([scenario.expected ?? undefined]);
+				if (scenario.direct && scenario.configured?.trim()) expect(resourceMetadataRequests).toBe(0);
 				expect(showError.mock.calls.flat().join("\n")).toContain("Consent cancelled");
 				expect(authStorage.get(credentialId)).toEqual(previous);
 			});

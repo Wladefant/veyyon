@@ -12,6 +12,7 @@ import {
 	discoverOAuthEndpoints,
 	fetchResourceMetadataScopes,
 	type OAuthEndpoints,
+	resolveOAuthScopes,
 } from "../../../mcp";
 import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "../../../mcp/oauth-flow";
 import type { MCPServerConfig, MCPStdioServerConfig } from "../../../mcp/types";
@@ -424,21 +425,24 @@ export async function oauthEndpointsForAuthFailure(
 	url: string | undefined,
 	options: { ignoreDiscoveryFailure: boolean; configuredScopes?: string },
 ): Promise<OAuthEndpoints | null> {
-	let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
-	const configuredScopes = options.configuredScopes?.trim();
-	const hasExplicitScopes = oauth?.explicitScopes && Boolean(oauth.scopes?.trim());
-	if (!oauth && url) {
+	const oauth = authResult.authType === "oauth" ? authResult.oauth : undefined;
+	if (!oauth) {
+		if (!url) return null;
 		const discovery = discoverOAuthEndpoints(url, authResult.authServerUrl, authResult.resourceMetadataUrl, {
 			protectedScopes: authResult.scopes,
+			scopes: options.configuredScopes,
 		});
-		oauth = options.ignoreDiscoveryFailure ? await discovery.catch(() => null) : await discovery;
-	} else if (oauth && !configuredScopes && !hasExplicitScopes && authResult.resourceMetadataUrl) {
-		// The JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
-		// advertised protected-resource metadata for the required scopes.
-		const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
-		if (scopes) oauth = { ...oauth, scopes };
+		return options.ignoreDiscoveryFailure ? await discovery.catch(() => null) : await discovery;
 	}
-	return oauth && configuredScopes ? { ...oauth, scopes: configuredScopes } : oauth;
+
+	const requested = resolveOAuthScopes(options.configuredScopes, oauth.explicitScopes ? oauth.scopes : undefined);
+	if (requested.explicitScopes) return { ...oauth, ...requested };
+
+	// Direct endpoints bypass discovery. Read the resource scope before using the supported set.
+	const resourceScopes = authResult.resourceMetadataUrl
+		? await fetchResourceMetadataScopes(authResult.resourceMetadataUrl)
+		: undefined;
+	return { ...oauth, ...resolveOAuthScopes(undefined, undefined, resourceScopes, oauth.scopes) };
 }
 
 /**
