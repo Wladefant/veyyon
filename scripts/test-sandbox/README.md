@@ -126,6 +126,17 @@ PowerShell launches `scripts/test-sandbox/run.ps1` with disposable scratch stagi
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-sandbox/run.ps1 -- bun test <paths>
 ```
 
+For the NTFS cross-volume case, pass `-ScratchRoot` and `-SecondaryScratchRoot`
+before `--`. Use existing scratch bases on different NTFS volumes. Pass the
+canonical local drive path for the secondary base. The runner creates a new
+private child relative to an open directory handle and grants access at
+creation. The guest must remove its own secondary fixtures. The runner removes
+the empty child by handle and reports a cleanup failure if entries remain.
+Without a secondary base, the cross-volume case reports a skip.
+
+Run `secondary-scratch-proof.ps1 -ScratchRoot <existing-scratch-base>` to check
+the native secondary scratch creation and cleanup rules.
+
 1. Built-in AppContainer constraints:
    The Windows kernel enforces low integrity and capability sandboxing.
    Network, host credentials, and user home directories remain inaccessible.
@@ -138,7 +149,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-sandbox/run.ps1
    `run.ps1` creates a temporary host sentinel in the operator's real user profile and removes only that file in `finally`.
    The in-container guest entry tests real home and sentinel accessibility before admitting test execution; if any host path is readable, execution halts with code 126.
    `AppContainerLauncher` assigns the suspended guest to a kill-on-close Windows Job Object (no breakaway) before resuming, terminating all descendants on exit or timeout.
-   Windows kernel isolation does not allow write access to `C:\` outside the granted scratch directory.
+   Windows kernel isolation does not allow write access to `C:\` outside the granted scratch directories.
    Tests that attempt `fs.mkdir` directly on `C:\` (such as `path-literal-colon-selector.test.ts` fixture `C:\veyyon-reg-*`) trigger real-data tripwires or filesystem permission errors.
    Pure kernel isolation disallows runtime monkeypatching or fake redirection shims.
 ## The remote rung

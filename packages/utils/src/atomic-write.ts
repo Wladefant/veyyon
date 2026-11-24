@@ -503,7 +503,10 @@ export async function atomicWriteFilePreservingMode(
 		fsync?: boolean;
 		defaultMode?: number;
 		requireAtomicReplace?: boolean;
-		/** Stage with the existing destination's Windows security. Never displace the destination on failure. */
+		/**
+		 * On Windows, stage with the existing destination's security and publish with a single NTFS rename.
+		 * No retry or fallback displaces the old file on failure. This does not compare-and-swap the leaf name.
+		 */
 		preserveWindowsDacl?: boolean;
 	} = {},
 ): Promise<void> {
