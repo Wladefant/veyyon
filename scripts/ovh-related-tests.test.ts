@@ -89,8 +89,9 @@ describe("OVH related-test selector", () => {
 		expect(output).toContain("packages/coding-agent/test/config-hot-reload.test.ts");
 		expect(selectedTests).toContain(changedTest);
 		expect(output).toContain(`${rootChangelog}: transitive; transitive tests=0; selected=0`);
-		expect(output).toContain(`${memberChangelog}: transitive; transitive tests=5; selected=5`);
+		expect(output).toContain(`${memberChangelog}: transitive; transitive tests=6; selected=6`);
 		expect(selectedTests).toContain("scripts/changelog-version-headings-are-unique.test.ts");
+		expect(selectedTests).toContain("scripts/release-changelog.test.ts");
 		expect(selectedTests).toContain("apps/site/deploy.test.ts");
 	}, 120000);
 

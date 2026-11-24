@@ -354,6 +354,7 @@ function changelogReaders(file) {
   if (dir === '.' || !packageRecords.some(record => record.dir === dir)) return [];
   const readers = [
     'scripts/changelog-version-headings-are-unique.test.ts',
+    'scripts/release-changelog.test.ts',
     'scripts/rolling-a-changelog-entry-into-a-version-is-not-deleting-it.test.ts',
     'scripts/sync-root-changelog.test.ts',
     'scripts/write-root-changelog-refuses-to-delete-entries.test.ts',
