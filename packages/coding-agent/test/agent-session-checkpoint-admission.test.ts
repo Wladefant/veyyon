@@ -89,7 +89,10 @@ async function createCheckpointHarness(
 			}),
 			{ mode: 0o600 },
 		);
-		await writeFile(join(sessionsDirectory, "..", "recovery.json"), JSON.stringify({ sessionId, checkpointTransfer: true }));
+		await writeFile(
+			join(sessionsDirectory, "..", "recovery.json"),
+			JSON.stringify({ sessionId, checkpointTransfer: true }),
+		);
 	}
 	process.env.VEYYON_CHECKPOINT_NODE = "laptop-b";
 	process.env.VEYYON_CHECKPOINT_URL = "https://checkpoint.test";
@@ -109,6 +112,8 @@ async function createCheckpointHarness(
 			if (action === "claim")
 				return Response.json({
 					ownerNode,
+					targetNode: identity.targetNode,
+					transferId: identity.transferId,
 					epoch: 8,
 					expiresAt: "2099-01-01T00:00:00Z",
 					headSequence: 0,
@@ -117,7 +122,13 @@ async function createCheckpointHarness(
 				});
 			if (action === "finalize") return Response.json({ ok: true });
 			if (action === "lease")
-				return Response.json({ ownerNode, epoch: 8, expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "" });
+				return Response.json({
+					ownerNode,
+					epoch: 8,
+					expiresAt: "2099-01-01T00:00:00Z",
+					headSequence: 0,
+					manifestHash: "",
+				});
 			if (action === "renew" && ++renewals > 1) return Response.json({ error: "lease lost" }, { status: 409 });
 			if (action === "renew")
 				return Response.json({
@@ -242,14 +253,12 @@ test("production prompt and tool admission both stop when the cloud lease is los
 		},
 	);
 
-		await session.prompt("exercise fenced admission");
-		await session.waitForIdle();
-		expect(getStreamCount()).toBe(1);
-		expect(getRenewals()).toBeGreaterThanOrEqual(2);
-		expect(getExecutions()).toBe(0);
-	},
-	5000,
-);
+	await session.prompt("exercise fenced admission");
+	await session.waitForIdle();
+	expect(getStreamCount()).toBe(1);
+	expect(getRenewals()).toBeGreaterThanOrEqual(2);
+	expect(getExecutions()).toBe(0);
+}, 5000);
 test("a genuinely lazy session acquires ordinary ownership before its first prompt", async () => {
 	const { session, sessionFile, getRequests, getStreamCount } = await createCheckpointHarness(
 		(_streamCount, model) => ({

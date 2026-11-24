@@ -755,7 +755,7 @@ export class BashTool
 			saveArtifact:
 				"artifactError" in result && result.artifactError
 					? undefined
-					: full => saveBashOriginalArtifact(this.session, full),
+					: full => result.artifactId ?? saveBashOriginalArtifact(this.session, full),
 		});
 
 		const resultBuilder = toolResult(details).text(withNotices(cappedBody));
