@@ -4447,6 +4447,7 @@ export class AgentSession {
 			}
 			this.agent.steer(message);
 		}
+		this.#queue.scheduleDrain();
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
