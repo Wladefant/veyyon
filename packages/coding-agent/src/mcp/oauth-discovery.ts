@@ -126,21 +126,24 @@ function readAuthChallenges(header: string): { scheme: string; params: ReadonlyM
 	return challenges;
 }
 
+function isHttpUrl(value: string | undefined): value is string {
+	return value !== undefined && /^https?:/i.test(value) && URL.canParse(value);
+}
+
 function challengeEndpoints(params: ReadonlyMap<string, string>) {
-	return {
-		authorizationUrl:
-			params.get("authorization_uri") ??
-			params.get("authorization_url") ??
-			params.get("authorization_endpoint") ??
-			params.get("authorize_url") ??
-			params.get("realm"),
-		tokenUrl: params.get("token_url") ?? params.get("token_uri") ?? params.get("token_endpoint"),
-	};
+	const authorizationUrl =
+		params.get("authorization_uri") ??
+		params.get("authorization_url") ??
+		params.get("authorization_endpoint") ??
+		params.get("authorize_url") ??
+		params.get("realm");
+	const tokenUrl = params.get("token_url") ?? params.get("token_uri") ?? params.get("token_endpoint");
+	return isHttpUrl(authorizationUrl) && isHttpUrl(tokenUrl) ? { authorizationUrl, tokenUrl } : undefined;
 }
 
 function challengeResourceMetadata(params: ReadonlyMap<string, string>): string | undefined {
 	const url = params.get("resource_metadata");
-	return url && /^https?:/i.test(url) && URL.canParse(url) ? url : undefined;
+	return isHttpUrl(url) ? url : undefined;
 }
 
 function readBearerParams(error: Error): ReadonlyMap<string, string> {
@@ -149,8 +152,7 @@ function readBearerParams(error: Error): ReadonlyMap<string, string> {
 	let scopeChallenge: ReadonlyMap<string, string> | undefined;
 	for (const { scheme, params } of header ? readAuthChallenges(header) : []) {
 		if (scheme !== "bearer") continue;
-		const { authorizationUrl, tokenUrl } = challengeEndpoints(params);
-		if (authorizationUrl && tokenUrl && URL.canParse(authorizationUrl) && URL.canParse(tokenUrl)) return params;
+		if (challengeEndpoints(params)) return params;
 		// Prefer complete endpoints, then a discovery URL, then scopes alone.
 		// Within a tier, keep the first challenge in the header.
 		if (!metadataChallenge && challengeResourceMetadata(params)) metadataChallenge = params;
@@ -269,8 +271,9 @@ function readOAuthEndpoints(error: Error, challengeValues: ReadonlyMap<string, s
 		// Not JSON, continue with other detection methods
 	}
 
-	const { authorizationUrl, tokenUrl } = challengeEndpoints(challengeValues);
-	if (authorizationUrl && tokenUrl && URL.canParse(authorizationUrl) && URL.canParse(tokenUrl)) {
+	const endpoints = challengeEndpoints(challengeValues);
+	if (endpoints) {
+		const { authorizationUrl, tokenUrl } = endpoints;
 		const scope = mergeRequestedScopes(
 			challengeValues.get("scope") ?? challengeValues.get("scopes"),
 			scopeFromAuthUrl(authorizationUrl),

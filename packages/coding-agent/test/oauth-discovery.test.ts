@@ -263,6 +263,29 @@ describe("WWW-Authenticate scopes", () => {
 		expect(result.scopes).toBe("read");
 	});
 
+	it.each([
+		["urn:example:legacy", "https://legacy.example.com/token"],
+		["https://legacy.example.com/authorize", "ftp://legacy.example.com/token"],
+	] as const)("does not use a direct pair with realm %s and token URL %s", (realm, tokenUrl) => {
+		const metadata = "https://mcp.example.com/current";
+		const unusable = `Bearer realm="${realm}", token_url="${tokenUrl}", resource_metadata="${metadata}", scope=legacy`;
+		const usable =
+			'Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=read';
+
+		const discovery = analyzeAuthError(new Error(`HTTP 401: WWW-Authenticate: ${unusable}`));
+		expect(discovery.oauth).toBeUndefined();
+		expect(discovery.resourceMetadataUrl).toBe(metadata);
+		expect(discovery.scopes).toBe("legacy");
+
+		const direct = analyzeAuthError(new Error(`HTTP 401: WWW-Authenticate: ${unusable}, ${usable}`));
+		expect(direct.resourceMetadataUrl).toBeUndefined();
+		expect(direct.oauth).toMatchObject({
+			authorizationUrl: "https://auth.example.com/authorize",
+			tokenUrl: "https://auth.example.com/token",
+			scopes: "read",
+		});
+	});
+
 	const challenges = {
 		direct:
 			'Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=direct',
