@@ -20,14 +20,19 @@ import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { RecoveredRetryError } from "@veyyon/coding-agent/extensibility/shared-events";
 import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
+import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import type { ComposerPredictionController } from "@veyyon/coding-agent/modes/terminal/controllers/composer-prediction-controller";
-import type { EventControllerContext } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
+import {
+	EventController,
+	type EventControllerContext,
+} from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
 import type { IdleFollowUps } from "@veyyon/coding-agent/modes/terminal/controllers/idle-follow-ups";
 import { TurnRecovery } from "@veyyon/coding-agent/modes/terminal/controllers/turn-recovery";
 import { SessionProjectionEngine } from "@veyyon/coding-agent/presentation/session-projection-engine";
 import { compactionActionLabel } from "@veyyon/coding-agent/presentation/summary-builder";
 import { toAssistantMessageView } from "@veyyon/coding-agent/presentation/transcript-builder";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { Container, type Loader } from "@veyyon/tui";
 
@@ -66,8 +71,11 @@ afterEach(() => {
 function createRig(options: { focusedAgentId?: string; streaming?: boolean } = {}) {
 	const log: string[] = [];
 	const progress: boolean[] = [];
+	let renderCount = 0;
+	const chatContainer = new TranscriptContainer();
 	const ctx = {
 		autoCompactionLoader: undefined as Loader | undefined,
+		chatContainer,
 		retryLoader: undefined as Loader | undefined,
 		lastAssistantUsage: { input: 1 } as unknown,
 		focusedAgentId: options.focusedAgentId,
@@ -84,7 +92,12 @@ function createRig(options: { focusedAgentId?: string; streaming?: boolean } = {
 		showWarning: (message: string) => log.push(`warning:${message}`),
 		statusContainer: new Container(),
 		statusLine: { invalidate: () => {} },
-		ui: { requestRender: () => {}, requestComponentRender: () => {} },
+		ui: {
+			requestRender: () => {
+				renderCount++;
+			},
+			requestComponentRender: () => {},
+		},
 		viewSession: { isStreaming: options.streaming ?? false, settings: { get: () => undefined }, model: undefined },
 	};
 	const recovery = new TurnRecovery(ctx as unknown as EventControllerContext, {
@@ -93,7 +106,7 @@ function createRig(options: { focusedAgentId?: string; streaming?: boolean } = {
 		composerPrediction: { cancel: () => {} } as unknown as ComposerPredictionController,
 		setTerminalProgress: active => void progress.push(active),
 	});
-	return { ctx, log, progress, recovery };
+	return { chatContainer, ctx, log, progress, recovery, renderCalls: () => renderCount };
 }
 
 /** The loader's message, with the spinner frame in front of it dropped. */
@@ -264,23 +277,29 @@ describe("an auto-retry", () => {
 		expect(idle.log).not.toContain("working:show");
 	});
 
-	it("clears a retracted draft's segments on retry start while keeping recovery and pinned behavior intact", async () => {
-		const { log, recovery } = createRig();
+	it("clears an uncommitted finalized draft synchronously via tryRetractDraft while keeping recovery and pinned behavior intact", async () => {
+		const { chatContainer, log, recovery, renderCalls } = createRig();
 		const block = erroredBlock();
+		chatContainer.addChild(block);
+		chatContainer.render(120);
 		recovery.pinTurnError(block, ERROR_TEXT);
 		expect(rendered(block)).toContain("running the migration");
 		expect(block.isTranscriptBlockFinalized()).toBe(true);
+		expect(chatContainer.isBlockUncommitted(block)).toBe(true);
 
 		const versionBefore = block.getTranscriptBlockVersion();
+		const rendersBefore = renderCalls();
 		const key = block.messagePersistenceKey();
 		expect(key).toBeDefined();
 
-		await recovery.retryStarted({ ...RETRY_START, discardedDraftKey: key }, block);
+		expect(recovery.tryRetractDraft(key!, block)).toBe(true);
 		expect(rendered(block)).not.toContain("running the migration");
 		expect(block.getTranscriptBlockVersion()).toBeGreaterThan(versionBefore);
 		expect(block.messagePersistenceKey()).toBe(key);
+		expect(renderCalls()).toBe(rendersBefore + 1);
 		expect(log).not.toContain("banner:clear");
 
+		await recovery.retryStarted(RETRY_START, block);
 		await recovery.retryEnded({
 			type: "auto_retry_end",
 			success: true,
@@ -294,8 +313,8 @@ describe("an auto-retry", () => {
 		expect(rendered(block)).not.toContain(ERROR_TEXT);
 	});
 
-	it("clears only the block matching discardedDraftKey when last and pinned components differ", async () => {
-		const { recovery } = createRig();
+	it("clears only the block matching the retraction key when last and pinned components differ", () => {
+		const { chatContainer, recovery } = createRig();
 		const pinned = erroredBlock();
 		const other = new AssistantMessageComponent(
 			toAssistantMessageView({
@@ -310,10 +329,78 @@ describe("an auto-retry", () => {
 				timestamp: 1_700_000_000_100,
 			}),
 		);
+		chatContainer.addChild(pinned);
+		chatContainer.addChild(other);
+		chatContainer.render(120);
 		recovery.pinTurnError(pinned, ERROR_TEXT);
 
-		await recovery.retryStarted({ ...RETRY_START, discardedDraftKey: pinned.messagePersistenceKey() }, other);
+		expect(recovery.tryRetractDraft(pinned.messagePersistenceKey()!, other)).toBe(true);
 		expect(rendered(pinned)).not.toContain("running the migration");
 		expect(rendered(other)).toContain("earlier completed draft");
+	});
+
+	it("refuses draft retraction and preserves the draft when rows entered native scrollback", () => {
+		const { chatContainer, recovery, renderCalls } = createRig();
+		const block = erroredBlock();
+		chatContainer.addChild(block);
+		const rows = chatContainer.render(120);
+		chatContainer.setNativeScrollbackCommittedRows(rows.length);
+		expect(chatContainer.isBlockUncommitted(block)).toBe(false);
+
+		const versionBefore = block.getTranscriptBlockVersion();
+		const rendersBefore = renderCalls();
+		const key = block.messagePersistenceKey()!;
+
+		expect(recovery.tryRetractDraft(key, block)).toBe(false);
+		expect(rendered(block)).toContain("running the migration");
+		expect(block.getTranscriptBlockVersion()).toBe(versionBefore);
+		expect(renderCalls()).toBe(rendersBefore);
+	});
+
+	it("refuses retraction when the key does not match or the component is not in the transcript", () => {
+		const { chatContainer, recovery } = createRig();
+		const detached = erroredBlock();
+		const detachedKey = detached.messagePersistenceKey()!;
+		expect(recovery.tryRetractDraft(detachedKey, detached)).toBe(false);
+		expect(rendered(detached)).toContain("running the migration");
+
+		const attached = erroredBlock();
+		chatContainer.addChild(attached);
+		chatContainer.render(120);
+		expect(recovery.tryRetractDraft("assistant:0:other:model::error", attached)).toBe(false);
+		expect(rendered(attached)).toContain("running the migration");
+	});
+
+	it("registers draft retraction only while attached to the session", () => {
+		const chatContainer = new TranscriptContainer();
+		const ctx = {
+			chatContainer,
+			session: undefined,
+			settings: { get: () => undefined },
+			ui: { requestRender: () => {}, requestComponentRender: () => {} },
+		} as unknown as EventControllerContext;
+		const controller = new EventController(ctx);
+
+		let registeredRetract: ((key: string) => boolean) | undefined;
+		let unsubscribeEventsCalls = 0;
+		let unregisterRetractCalls = 0;
+		const target = {
+			subscribe: () => () => {
+				unsubscribeEventsCalls++;
+			},
+			setRetryDraftRetraction: (retract: (key: string) => boolean) => {
+				registeredRetract = retract;
+				return () => {
+					unregisterRetractCalls++;
+				};
+			},
+		} as unknown as AgentSession;
+
+		controller.attachTo(target);
+		expect(registeredRetract).toBeDefined();
+
+		ctx.unsubscribe?.();
+		expect(unsubscribeEventsCalls).toBe(1);
+		expect(unregisterRetractCalls).toBe(1);
 	});
 });

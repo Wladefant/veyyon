@@ -94,6 +94,8 @@ export interface RetryHost {
 	 * message rather than for the session, because the settle runs after `abort()` has returned.
 	 */
 	abortIsDeliberate(message: AssistantMessage): boolean;
+	/** Check and retract the live draft synchronously; false if its rows cannot be removed. */
+	tryRetractRetryDraft(persistenceKey: string): boolean;
 	/** Switch the active model and reset the provider sessions the switch invalidates. */
 	setModelWithProviderSessionReset(model: Model): void;
 	resetCurrentResponsesProviderSession(reason: string): void;
@@ -519,7 +521,7 @@ export class RetryRuntime {
 			budgetExhausted: this.#attempt > policy.maxRetries,
 			classifierRefusal: isProviderRefusalMessage(message),
 			modelNotInPlan: AIError.is(id, AIError.Flag.ModelNotInPlan),
-			options,
+			options: discardDraft ? { ...options, allowModelFallback: false } : options,
 			delayMs: staleReplay ? 0 : calculateRetryBackoffDelayMs(policy.baseDelayMs, this.#attempt),
 			switchedCredential: false,
 			switchedModel: false,
@@ -537,7 +539,22 @@ export class RetryRuntime {
 		}
 		if (await this.#closeUnrecoverable(attempt, policy.maxDelayMs)) return false;
 
-		const discardedDraftKey = await this.#recordPendingRecoveredError(message, id, attempt, discardDraft);
+		const recorded = await this.#recordPendingRecoveredError(
+			message,
+			id,
+			attempt,
+			discardDraft ? generation : undefined,
+		);
+		if (!recorded) {
+			const retriesSpent = this.#attempt - 1;
+			if (retriesSpent > 0) {
+				await this.#endWithFailure(message, retriesSpent, message.errorMessage);
+			} else {
+				this.#attempt = 0;
+				this.resolve();
+			}
+			return false;
+		}
 
 		await this.#host.emitSessionEvent({
 			type: "auto_retry_start",
@@ -549,7 +566,6 @@ export class RetryRuntime {
 				? `${attempt.errorMessage} (${attempt.quotaMessage})`
 				: attempt.errorMessage,
 			errorId: message.errorId,
-			...(discardedDraftKey ? { discardedDraftKey } : {}),
 		});
 
 		// Remove the failed assistant message from active context before retrying.
@@ -1006,11 +1022,11 @@ export class RetryRuntime {
 		message: AssistantMessage,
 		id: number,
 		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
-		discardDraft: boolean,
-	): Promise<string | undefined> {
+		draftGeneration: number | undefined,
+	): Promise<boolean> {
 		await this.#host.persistLifecycleErrorMessage(message);
 		const persistenceKey = sessionMessagePersistenceKey(message);
-		if (!persistenceKey) return;
+		if (!persistenceKey) return draftGeneration === undefined;
 		let branchEntry: SessionEntry | undefined;
 		for (const entry of this.#session.sessionManager.getBranch().slice().reverse()) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
@@ -1021,10 +1037,19 @@ export class RetryRuntime {
 			branchEntry = entry;
 			break;
 		}
-		if (branchEntry?.type !== "message" || branchEntry.message.role !== "assistant") {
-			return discardDraft ? persistenceKey : undefined;
+		if (draftGeneration !== undefined) {
+			// A check without retraction would race terminal rendering during
+			// the journal write. Refuse before changing the journal or context.
+			if (
+				this.#host.promptGeneration() !== draftGeneration ||
+				this.#host.abortIsDeliberate(message) ||
+				!this.#host.tryRetractRetryDraft(persistenceKey)
+			) {
+				return false;
+			}
 		}
-		if (discardDraft) {
+		if (branchEntry?.type !== "message" || branchEntry.message.role !== "assistant") return true;
+		if (draftGeneration !== undefined) {
 			// Keep the diagnostic, not the draft. On reload the transcript must
 			// show the same replacement as the live display.
 			const previous = branchEntry.message;
@@ -1036,9 +1061,7 @@ export class RetryRuntime {
 				throw error;
 			}
 		}
-		if (this.#pendingRecoveredErrors.some(error => error.entryId === branchEntry.id)) {
-			return discardDraft ? persistenceKey : undefined;
-		}
+		if (this.#pendingRecoveredErrors.some(error => error.entryId === branchEntry.id)) return true;
 		const rateLimited = AIError.is(id, AIError.Flag.UsageLimit);
 		const recovery = retryRecoveryKind(id, options.switchedCredential, options.switchedModel, options.delayMs);
 		const note = retryRecoveryNote(recovery, rateLimited);
@@ -1049,7 +1072,7 @@ export class RetryRuntime {
 			attempt: this.#attempt,
 			note,
 		});
-		return discardDraft ? persistenceKey : undefined;
+		return true;
 	}
 
 	async #markPendingRecoveredErrors(supersedingMessage: AssistantMessage): Promise<RecoveredRetryError[]> {

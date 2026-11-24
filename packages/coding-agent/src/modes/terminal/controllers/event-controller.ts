@@ -292,7 +292,7 @@ export class EventController {
 		this.#attachedSession = target;
 		this.#projection.seedMessages();
 		let assistantStreamSynced = false;
-		this.ctx.unsubscribe = target.subscribe(async (event: AgentSessionEvent) => {
+		const unsubscribeEvents = target.subscribe(async (event: AgentSessionEvent) => {
 			if (event.type === "message_start" && event.message.role === "assistant") {
 				assistantStreamSynced = true;
 			} else if (event.type === "message_update" && event.message.role === "assistant" && !assistantStreamSynced) {
@@ -301,6 +301,14 @@ export class EventController {
 			}
 			await this.handleEvent(event);
 		});
+		const unregisterRetraction = target.setRetryDraftRetraction(key => {
+			if (this.#transcriptReplay) return false;
+			return this.#recovery.tryRetractDraft(key, this.#lastAssistantComponent);
+		});
+		this.ctx.unsubscribe = () => {
+			unsubscribeEvents();
+			unregisterRetraction();
+		};
 	}
 
 	/**
@@ -351,19 +359,17 @@ export class EventController {
 	 * against a half-built ledger, and the rebuild would seal the card that event opened as history.
 	 */
 	deferEventsUntil(replay: Promise<void>): void {
-		this.#transcriptReplay = replay.catch(() => undefined);
+		const guarded = replay.catch(() => undefined).finally(() => {
+			if (this.#transcriptReplay === guarded) this.#transcriptReplay = undefined;
+		});
+		this.#transcriptReplay = guarded;
 	}
 
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
-		const replay = this.#transcriptReplay;
-		if (replay) {
-			// Events that arrive while it builds queue on it in order; the first to resume releases it.
-			await replay;
-			if (this.#transcriptReplay === replay) this.#transcriptReplay = undefined;
-		}
+		if (this.#transcriptReplay) await this.#transcriptReplay;
 		// Each handler explicitly requests a render (or leaves it out, when it
 		// changed nothing visible). A blanket pre-render fired on every event —
 		// including the ~hundreds of `message_update` deltas per streaming turn —

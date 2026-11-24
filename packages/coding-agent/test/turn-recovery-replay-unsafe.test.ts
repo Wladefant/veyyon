@@ -287,12 +287,13 @@ describe("AgentSession transient-error recovery replay safety", () => {
 	const draft = "The answer starts here";
 	const answer = `${draft} and finishes here.`;
 
-	async function runSocketReset(model: Model, outcome: "recover" | "exhaust" | "unknown-tool") {
+	async function runSocketReset(model: Model, outcome: "recover" | "exhaust" | "unknown-tool" | "committed-draft") {
 		const failure = { content: [draft], stopReason: "error", errorMessage: socketReset } as const;
 		const mock = createMockModel({
 			responses: [failure, outcome === "recover" ? { content: [answer] } : failure],
 		});
-		const sessionManager = SessionManager.inMemory();
+		const sessionDir = tempDir.join(`sessions-${outcome}`);
+		const sessionManager = SessionManager.create(tempDir.path(), sessionDir);
 		let streamCalls = 0;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -338,20 +339,28 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			"retry.modelFallback": false,
 		});
 		const session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		if (outcome === "committed-draft") session.setRetryDraftRetraction(() => false);
 		const events = trackSessionEvents(session);
 		try {
 			await session.prompt("test prompt");
 			await session.waitForIdle();
 			expect(session.isRetrying).toBe(false);
+		} finally {
+			await session.dispose();
+		}
+		const file = sessionManager.getSessionFile();
+		if (!file) throw new Error("Expected a persisted session");
+		const reopened = await SessionManager.open(file, sessionDir, undefined, { suppressBreadcrumb: true });
+		try {
 			return {
 				streamCalls,
 				messages: session.messages,
-				entries: sessionManager.getBranch(),
+				entries: reopened.getBranch(),
 				calls: mock.calls,
 				...events,
 			};
 		} finally {
-			await session.dispose();
+			await reopened.close();
 		}
 	}
 
@@ -359,7 +368,10 @@ describe("AgentSession transient-error recovery replay safety", () => {
 		const result = await runSocketReset(gptModel, "recover");
 
 		expect(result.streamCalls).toBe(2);
-		expect(result.calls[1]?.context.messages.map(message => message.role)).toEqual(["user"]);
+		const roleSequence = result.calls[0]?.context.messages.map(message => message.role);
+		expect(result.calls[1]?.context.messages.map(message => message.role)).toEqual(roleSequence);
+		expect(roleSequence).toContain("user");
+		expect(roleSequence).not.toContain("assistant");
 		expect(result.retryStartEvents).toHaveLength(1);
 		expect(result.retryEndEvents).toEqual([expect.objectContaining({ success: true, attempt: 1 })]);
 		expect(result.messages.at(-1)).toMatchObject({ stopReason: "stop", content: [{ type: "text", text: answer }] });
@@ -367,6 +379,18 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			entry.type === "message" && entry.message.role === "assistant"
 				? entry.message.content.flatMap(block => (block.type === "text" ? [block.text] : []))
 				: [],
+		);
+		expect(result.entries).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: socketReset,
+					content: [],
+					retryRecovery: expect.objectContaining({ status: "recovered" }),
+				}),
+			}),
 		);
 		expect(transcriptText).toEqual([answer]);
 	});
@@ -380,6 +404,24 @@ describe("AgentSession transient-error recovery replay safety", () => {
 			expect.objectContaining({ success: false, attempt: 1, finalError: socketReset }),
 		]);
 		expect(result.messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: socketReset });
+	});
+
+	it("leaves the draft and terminal error in the journal if the display cannot retract the draft", async () => {
+		const result = await runSocketReset(gptModel, "committed-draft");
+
+		expect(result.streamCalls).toBe(1);
+		expect(result.retryStartEvents).toEqual([]);
+		const failure = {
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: socketReset,
+			content: [{ type: "text", text: draft }],
+		};
+		expect(result.messages.at(-1)).toMatchObject(failure);
+		const persistedAssistant = result.entries.findLast(
+			entry => entry.type === "message" && entry.message.role === "assistant",
+		);
+		expect(persistedAssistant).toMatchObject({ type: "message", message: failure });
 	});
 
 	it("settles a socket reset without replaying an already dispatched tool with no result", async () => {

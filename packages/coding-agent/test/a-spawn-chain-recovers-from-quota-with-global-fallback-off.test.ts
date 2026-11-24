@@ -81,6 +81,7 @@ function fixture(explicit = true, global = false) {
 		promptGeneration: () => 0,
 		scheduleAgentContinue: () => {},
 		abortIsDeliberate: () => false,
+		tryRetractRetryDraft: () => true,
 		resetCurrentResponsesProviderSession: () => {},
 		maybeAutoRedeemCodexReset: async () => false,
 		removeAssistantMessageFromActiveContext: () => {},

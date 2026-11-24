@@ -95,12 +95,6 @@ export type AgentSessionEvent =
 			 * the batch is being continued.
 			 */
 			mode?: RetryRecoveryMode;
-			/**
-			 * `sessionMessagePersistenceKey` of a pure assistant draft retracted from
-			 * durable and model context for an exact socket-close replay; absent for
-			 * ordinary retries and continuations.
-			 */
-			discardedDraftKey?: string;
 	  }
 	| {
 			type: "auto_retry_end";

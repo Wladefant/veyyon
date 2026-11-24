@@ -24,7 +24,7 @@
 - Track refusal fence installation sites after the session split ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Restore the raw SSE debug viewer and tell agents to use verified IRC names ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
-- Retry interrupted assistant drafts after a socket reset without duplicating their text or replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
+- Retry assistant drafts interrupted by a socket reset when their text can be retracted, without replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
 
 ## [1.12.3] - 2026-11-21
 

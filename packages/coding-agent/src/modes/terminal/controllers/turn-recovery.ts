@@ -22,6 +22,7 @@ import type { IdleFollowUps } from "./idle-follow-ups";
 type TurnRecoveryContext = Pick<
 	EventControllerContext,
 	| "autoCompactionLoader"
+	| "chatContainer"
 	| "clearPinnedError"
 	| "clearWorkingLoader"
 	| "ensureLoadingAnimation"
@@ -179,9 +180,6 @@ export class TurnRecovery {
 	): Promise<void> {
 		this.#trackSuperseded(lastAssistant);
 		this.#trackSuperseded(this.#pinnedErrorComponent);
-		if (event.discardedDraftKey) {
-			this.#discardDraftByKey(event.discardedDraftKey, lastAssistant);
-		}
 		this.ctx.clearWorkingLoader();
 		setShimmerActivity("error");
 		this.ctx.statusContainer.disposeChildren();
@@ -285,22 +283,30 @@ export class TurnRecovery {
 		this.#supersededQueue = [];
 	}
 
-	#discardDraftByKey(key: string, lastAssistant: AssistantMessageComponent | undefined): void {
-		let cleared = false;
-		if (lastAssistant?.messagePersistenceKey() === key) {
-			lastAssistant.clearDraftSegments();
-			cleared = true;
+	/**
+	 * Synchronously verifies and clears rendered draft segments for `key` before
+	 * retry rewrites the session journal. Returns `false` if no matching
+	 * component is currently in the transcript or if any matching component's
+	 * rows have already entered native scrollback.
+	 */
+	tryRetractDraft(key: string, lastAssistant: AssistantMessageComponent | undefined): boolean {
+		const chat = this.ctx.chatContainer;
+		const children = chat.children;
+		const candidates = new Set<AssistantMessageComponent>();
+		for (const candidate of [lastAssistant, this.#pinnedErrorComponent, this.#supersededByKey.get(key)]) {
+			if (!candidate) continue;
+			if (candidate.messagePersistenceKey() !== key) continue;
+			if (!children.includes(candidate)) continue;
+			candidates.add(candidate);
 		}
-		if (
-			this.#pinnedErrorComponent &&
-			this.#pinnedErrorComponent !== lastAssistant &&
-			this.#pinnedErrorComponent.messagePersistenceKey() === key
-		) {
-			this.#pinnedErrorComponent.clearDraftSegments();
-			cleared = true;
+		if (candidates.size === 0) return false;
+		for (const candidate of candidates) {
+			if (!chat.isBlockUncommitted(candidate)) return false;
 		}
-		if (!cleared) {
-			this.#supersededByKey.get(key)?.clearDraftSegments();
+		for (const candidate of candidates) {
+			candidate.clearDraftSegments();
 		}
+		this.ctx.ui.requestRender();
+		return true;
 	}
 }
