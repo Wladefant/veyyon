@@ -61,6 +61,7 @@ function check(name: string, run: () => void): void {
  * contract executes the actual YAML shell body using a fake Git and reaper in
  * an isolated temporary directory, not a runner, checkout, or production job.
  * This remains a focused contract, not a general GitHub Actions emulator.
+ * The post-merge smoke PR uses a comment-only change to select these cases.
  */
 function evaluate(expression: string | undefined, fixture: Record<string, unknown>): unknown {
 	if (typeof expression !== "string") throw new Error("Missing workflow expression");
