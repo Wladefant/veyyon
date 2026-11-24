@@ -21,13 +21,13 @@ import {
 	validateMCPEventsConfig,
 } from "../src/mcp/types";
 import { AgentSession } from "../src/session/agent-session";
-import { wireReactiveMCPManager } from "../src/session/factory-mcp";
 import {
 	buildMcpEventBatchMessage,
 	buildMcpNotificationBatchMessage,
 	type McpEventEntry,
 	type McpNotificationEntry,
 } from "../src/session/factory-notices";
+import { wireReactiveMCPManager } from "../src/session/reactive-mcp";
 
 describe("MCP Events per-server config validation", () => {
 	it("accepts undefined or null events config with no errors", () => {

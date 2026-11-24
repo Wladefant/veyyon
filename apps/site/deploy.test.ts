@@ -125,7 +125,9 @@ function runScript(script: string, project?: string, target: TestWorkspace = wor
 	if (project === undefined) delete env.VEYYON_PAGES_PROJECT;
 	else env.VEYYON_PAGES_PROJECT = project;
 
-	const run = Bun.spawnSync([process.execPath, script, ...(script === target.deployScript ? ["--dry-run"] : [])], {
+	const command =
+		script === target.deployScript ? [process.execPath, script, "--dry-run"] : [findExternalNodeExecutable(), script];
+	const run = Bun.spawnSync(command, {
 		cwd: target.workspaceRoot,
 		env,
 		stdout: "pipe",
@@ -185,7 +187,7 @@ describe("website deploy dry run", () => {
 				fs.symlinkSync(shPath, path.join(isolatedDir, "sh"));
 			}
 
-			const run = Bun.spawnSync([process.execPath, workspace.buildScript], {
+			const run = Bun.spawnSync([findExternalNodeExecutable(), workspace.buildScript], {
 				cwd: workspace.workspaceRoot,
 				env: testSubprocessEnv({ PATH: isolatedDir }),
 				stdout: "pipe",
@@ -212,7 +214,7 @@ describe("website deploy dry run", () => {
 			const mdbookScript = path.join(isolatedDir, "mdbook");
 			fs.writeFileSync(mdbookScript, '#!/bin/sh\necho "mdbook: failed to parse book.toml" >&2\nexit 1\n');
 			fs.chmodSync(mdbookScript, 0o755);
-			const run = Bun.spawnSync([process.execPath, workspace.buildScript], {
+			const run = Bun.spawnSync([findExternalNodeExecutable(), workspace.buildScript], {
 				cwd: workspace.workspaceRoot,
 				env: testSubprocessEnv({ PATH: isolatedDir }),
 				stdout: "pipe",

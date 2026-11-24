@@ -19,8 +19,6 @@ import type { EventBus } from "../utils/event-bus";
 import type { AgentSession } from "./agent-session";
 import { type CreateAgentSessionOptions, isInProcessChildSession } from "./factory-options";
 
-export { wireReactiveMCPManager } from "./reactive-mcp";
-
 export type DeferredMCPActivation = {
 	mcpDiscoveryEnabled: boolean;
 	explicitlyRequestedMCPToolNames: string[];
