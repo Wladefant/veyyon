@@ -194,14 +194,12 @@ export class SessionBranch {
 			throw new Error("Cannot branch /btw: session is not persisted");
 		}
 
-		const authorized = () =>
-			(!expectedSessionId || session.sessionManager.getSessionId() === expectedSessionId) &&
-			(!expectedLeafId || session.sessionManager.getLeafId() === expectedLeafId);
-		if (!authorized()) {
+		const sessionId = session.sessionManager.getSessionId();
+		const leafId = session.sessionManager.getLeafId();
+		if ((expectedSessionId && sessionId !== expectedSessionId) || (expectedLeafId && leafId !== expectedLeafId)) {
 			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 
-		const leafId = expectedLeafId ?? session.sessionManager.getLeafId();
 		if (!leafId) {
 			throw new Error("Cannot branch /btw: current session has no leaf");
 		}
@@ -219,14 +217,14 @@ export class SessionBranch {
 			5_000,
 			"Timed out draining post-prompt tasks before /btw branch",
 		);
-		// The transcript may have changed while post-prompt tasks settled.
-		if (!authorized()) {
+		await session.sessionManager.flush();
+		// A turn or a transcript switch can land while post-prompt work or disk writes settle.
+		if (session.sessionManager.getSessionId() !== sessionId || session.sessionManager.getLeafId() !== leafId) {
 			throw new Error("Cannot branch /btw: session changed since /btw started");
 		}
 		this.#assertIdleForBtw();
 		this.#host.clearNextTurnMessages();
 		session.agent.replaceQueues([], []);
-		await session.sessionManager.flush();
 		this.#host.cancelOwnAsyncJobs();
 
 		session.sessionManager.createBranchedSession(leafId);

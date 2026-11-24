@@ -381,6 +381,44 @@ describe("AgentSession.branchFromBtw", () => {
 		expect(activeSession.sessionFile).toBe(originalFile);
 	});
 
+	it("does not promote an aside while a steer starts a turn during the transcript flush", async () => {
+		const providerStarted = Promise.withResolvers<void>();
+		const activeSession = await createSession({
+			handler: () => {
+				providerStarted.resolve();
+				return { content: ["answer to the steer"], delayMs: 60_000 };
+			},
+		});
+		const manager = activeSession.sessionManager;
+		manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
+		await manager.ensureOnDisk();
+		const originalFile = activeSession.sessionFile;
+		const flushStarted = Promise.withResolvers<void>();
+		const flushRelease = Promise.withResolvers<void>();
+		const flush = manager.flush.bind(manager);
+		vi.spyOn(manager, "flush").mockImplementationOnce(async () => {
+			flushStarted.resolve();
+			await flushRelease.promise;
+			await flush();
+		});
+
+		const branch = activeSession.branchFromBtw("question", createBtwAssistant());
+		try {
+			await flushStarted.promise;
+			await activeSession.steer("new user work");
+			await providerStarted.promise;
+			flushRelease.resolve();
+
+			await expect(branch).rejects.toThrow("Cannot branch /btw");
+			expect(activeSession.sessionFile).toBe(originalFile);
+			expect(activeSession.isStreaming).toBe(true);
+		} finally {
+			flushRelease.resolve();
+			await activeSession.abort({ goalReason: "internal", reason: "test cleanup" });
+			await branch.catch(() => {});
+		}
+	});
+
 	// WHY: a post-prompt task that never settles (a hung provider stream) must not park a /btw
 	// promotion forever. The 5 s drain deadline is the only bound on that wait. Closes the class
 	// "branchFromBtw never settles on a stuck drain" for the drain; the extension-hook and flush
