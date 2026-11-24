@@ -1,7 +1,7 @@
 Run one step of code in a persistent kernel.
 
 <instruction>
-**One eval call = one cell = one logical step.** State persists per language across eval calls, tool calls, and `task` agents, so imports go in one call, definitions in the next, then the test, then the use, each its own call. Parallelize *within* a cell with `parallel(thunks)`, never by batching steps.
+**One eval call = one cell = one logical step.** Kernel state survives across eval calls, tools, and `task` agents. Keep imports, definitions, checks, and use in separate cells. Use `parallel(thunks)` within a cell for independent work.
 
 Fields:
 
@@ -32,7 +32,7 @@ write(path, content) → str
 env(key?=None, value?=None) → str | None | dict
     No args → full env dict; one → value of `key`; two → set `key=value`, return value.
 kv.get(key, default?=None) / kv.set(key, value) / kv.delete(key) / kv.list()
-    Session store on disk that OUTLIVES the kernel: values survive `reset`, crashes, and continuations, shared across languages. Values move by name only (never echoed to status/output) and must be JSON-serializable; store handles and tokens here, payloads in files.
+    Durable JSON values shared across languages. Survives reset, crashes, and continuation. Values move by name without display; keep large payloads in files.
 defs() → list[str]
     Names this kernel already defines (user code only, with shapes). Check before re-sending a definition.
 output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | dict | list[dict]

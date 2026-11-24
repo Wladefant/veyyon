@@ -26,7 +26,7 @@ import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
-import { requireBundledModel } from "../../agent/test/helpers"
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 
@@ -77,6 +77,7 @@ describe("AgentSession handoff", () => {
 	async function createContinuingChild(options: {
 		id: string;
 		provider?: string;
+		providerSessionId?: string;
 		modelId?: string;
 		kind?: "main" | "sub";
 		spawned?: boolean;
@@ -119,6 +120,7 @@ describe("AgentSession handoff", () => {
 				"compaction.laneHandoffThresholdTokens": options.threshold ?? 150_000,
 			}),
 			modelRegistry,
+			providerSessionId: options.providerSessionId,
 			isSpawned: options.spawned ?? true,
 			agentKind: options.kind ?? "sub",
 			agentId: options.id,
@@ -271,7 +273,8 @@ describe("AgentSession handoff", () => {
 			},
 		]);
 
-		await session.handoff("Include worktree, branch, head, test counts, and paths.", {
+		const focus = "Include worktree, branch, head, test counts, and paths.";
+		await session.handoff(focus, {
 			autoTriggered: true,
 			compactSummary: true,
 		});
@@ -280,6 +283,7 @@ describe("AgentSession handoff", () => {
 		const trailingContent = call?.[0].messages.at(-1)?.content;
 		expect(JSON.stringify(trailingContent)).toContain("at most 3,000 tokens");
 		expect(JSON.stringify(trailingContent)).toContain("Never reproduce transcript messages");
+		expect(JSON.stringify(trailingContent)).toContain(focus);
 		const successorBrief = session.agent.state.messages.find(
 			message => message.role === "custom" && message.customType === "handoff",
 		);
@@ -1860,7 +1864,7 @@ describe("AgentSession handoff", () => {
 				);
 			await session.prompt("Continue the assigned tool work");
 			await drainMaintenance();
-			expect(summarySpy).toHaveBeenCalledTimes(1);
+			expect(summarySpy.mock.calls).toHaveLength(1);
 			expect(session.sessionId).toBe(originalId);
 			expect(JSON.stringify(session.agent.state.messages)).toContain("SOURCE_TRANSCRIPT_SENTINEL");
 			expect(JSON.stringify(session.agent.state.messages)).toContain("successor continuation");
@@ -1868,19 +1872,81 @@ describe("AgentSession handoff", () => {
 		},
 	);
 
+	const successorBrief =
+		"# COMPACT\n## Goal\nFinish task\n## State\nTool completed\n## Open steps\nContinue\n## Repository\nUnknown\n## Tests\nUnknown\n## Files\nUnknown";
+
+	it("stops the current turn if the new transcript cannot be written after switching", async () => {
+		const id = "handoff-write-failure";
+		const providerSessionId = "fixed-provider-route";
+		const mock = await createContinuingChild({ id, providerSessionId });
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(successorBrief);
+		const sourceId = sessionManager.getSessionId();
+		const sourceFile = session.sessionFile;
+		const ensureOnDisk = sessionManager.ensureOnDisk.bind(sessionManager);
+		vi.spyOn(sessionManager, "ensureOnDisk").mockImplementation(async () => {
+			if (sessionManager.getSessionId() !== sourceId) throw new Error("Successor transcript write failed");
+			await ensureOnDisk();
+		});
+
+		const registry = AgentRegistry.global();
+		const sourceScope = "handoff-write-failure-scope";
+		registry.rescope(id, sourceScope);
+		const published: Array<{ scope?: string; file?: string | null }> = [];
+		const unsubscribe = registry.onChange(event => {
+			if (event.type === "status_changed" && event.ref.id === id) {
+				published.push({ scope: event.ref.scope, file: event.ref.sessionFile });
+			}
+		});
+		try {
+			await session.prompt("Perform the tool steps");
+		} finally {
+			unsubscribe();
+		}
+		const successorId = sessionManager.getSessionId();
+
+		expect(successorId).not.toBe(sourceId);
+		expect(session.sessionId).toBe(providerSessionId);
+		expect(mock.calls).toHaveLength(1);
+		expect(session.agent.state.error).toBe("Successor transcript write failed");
+		expect(session.sessionFile).not.toBe(sourceFile);
+		expect(published).toContainEqual({ scope: sourceScope, file: session.sessionFile });
+		expect(JSON.stringify(session.agent.state.messages)).toContain("# COMPACT");
+		expect(JSON.stringify(session.agent.state.messages)).not.toContain("SOURCE_TRANSCRIPT_SENTINEL");
+		expect(AgentRegistry.global().get(id)?.sessionFile).toBe(session.sessionFile);
+	});
+
+	it("cancels automatic summary generation when the live turn aborts", async () => {
+		const mock = await createContinuingChild({ id: "handoff-turn-abort" });
+		const sourceId = session.sessionId;
+		const started = Promise.withResolvers<AbortSignal | undefined>();
+		const generated = Promise.withResolvers<string>();
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockImplementation((_context, _model, options) => {
+			started.resolve(options.streamOptions?.signal);
+			return generated.promise;
+		});
+
+		const prompt = session.prompt("Perform the tool steps");
+		const summarySignal = await started.promise;
+		session.agent.abort();
+		generated.resolve(successorBrief);
+		await prompt;
+
+		expect(summarySignal?.aborted).toBe(true);
+		expect(session.sessionId).toBe(sourceId);
+		expect(mock.calls).toHaveLength(1);
+	});
+
 	it("starts one fresh successor and keeps its routing and accounting through later tool turns", async () => {
 		const mock = await createContinuingChild({ id: "handoff-child" });
-		const brief =
-			"# COMPACT\n## Goal\nFinish task\n## State\nTool completed\n## Open steps\nContinue\n## Repository\nUnknown\n## Tests\nUnknown\n## Files\nUnknown";
 		let streamingDuringSummary = false;
 		const summarySpy = vi.spyOn(compactionModule, "generateHandoffFromContext").mockImplementation(async () => {
 			streamingDuringSummary = session.isStreaming;
-			return brief;
+			return successorBrief;
 		});
 		const sourceId = session.sessionId;
 		await session.prompt("Perform the tool steps");
 		await drainMaintenance();
-		expect(summarySpy).toHaveBeenCalledTimes(1);
+		expect(summarySpy.mock.calls).toHaveLength(1);
 		expect(streamingDuringSummary).toBe(true);
 		expect(session.sessionId).not.toBe(sourceId);
 		expect(mock.calls).toHaveLength(4);
@@ -1906,7 +1972,7 @@ describe("AgentSession handoff", () => {
 			await session.prompt("Perform tool steps");
 			await drainMaintenance();
 			expect(mock.calls).toHaveLength(4);
-			expect(summarySpy).not.toHaveBeenCalled();
+			expect(summarySpy.mock.calls).toHaveLength(0);
 		},
 	);
 	it.each(["root", "Luna"])("does not hand off a continuing %s session", async role => {
@@ -1920,7 +1986,7 @@ describe("AgentSession handoff", () => {
 		await session.prompt("Perform tool steps");
 		await drainMaintenance();
 		expect(mock.calls).toHaveLength(4);
-		expect(summarySpy).not.toHaveBeenCalled();
+		expect(summarySpy.mock.calls).toHaveLength(0);
 	});
 	it.each([128_000, 200_000, 512_000])(
 		"requires a summary candidate fitting the current context: %i tokens",
@@ -1948,7 +2014,7 @@ describe("AgentSession handoff", () => {
 			const sourceId = session.sessionId;
 			await session.prompt("Perform tool steps");
 			await drainMaintenance();
-			expect(summarySpy).toHaveBeenCalledTimes(capacity === 512_000 ? 1 : 0);
+			expect(summarySpy.mock.calls).toHaveLength(capacity === 512_000 ? 1 : 0);
 			if (capacity === 512_000) {
 				expect(session.sessionId).not.toBe(sourceId);
 				expect(summarySpy.mock.calls[0]?.[2]?.streamOptions?.maxTokens).toBe(64_000);
@@ -1975,5 +2041,67 @@ describe("AgentSession handoff", () => {
 		);
 		expect(session.sessionId).toBe(sourceSessionId);
 		expect(session.agent.state.messages).toEqual(sourceMessages);
+	});
+
+	it("keeps a spawned parent's live descendant across automatic handoff", async () => {
+		const parentId = "lineage-parent";
+		const childId = "lineage-live-child";
+		await createContinuingChild({ id: parentId });
+		using childDir = TempDir.createSync("@pi-handoff-child-");
+		const childManager = SessionManager.create(childDir.path(), childDir.path());
+		const childModel = createMockModel({
+			id: "claude-sonnet-4-5",
+			provider: "anthropic",
+			responses: [{ content: ["idle"] }],
+		});
+		const childSession = new AgentSession({
+			agent: new Agent({
+				initialState: { model: childModel, systemPrompt: ["Child"], tools: [], messages: [] },
+				streamFn: childModel.stream,
+			}),
+			sessionManager: childManager,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			isSpawned: true,
+			agentKind: "sub",
+			agentId: childId,
+		});
+		const registry = AgentRegistry.global();
+		registry.rescope(parentId, "lineage-conversation");
+		registry.register({
+			id: childId,
+			displayName: childId,
+			kind: "sub",
+			parentId,
+			session: childSession,
+			sessionFile: childSession.sessionFile,
+		});
+		try {
+			const oldParentFile = session.sessionFile;
+			const oldScope = registry.get(parentId)?.scope;
+			expect(registry.get(parentId)?.sessionFile).toBe(oldParentFile);
+			expect(oldScope).toBeDefined();
+			expect(registry.get(childId)?.scope).toBe(oldScope);
+			expect(registry.get(childId)?.parentId).toBe(parentId);
+			expect(registry.get(childId)?.status).toBe("running");
+
+			vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(successorBrief);
+			await session.prompt("Perform the tool steps");
+			await drainMaintenance();
+
+			expect(session.sessionFile).not.toBe(oldParentFile);
+			expect(registry.get(parentId)?.sessionFile).toBe(session.sessionFile);
+			expect(registry.get(parentId)?.scope).toBe(oldScope);
+			const child = registry.get(childId);
+			expect(child).toBeDefined();
+			expect(child?.parentId).toBe(parentId);
+			expect(child?.scope).toBe(oldScope);
+			expect(child?.status).toBe("running");
+			expect(child?.session).toBe(childSession);
+		} finally {
+			registry.unregister(childId);
+			registry.unregister(parentId);
+			await childSession.dispose();
+		}
 	});
 });

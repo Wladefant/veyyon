@@ -2,9 +2,7 @@ Runs commands in the embedded shell — terminal ops: git, bun, cargo, python.
 
 # When to use bash — and when not to
 
-The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
-
-Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
+This shell invokes **real binaries** with simple args, not full GNU Bash. Use it for one binary or a short pipeline that COMPUTES a fact without shell-specific regex or quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
 
 For process cleanup, stop only a verified PID. The bash guard blocks common commands that stop processes by image name or pattern.
 
@@ -75,8 +73,8 @@ For process cleanup, stop only a verified PID. The bash guard blocks common comm
 ## Backgrounding a foreground call
 {{#if autoBackgroundEnabled}}
 
-- A long-running foreground call may convert to a background job after {{autoBackgroundSeconds}}s, and the operator can also background one by hand at any time. Either way the final result arrives as a follow-up tool call: NOT a failure, so don't retry or wait synchronously.
-- Need the result inline (e.g. piping into another command)? Raise `timeout` above expected duration{{#if asyncEnabled}}, or set `async: true` up front{{/if}}.
+- A long call may background after {{autoBackgroundSeconds}}s or when the operator requests it. The result arrives later. Do not retry or wait synchronously.
+- Need it inline? Raise `timeout` to match the command{{#if asyncEnabled}}, or set `async: true` to receive a follow-up{{/if}}.
 {{/if}}
 - `backgroundAfter` is seconds of foreground time for THIS call before it converts to a background job, overriding the configured default in both directions: raise it for a command whose output you need inline, lower it for one you know is slow. `backgroundAfter: 0` backgrounds immediately.
 - NEVER poll a backgrounded job: no `sleep`, `pgrep`, `ps`, `tail -f`, `top`, and no second call that watches it. Do other work or end your reply — the finished job wakes you with its output.
@@ -84,8 +82,7 @@ For process cleanup, stop only a verified PID. The bash guard blocks common comm
 
 ## Stall detection
 
-- A call that produces no new output for {{stallSeconds}}s is backgrounded and flagged as possibly stuck. The notice names the job id. This is a heuristic, NOT proof it is hung.
-- Decide: if the command was expected to be quiet (a long compile, a sleep, a slow network wait), let it run — its result still arrives as a follow-up. If you believe it is genuinely hung, cancel it with the `job` tool (`cancel: ["<jobId>"]`).
+- No output for {{stallSeconds}}s? The call backgrounds and reports a possible stall. Expected silence is normal; use `job` with `cancel: ["<jobId>"]` only for a real hang.
 {{/if}}
 
 # Output minimizer

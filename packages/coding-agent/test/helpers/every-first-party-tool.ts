@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { type SettingPath, Settings } from "../../src/config/settings";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool, type ToolSession } from "../../src/tools";
+import { constructToolForSchemaSweep } from "./every-tool";
 
 /** Every setting a built-in factory reads before it returns a tool, turned on. */
 const EVERY_TOOL_ENABLED: Partial<Record<SettingPath, unknown>> = {
@@ -59,7 +60,7 @@ export async function visitEveryFirstPartyTool(
 	};
 	const unbuilt: string[] = [];
 	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
-		const tool = await factory(toolSession);
+		const tool = await constructToolForSchemaSweep(name, factory, toolSession);
 		if (tool) visit(tool);
 		else unbuilt.push(name);
 	}

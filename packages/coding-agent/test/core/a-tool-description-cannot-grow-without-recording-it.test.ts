@@ -52,11 +52,11 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/ask": 285,
 	"tools/ast-edit": 375,
 	"tools/async-result": 105,
-	"tools/bash": 1597,
+	"tools/bash": 1487,
 	"tools/browser": 1902,
 	"tools/checkpoint": 166,
 	"tools/debug": 414,
-	"tools/eval": 2023,
+	"tools/eval": 1979,
 	// 410 -> 469: image and binary file support for github file-read.
 	"tools/github": 469,
 	"tools/goal": 162,
@@ -66,8 +66,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/image-gen": 110,
 	"tools/inspect-image": 260,
 	"tools/inspect-image-system": 192,
-	// 1102 -> 1107: restore `current model`, `never infer model identity from a message body`, and verified roster IDs.
-	"tools/irc": 1107,
+	"tools/irc": 611,
 	"tools/isolation-error": 293,
 	"tools/isolation-recovery-hint": 83,
 	"tools/isolation-summary": 589,
@@ -90,7 +89,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/search-tool-bm25": 359,
 	"tools/set-cwd": 449,
 	"tools/ssh": 236,
-	"tools/task": 1648,
+	"tools/task": 1071,
 	"tools/task-summary": 151,
 	// 500 -> 505: the `pending` op row and the concurrent in-progress rule the todo tool gained.
 	"tools/todo": 505,
@@ -106,7 +105,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 23596;
+const RECORDED_TOTAL = 22369;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),
