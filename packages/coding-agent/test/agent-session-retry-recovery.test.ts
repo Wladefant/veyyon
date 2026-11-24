@@ -11,6 +11,8 @@ import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery } f
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as envApiKeyModule from "@veyyon/ai/env-api-key";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
+import type { Model } from "@veyyon/ai/types";
 import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -21,6 +23,8 @@ import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { type } from "arktype";
+import { createCodexTestToken } from "../../ai/test/helpers";
 import { requireBundledModel } from "../../agent/test/helpers";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -133,6 +137,105 @@ describe("AgentSession retry recovery", () => {
 		authStorage.close();
 		tempDir.removeSync();
 		vi.restoreAllMocks();
+	});
+	it("settles a Codex fallback stall without replaying a tool or blocking another session", async () => {
+		const primary = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const codex = requireBundledModel("openai-codex", "gpt-5.6-sol") as Model<"openai-codex-responses">;
+		const next = requireBundledModel("openai", "gpt-4o-mini");
+		const token = createCodexTestToken();
+		authStorage.setRuntimeApiKey("openai-codex", token);
+		authStorage.setRuntimeApiKey("openai", "test-key");
+		const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
+		const { promise: blocked, resolve: release } = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "call_record", name: "record", arguments: {} }] },
+				{ throw: RETRIABLE_SERVER_ERROR },
+				{ content: ["Recovered after Codex timed out"] },
+			],
+		});
+		const execute = vi.fn(async () => ({
+			content: [{ type: "text" as const, text: "Recorded" }],
+			details: {},
+		}));
+		const fetchAttempt = vi.fn(async () => new Response(null, { status: 418 }));
+		const agent = new Agent({
+			getApiKey: model => (model.provider === "openai-codex" ? token : "test-key"),
+			initialState: {
+				model: primary,
+				systemPrompt: ["Test"],
+				tools: [
+					{
+						name: "record",
+						label: "Record",
+						description: "Record the result once",
+						parameters: type({}),
+						execute,
+					},
+				],
+			},
+			streamFn: (model, context, options) =>
+				model.provider === "openai-codex"
+					? streamOpenAICodexResponses(codex, context, {
+							...options,
+							apiKey: token,
+							preferWebsockets: false,
+							streamFirstEventTimeoutMs: 10,
+							fetch: fetchAttempt,
+							onPayload: () => {
+								markStarted();
+								return blocked;
+							},
+						})
+					: mock.stream(model, context, options),
+		});
+		const sessionManager = SessionManager.inMemory();
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			modelRegistry,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"retry.fallbackChains": { "anthropic/*": [`${codex.provider}/${codex.id}`, `${next.provider}/${next.id}`] },
+			}),
+		});
+		sessions.push(session);
+		const retryEnds: boolean[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_end") retryEnds.push(event.success);
+		});
+		const unrelatedMock = createMockModel({ responses: [{ content: ["Independent turn completed"] }] });
+		const unrelated = new AgentSession({
+			agent: new Agent({
+				initialState: { model: primary, systemPrompt: ["Test"], tools: [] },
+				getApiKey: () => "test-key",
+				streamFn: (model, context, options) => unrelatedMock.stream(model, context, options),
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+		sessions.push(unrelated);
+		vi.useFakeTimers();
+		try {
+			const pending = session.prompt("Record once and report the result");
+			expect(await Promise.race([started.then(() => true), scheduler.wait(1500).then(() => false)])).toBe(true);
+			expect(session.heartbeatPhase).toBe("provider");
+			await unrelated.prompt("Answer independently");
+			expect(unrelated.messages.at(-1)).toMatchObject({ stopReason: "stop" });
+			vi.advanceTimersByTime(10);
+			const outcome = await Promise.race([pending.then(() => "settled"), scheduler.wait(500).then(() => "pending")]);
+			expect(outcome).toBe("settled");
+			expect(retryEnds).toEqual([true]);
+			expect(execute).toHaveBeenCalledTimes(1);
+			expect(fetchAttempt).not.toHaveBeenCalled();
+			expect(successfulAssistantEntry(sessionManager, "Recovered after Codex timed out").message.stopReason).toBe(
+				"stop",
+			);
+		} finally {
+			release();
+			vi.useRealTimers();
+		}
 	});
 
 	async function runCredentialRecovery(): Promise<RecoveryRun> {

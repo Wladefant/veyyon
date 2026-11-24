@@ -2068,6 +2068,50 @@ describe("openai-codex streaming", () => {
 		expect(result.ttft).toBe(50);
 	});
 
+	it.each(["SSE payload preparation", "SSE response hook"] as const)(
+		"settles when %s stops making progress",
+		async stage => {
+			vi.useFakeTimers();
+			const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
+			const { promise: blocked, resolve: release } = Promise.withResolvers<void>();
+			const stall = () => {
+				markStarted();
+				return blocked;
+			};
+			const cancel = vi.fn();
+			const stalledResponse = new ReadableStream<Uint8Array>({ cancel });
+			const fetchMock = vi.fn(
+				async () =>
+					new Response(stalledResponse, {
+						headers: { "content-type": "text/event-stream" },
+					}),
+			);
+			const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+			const result = streamOpenAICodexResponses(model, createCodexTestContext(), {
+				apiKey: createCodexTestToken(),
+				fetch: fetchMock,
+				streamFirstEventTimeoutMs: 10,
+				...(stage === "SSE payload preparation" ? { onPayload: stall } : { onResponse: stall }),
+			}).result();
+
+			await started;
+			vi.advanceTimersByTime(10);
+			// Give the timeout and terminal-message processing a chance to settle.
+			// Release in finally so the pre-fix assertion fails without stranding the hook.
+			try {
+				const settled = await Promise.race([result, scheduler.wait(50).then(() => "pending" as const)]);
+				expect(settled).not.toBe("pending");
+				if (settled === "pending") return;
+				expect(settled.stopReason).toBe("error");
+				expect(settled.errorMessage).toContain(stage);
+				expect(fetchMock).toHaveBeenCalledTimes(stage === "SSE payload preparation" ? 0 : 1);
+				expect(cancel).toHaveBeenCalledTimes(stage === "SSE response hook" ? 1 : 0);
+			} finally {
+				release();
+			}
+		},
+	);
+
 	it("retries a pre-response watchdog timeout with a fresh attempt signal", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
