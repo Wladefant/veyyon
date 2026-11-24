@@ -6,8 +6,14 @@
 
 - Report cancelled children separately from failures in inline task batches ([#1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([#1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Fence synchronized sessions after an invalid initial lease, and wait for queued message writes before deduplicating results ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+
 ## [1.12.3] - 2026-11-21
 
 ### Added

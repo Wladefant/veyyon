@@ -24,8 +24,11 @@ function createScopeHost(sessionStore: SessionScopeStore, isSpawned = false): Se
 		settings: Settings.isolated(),
 		agent: { appendMessage: () => {} },
 		isSpawned,
-		refreshSecrets: async () => {}, refreshSshTool: async () => {}, refreshBaseSystemPrompt: async () => {},
-		rootWireAt: () => {}, emitCwdChanged: () => {},
+		refreshSecrets: async () => {},
+		refreshSshTool: async () => {},
+		refreshBaseSystemPrompt: async () => {},
+		rootWireAt: () => {},
+		emitCwdChanged: () => {},
 	};
 }
 
@@ -126,9 +129,12 @@ describe("SessionScope concurrent cwd and process isolation", () => {
 		const scopeB = new SessionScope(hostB);
 		const transitionA = scopeA.setCwd("destination", { validate: true });
 		try {
-			await Promise.race([entered.promise, transitionA.then(() => {
-				throw new Error("Transition A completed before the overlap barrier");
-			})]);
+			await Promise.race([
+				entered.promise,
+				transitionA.then(() => {
+					throw new Error("Transition A completed before the overlap barrier");
+				}),
+			]);
 			await scopeB.setCwd("destination", { validate: true });
 			expect(managerA.getCwd()).toBe(destA);
 			expect(managerB.getCwd()).toBe(destB);
@@ -211,7 +217,7 @@ describe("SessionScope concurrent cwd and process isolation", () => {
 		const bashA = new BashTool(sessionA);
 		const bashB = new BashTool(sessionB);
 
-		const cmd = `node -p "process.cwd()"`;
+		const cmd = `'${process.execPath}' -p "process.cwd()"`;
 
 		const resA1 = await bashA.execute("b1", { command: cmd });
 		expect(extractText(resA1).trim()).toBe(path.resolve(dirA));
