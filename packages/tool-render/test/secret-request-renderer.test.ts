@@ -10,7 +10,9 @@ const renderer = resolveToolRenderer("secret_request");
 function render(component: "Summary" | "Body", props: Partial<ToolRenderProps>): string {
 	const Component = component === "Summary" ? renderer.Summary : renderer.Body;
 	if (!Component) throw new Error(`secret_request renderer has no ${component}`);
-	return renderToStaticMarkup(createElement(Component, { name: "secret_request", args: {}, ...props } as ToolRenderProps));
+	return renderToStaticMarkup(
+		createElement(Component, { name: "secret_request", args: {}, ...props } as ToolRenderProps),
+	);
 }
 
 function makeMetadataResult(overrides: Record<string, unknown> = {}, secretRef?: string): ToolResultLike {

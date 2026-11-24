@@ -118,15 +118,16 @@ describe("irc tool differential", () => {
 		// The frozen renderer predates the roster's "peer ·" label. Give it the
 		// new copy before layout so the comparison still tests narrow columns.
 		const details = value.details;
-		const comparable = details?.op === "list" && details.peers
-			? {
-					...value,
-					details: {
-						...details,
-						peers: details.peers.map(peer => ({ ...peer, kind: `peer · ${peer.kind}` })),
-					},
-				}
-			: value;
+		const comparable =
+			details?.op === "list" && details.peers
+				? {
+						...value,
+						details: {
+							...details,
+							peers: details.peers.map(peer => ({ ...peer, kind: `peer · ${peer.kind}` })),
+						},
+					}
+				: value;
 		return renderCompLines(ircOracle.ircToolRenderer.renderResult(comparable, options, theme, args), width);
 	}
 

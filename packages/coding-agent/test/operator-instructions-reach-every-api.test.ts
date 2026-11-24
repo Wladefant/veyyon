@@ -46,7 +46,7 @@ import {
 	getBundledModels,
 	getBundledProviders,
 } from "@veyyon/catalog/models";
-import { type KnownApi, modelKind, RUNNER_APIS } from "@veyyon/catalog/types";
+import { type KnownApi, modelKind, type RUNNER_APIS } from "@veyyon/catalog/types";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ContextFile } from "@veyyon/coding-agent/discovery/capability/context-file";
