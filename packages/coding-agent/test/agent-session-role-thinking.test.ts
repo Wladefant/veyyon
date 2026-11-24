@@ -626,7 +626,7 @@ describe("AgentSession model effort behavior", () => {
 
 	it("applies a helper selector's effort to a temporary pick of the same model", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
-		const temporaryModel = requireBundledModel("google-antigravity", "gemini-3.8-flash");
+		const temporaryModel = requireBundledModel("openai", "gpt-5.5");
 
 		await createSession({
 			initialModelId: defaultModel.id,
