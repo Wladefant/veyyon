@@ -125,6 +125,7 @@ describe("AgentSession retry fallback", () => {
 		{ name: "direct Anthropic DNS", wrapped: false, failures: 1, retries: 1 },
 		{ name: "sidecar-wrapped Cloud Code DNS", wrapped: true, failures: 1, retries: 1 },
 		{ name: "persistent DNS", wrapped: true, failures: 2, retries: 1 },
+		{ name: "persistent Cloud Code DNS without a fallback", wrapped: true, failures: 2, retries: 2, noFallback: true },
 		{ name: "unknown hostname", wrapped: false, failures: 1, retries: 0, unknownHost: true },
 	])("retries the current selector before fallback only for known endpoints: $name", async test => {
 		const primary = test.wrapped
@@ -172,7 +173,8 @@ describe("AgentSession retry fallback", () => {
 			settings: Settings.isolated({
 				"compaction.enabled": false,
 				"retry.baseDelayMs": 5,
-				"retry.fallbackChains": { [`${primary.provider}/*`]: [fallbackSelector] },
+				"retry.maxRetries": 2,
+				"retry.fallbackChains": test.noFallback ? {} : { [`${primary.provider}/*`]: [fallbackSelector] },
 			}),
 			modelRegistry,
 		});
@@ -180,10 +182,14 @@ describe("AgentSession retry fallback", () => {
 		await session.prompt("Retry a failed provider lookup");
 		await session.waitForIdle();
 
-		const switched = test.failures > test.retries;
-		expect(requests).toEqual([primary.id, ...(test.retries ? [primary.id] : []), ...(switched ? [fallback.id] : [])]);
+		const switched = !test.noFallback && test.failures > test.retries;
+		expect(requests).toEqual([...Array<string>(test.retries + 1).fill(primary.id), ...(switched ? [fallback.id] : [])]);
 		expect(retryStartEvents).toHaveLength(test.retries + Number(switched));
-		if (test.retries) expect(retryStartEvents[0]?.delayMs).toBeGreaterThan(0);
+		for (let index = 0; index < test.retries; index++) {
+			const maxDelayMs = 5 * 2 ** index;
+			expect(retryStartEvents[index]?.delayMs).toBeGreaterThanOrEqual(maxDelayMs * 0.75);
+			expect(retryStartEvents[index]?.delayMs).toBeLessThanOrEqual(maxDelayMs);
+		}
 		if (switched) expect(retryStartEvents.at(-1)?.delayMs).toBe(0);
 		expect(retryEndEvents.map(event => event.success)).toEqual([true]);
 		expect(getLastAssistantMessage(session).stopReason).toBe("stop");
