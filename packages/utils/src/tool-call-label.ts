@@ -171,6 +171,9 @@ const LABELS: Readonly<Record<string, Labeler>> = {
 		return `[${name}:${join(word(args.type) || "?", text(args.input), scope ? `in ${scope}` : null)}]`;
 	},
 	search_tool_bm25: textLabel("query"),
+	secret_request: labelled(args =>
+		join(word(args.action), text(args.purpose), word(args.requestId) || word(args.secretRef)),
+	),
 	set_cwd: pathLabel("path"),
 	ssh: labelled(args => join(word(args.host), text(args.command, TOOL_CALL_LABEL_LIMITS.COMMAND))),
 	task: labelled(args => {

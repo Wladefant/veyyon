@@ -5,6 +5,7 @@
  * and delegates `setTodos`, `reloadTodos` and the redraws to this controller.
  */
 import { Text } from "@veyyon/tui";
+import { errorMessage } from "@veyyon/utils";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { isTerminalTodoStatus, isTodoListDone } from "@veyyon/wire";
 import { settings } from "../../../config/settings";
@@ -13,7 +14,7 @@ import type { Theme } from "../../../theme/theme";
 import { theme } from "../../../theme/theme-binding";
 import { todoMatchesAnyDescription } from "../../../tools/agent/todo";
 import { COMPOSER_INSET_COLS } from "../components/composer/composer-chrome";
-import { renderAgentHudLines } from "../components/dashboard/agent-hud";
+import { AgentHudBlock, agentHudRowAgentIds, renderAgentHudLines } from "../components/dashboard/agent-hud";
 import {
 	renderTodoBoardLines,
 	TODO_BOARD_FRAME_DIVISOR,
@@ -69,9 +70,11 @@ interface TodoBoardBuildInputs {
 export type AnchoredBlocksContext = Pick<
 	InteractiveModeContext,
 	| "agentContainer"
+	| "focusAgentSession"
 	| "focusedAgentId"
 	| "session"
 	| "settings"
+	| "showError"
 	| "syncRunningAgentBadge"
 	| "todoContainer"
 	| "todoExpanded"
@@ -452,7 +455,12 @@ export class AnchoredBlocks {
 		const painted = transitionsEnabled()
 			? paintRailMotion(lines, { kind: "idle", head: railIdleHeadAtMs(railClockMs()) }, theme)
 			: lines;
-		this.ctx.agentContainer.addChild(new Text(painted.join("\n"), ANCHORED_BLOCK_PADDING_X, 0));
+		const rowAgentIds = agentHudRowAgentIds(sessions, lines);
+		this.ctx.agentContainer.addChild(
+			new AgentHudBlock(painted, rowAgentIds, ANCHORED_BLOCK_PADDING_X, id => {
+				this.ctx.focusAgentSession(id).catch((error: unknown) => this.ctx.showError(errorMessage(error)));
+			}),
+		);
 	}
 
 	/**

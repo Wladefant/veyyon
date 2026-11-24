@@ -5,6 +5,7 @@
 ### Fixed
 
 - Keep MCP authentication refresh within the request deadline ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Show MCP reconnects and restore clickable agent HUD rows. Cancel queued loop submissions on Escape and refresh secrets only for settings with a selector row ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
