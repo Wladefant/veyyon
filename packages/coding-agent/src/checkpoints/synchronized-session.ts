@@ -50,7 +50,8 @@ export class SynchronizedSession {
 				const node = process.env.VEYYON_CHECKPOINT_NODE;
 				if (!node || node !== this.claim.targetNode)
 					throw new Error("This transferred session belongs to a different checkpoint node");
-				if (!this.persistOwnership) throw new Error("Transferred session cannot resume without persistent ownership metadata");
+				if (!this.persistOwnership)
+					throw new Error("Transferred session cannot resume without persistent ownership metadata");
 				const grant = this.claim.claimToken
 					? await this.client.claimTransfer(
 							this.sessionId,
@@ -107,7 +108,8 @@ export class SynchronizedSession {
 			await this.client.assertWritable(this.sessionId, this.#lease.epoch, this.#lease.ownerNode);
 			this.#assertOpen();
 			const renewed = await this.client.renewLease(this.sessionId, {
-				ownerNode: this.#lease.ownerNode, epoch: this.#lease.epoch,
+				ownerNode: this.#lease.ownerNode,
+				epoch: this.#lease.epoch,
 			});
 			// A successful HTTP renewal can still return an already-expired fence.
 			await this.client.assertWritable(this.sessionId, renewed.epoch, this.ownerNode);
@@ -122,10 +124,15 @@ export class SynchronizedSession {
 			this.#timer = setInterval(() => {
 				if (this.#lost || this.#renewal) return;
 				const prior = this.#lease;
-				if (!prior) { this.#loseOwnership(); return; }
-				const renewal = this.client.renewLease(this.sessionId, {
-					ownerNode: prior.ownerNode, epoch: prior.epoch,
-				})
+				if (!prior) {
+					this.#loseOwnership();
+					return;
+				}
+				const renewal = this.client
+					.renewLease(this.sessionId, {
+						ownerNode: prior.ownerNode,
+						epoch: prior.epoch,
+					})
 					.then(async lease => {
 						// HTTP 200 is not an admission proof when the returned deadline
 						// is expired or cannot be parsed. Fence even without a new admit().
@@ -157,9 +164,9 @@ export class SynchronizedSession {
 			// Historical #lease truthiness does not prove current client ownership.
 			const released = this.#lease
 				? await this.client.releaseLease(this.sessionId, {
-					ownerNode: this.#lease.ownerNode,
-					epoch: this.#lease.epoch,
-				})
+						ownerNode: this.#lease.ownerNode,
+						epoch: this.#lease.epoch,
+					})
 				: undefined;
 			if (this.claim && this.#resumeToken && released && this.persistOwnership)
 				await this.persistOwnership(this.#resumeToken, released.epoch);

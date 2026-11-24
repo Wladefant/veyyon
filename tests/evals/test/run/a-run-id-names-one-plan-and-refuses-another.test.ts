@@ -42,7 +42,11 @@ import type {
 import { harnesses } from "../../engine/members/loaded";
 import { PlanChangedError, planIdentity } from "../../engine/plan/plan-identity";
 import { buildRunPlan, type RunPlan } from "../../engine/plan/run-plan";
-import { expandVariantMatrix, VARIANT_MATRIX_AXES, type VariantMatrixSelection } from "../../engine/plan/variant-matrix";
+import {
+	expandVariantMatrix,
+	VARIANT_MATRIX_AXES,
+	type VariantMatrixSelection,
+} from "../../engine/plan/variant-matrix";
 import { executeRun } from "../../engine/run/execute";
 import {
 	journalPathFor,

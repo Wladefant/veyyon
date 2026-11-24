@@ -303,7 +303,9 @@ function targetTodo(verb: TodoTargetVerb, argument: string, port: TodoCommandPor
 			commitTodos(port, phases, `/todo ${verb} ${taskHit.task.content}`, removed);
 			if (removed) return info(`Removed: ${taskHit.task.content}`);
 			return info(
-				verb === "pending" ? `Reset to pending: ${taskHit.task.content}` : `Marked ${status}: ${taskHit.task.content}`,
+				verb === "pending"
+					? `Reset to pending: ${taskHit.task.content}`
+					: `Marked ${status}: ${taskHit.task.content}`,
 			);
 		}
 		const phaseHit = findPhaseFuzzy(current, query);
@@ -313,7 +315,9 @@ function targetTodo(verb: TodoTargetVerb, argument: string, port: TodoCommandPor
 			commitTodos(port, phases, `/todo ${verb} ${phaseHit.name}`, removed);
 			if (removed) return info(`Removed phase: ${phaseHit.name}`);
 			return info(
-				verb === "pending" ? `Reset phase ${phaseHit.name} to pending.` : `Marked phase ${phaseHit.name} ${status}.`,
+				verb === "pending"
+					? `Reset phase ${phaseHit.name} to pending.`
+					: `Marked phase ${phaseHit.name} ${status}.`,
 			);
 		}
 	}

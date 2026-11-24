@@ -36,9 +36,9 @@ const SWEEP_SETTINGS: Record<string, unknown> = {
 };
 
 /**
- * Constructs the two tools whose factories return null or throw without a `gh` CLI or a secret intake
- * broker. Their constructors only store the session, so the sweep validates their schemas with no
- * network, no `gh` call and no broker. Any other factory that returns null or throws stays a hole.
+ * Constructs the two tools whose factories can return null without a `gh` CLI or a secret intake
+ * broker. The sweep reads their schemas without making a GitHub call or opening a broker.
+ * A factory that throws still counts as a construction failure.
  */
 const CONSTRUCTOR_FALLBACKS: Partial<Record<string, (session: ToolSession) => AgentTool>> = {
 	github: session => new GithubTool(session),
@@ -83,18 +83,14 @@ export async function constructEveryTool(profileDir: string): Promise<EveryToolS
 	});
 	const sweep: EveryToolSweep = { tools: [], unconstructable: [], notRegistered: [] };
 	for (const [name, factory] of Object.entries({ ...BUILTIN_TOOLS, ...HIDDEN_TOOLS })) {
-		const fallback = CONSTRUCTOR_FALLBACKS[name];
 		let tool: AgentTool | null;
 		try {
 			tool = await factory(session);
 		} catch {
-			if (!fallback) {
-				sweep.unconstructable.push(name);
-				continue;
-			}
-			tool = null;
+			sweep.unconstructable.push(name);
+			continue;
 		}
-		tool ??= fallback?.(session) ?? null;
+		if (!tool && Object.hasOwn(CONSTRUCTOR_FALLBACKS, name)) tool = CONSTRUCTOR_FALLBACKS[name]!(session);
 		if (tool) sweep.tools.push(tool);
 		else sweep.notRegistered.push(name);
 	}

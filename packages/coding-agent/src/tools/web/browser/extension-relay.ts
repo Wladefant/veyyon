@@ -16,8 +16,8 @@
 import * as fs from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
 import * as path from "node:path";
-import { lazy, logger } from "@veyyon/utils";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { lazy, logger } from "@veyyon/utils";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	checkCdpMethod,
@@ -546,12 +546,18 @@ export class ExtensionRelay {
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				const debuggee = params[0];
-				const cdpMethod = method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string" ? params[1] : undefined;
+				const cdpMethod =
+					method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string"
+						? params[1]
+						: undefined;
 				this.#log("extension RPC timed out", {
 					port: this.port,
 					method,
 					...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
-					...(typeof debuggee === "object" && debuggee !== null && "tabId" in debuggee && typeof debuggee.tabId === "number"
+					...(typeof debuggee === "object" &&
+					debuggee !== null &&
+					"tabId" in debuggee &&
+					typeof debuggee.tabId === "number"
 						? { tabId: debuggee.tabId }
 						: {}),
 				});
@@ -961,8 +967,17 @@ export class ExtensionRelay {
 					: await this.#sessionCommand(sessionId, client, method, params);
 			this.#reply(client, id, sessionId, { result });
 		} catch (error) {
-			const mappedTabId = sessionId === undefined ? undefined : client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId);
-			const clientTabId = mappedTabId ?? (method === "Target.createTarget" ? undefined : typeof params.targetId === "string" ? this.#tabByTargetId(params.targetId)?.tabId : undefined);
+			const mappedTabId =
+				sessionId === undefined
+					? undefined
+					: (client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId));
+			const clientTabId =
+				mappedTabId ??
+				(method === "Target.createTarget"
+					? undefined
+					: typeof params.targetId === "string"
+						? this.#tabByTargetId(params.targetId)?.tabId
+						: undefined);
 			this.#log("CDP client command failed", {
 				port: this.port,
 				clientId: client.id,
@@ -1130,7 +1145,9 @@ export class ExtensionRelay {
 		let tab = this.#bootstrapTabId === undefined ? undefined : this.#tabs.get(this.#bootstrapTabId);
 		this.#bootstrapTabId = undefined;
 		if (!tab) {
-			const created = relaySchemas.value.tab(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
+			const created = relaySchemas.value.tab(
+				await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]),
+			);
 			if (created instanceof type.errors) throw new Error("The extension returned no tab.");
 			tab = await this.#registerTab(created.id, false, created.windowId);
 		}

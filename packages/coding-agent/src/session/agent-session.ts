@@ -4931,7 +4931,11 @@ export class AgentSession {
 	 * Elide earlier tool results byte-identical to a newer one. Lossless and model-free, so any
 	 * compaction strategy may run it. Zero counts when nothing is redundant.
 	 */
-	async dedupeRedundantToolResults(): Promise<{ toolResultsDropped: number; tokensFreed: number; artifactId?: string }> {
+	async dedupeRedundantToolResults(): Promise<{
+		toolResultsDropped: number;
+		tokensFreed: number;
+		artifactId?: string;
+	}> {
 		// A following tool can start before the previous tool result reaches the branch.
 		await this.#persistence.drain();
 		return this.#rewrites.dedupeRedundantToolResults();
