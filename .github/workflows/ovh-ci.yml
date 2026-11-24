@@ -531,6 +531,24 @@ jobs:
           # Only resolve the guest path once. Each file still gets a fresh bwrap namespace.
           sandbox_root="$(timeout --kill-after=5s 30s bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)" || exit "$?"
           runtime_bin="$sandbox_root/.ovh-tools/bin"
+          if grep -Fxq 'apps/site/deploy.test.ts' "$SHARD_FILE"; then
+            (
+              set -e
+              # Use the checkout-local runtime path already passed to bwrap for Bun.
+              archive="$(mktemp "$RUNNER_TEMP/mdbook.XXXXXXXX")"
+              trap 'rm -f -- "$archive"' EXIT
+              curl -fsSL --max-time 60 \
+                https://github.com/rust-lang/mdBook/releases/download/v0.5.2/mdbook-v0.5.2-x86_64-unknown-linux-musl.tar.gz \
+                -o "$archive"
+              printf '%s  %s\n' '8e9d802bbecea34380aabfc65bec4fdba23c07453ef2c7e06fa34c282082e2c4' "$archive" | sha256sum --check
+              tar -xzf "$archive" -C .ovh-tools/bin mdbook
+            )
+            (( $? == 0 )) || exit 1
+            version="$(timeout --kill-after=5s 30s bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; exec mdbook --version' _ "$runtime_bin")" || exit "$?"
+            printf 'Sandbox mdBook: %s\n' "$version"
+            [[ "$version" == 'mdbook v0.5.2' ]] || { echo '::error::Unexpected mdBook version inside bwrap'; exit 1; }
+            printf 'mdbook-version=%s\n' "$version" >> "$RECEIPT" || exit 1
+          fi
           if [[ "$FLEET_ADAPTER" == "true" ]]; then mkdir -p .ovh-tools/fleet-ci; fi
           if [[ "$FLEET_ADAPTER" == "true" && "${{ matrix.index }}" == "0" ]]; then
             unit_log="$GITHUB_WORKSPACE/.ovh-tools/fleet-ci/reducer-unit.log"
