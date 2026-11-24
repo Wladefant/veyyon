@@ -1881,6 +1881,7 @@ describe("AgentSession handoff", () => {
 		const mock = await createContinuingChild({ id, providerSessionId });
 		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue(successorBrief);
 		const sourceId = sessionManager.getSessionId();
+		const sourceFile = session.sessionFile;
 		const ensureOnDisk = sessionManager.ensureOnDisk.bind(sessionManager);
 		vi.spyOn(sessionManager, "ensureOnDisk").mockImplementation(async () => {
 			if (sessionManager.getSessionId() !== sourceId) throw new Error("Successor transcript write failed");
@@ -1888,6 +1889,8 @@ describe("AgentSession handoff", () => {
 		});
 
 		const registry = AgentRegistry.global();
+		const sourceScope = "handoff-write-failure-scope";
+		registry.rescope(id, sourceScope);
 		const published: Array<{ scope?: string; file?: string | null }> = [];
 		const unsubscribe = registry.onChange(event => {
 			if (event.type === "status_changed" && event.ref.id === id) {
@@ -1905,7 +1908,8 @@ describe("AgentSession handoff", () => {
 		expect(session.sessionId).toBe(providerSessionId);
 		expect(mock.calls).toHaveLength(1);
 		expect(session.agent.state.error).toBe("Successor transcript write failed");
-		expect(published.find(update => update.scope === successorId)?.file).toBe(session.sessionFile);
+		expect(session.sessionFile).not.toBe(sourceFile);
+		expect(published).toContainEqual({ scope: sourceScope, file: session.sessionFile });
 		expect(JSON.stringify(session.agent.state.messages)).toContain("# COMPACT");
 		expect(JSON.stringify(session.agent.state.messages)).not.toContain("SOURCE_TRANSCRIPT_SENTINEL");
 		expect(AgentRegistry.global().get(id)?.sessionFile).toBe(session.sessionFile);
