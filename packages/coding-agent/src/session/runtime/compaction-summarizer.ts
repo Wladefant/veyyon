@@ -544,6 +544,7 @@ export class CompactionSummarizer {
 	async prepareCompactionFromHooks(
 		preparation: CompactionPreparation,
 		hookCompaction: CompactionResult | undefined,
+		signal: AbortSignal,
 	): Promise<CompactionHookPreparation> {
 		let hookContext: string[] | undefined;
 		let hookPrompt: string | undefined;
@@ -551,12 +552,17 @@ export class CompactionSummarizer {
 
 		if (!hookCompaction && this.#session.extensionRunner?.hasHandlers("session_compacting")) {
 			await readCompactionSpanBack(preparation);
+			signal.throwIfAborted();
 			const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
-			const result = (await this.#session.extensionRunner.emit({
-				type: "session_compacting",
-				sessionId: this.#session.sessionId,
-				messages: compactMessages,
-			})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
+			const result = await this.#session.extensionRunner.emit(
+				{
+					type: "session_compacting",
+					sessionId: this.#session.sessionId,
+					messages: compactMessages,
+				},
+				signal,
+			);
+			signal.throwIfAborted();
 
 			// The hook may have awaited arbitrary extension work. Sanitize its
 			// raw text as soon as control returns, before any later formatting.
@@ -567,7 +573,9 @@ export class CompactionSummarizer {
 			preserveData = result?.preserveData;
 		}
 
+		signal.throwIfAborted();
 		const memoryBackendContext = await this.#host.memoryBackendContext(preparation);
+		signal.throwIfAborted();
 		if (memoryBackendContext) {
 			// Memory backends are async and can race a secret-runtime refresh.
 			// Resolve the authoritative runtime only after their await completes.
@@ -630,6 +638,7 @@ export class CompactionSummarizer {
 		signal.throwIfAborted();
 		if (remote) return remote;
 		await readCompactionSpanBack(preparation);
+		signal.throwIfAborted();
 
 		const configuredCompactionWindow = this.#session.settings.get("compaction.modelContextWindow");
 		// Why each candidate before the one that ran was passed over, so the
@@ -645,6 +654,7 @@ export class CompactionSummarizer {
 				continue;
 			}
 			const cachePrefix = await this.#cacheAlignedCompactionPrefix(candidate, signal);
+			signal.throwIfAborted();
 			const candidateOptions: SummaryOptions = {
 				promptOverride: this.#host.secrets().obfuscateTextForProvider(hooks.hookPrompt),
 				extraContext: hooks.hookContext,
@@ -683,6 +693,7 @@ export class CompactionSummarizer {
 				undefined,
 				candidateOptions,
 			);
+			signal.throwIfAborted();
 			if (candidateWindow > 0 && summarizePayloadTokens > candidateWindow) {
 				logger.warn("compaction candidate skipped: summarization payload exceeds its context window", {
 					candidate: formatModelString(candidate),

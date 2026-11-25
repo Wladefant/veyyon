@@ -1382,6 +1382,7 @@ async function generateStagedSummary(
 ): Promise<GeneratedSummary> {
 	const checkpoints = options?.stagedSummaryCheckpoints;
 	const request = async (promptText: string, maxTokens: number, what: string): Promise<string> => {
+		signal?.throwIfAborted();
 		const key = checkpoints
 			? createHash("sha256").update(`${model.provider}/${model.id}\n${maxTokens}\n${promptText}`).digest("hex")
 			: undefined;
@@ -1396,6 +1397,7 @@ async function generateStagedSummary(
 			options,
 			{ what, oneshotKind: "compaction_summary", replaysSessionPrefix: false },
 		);
+		signal?.throwIfAborted();
 		if (key !== undefined) checkpoints?.set(key, summary);
 		return summary;
 	};

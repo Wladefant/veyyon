@@ -264,7 +264,7 @@ export class CompactionRuntime {
 				compactionAbortController,
 				deadline,
 				"hook preparation",
-				() => this.#summarizer.prepareCompactionFromHooks(prepared, hookCompaction),
+				() => this.#summarizer.prepareCompactionFromHooks(prepared, hookCompaction, compactionAbortController.signal),
 			);
 
 			let compactionResult: CompactionResult;
@@ -651,7 +651,7 @@ export class CompactionRuntime {
 				autoCompactionAbortController,
 				deadline,
 				"hook preparation",
-				() => this.#summarizer.prepareCompactionFromHooks(prepared, hookCompaction),
+				() => this.#summarizer.prepareCompactionFromHooks(prepared, hookCompaction, autoCompactionSignal),
 			);
 
 			let result: CompactionResult;

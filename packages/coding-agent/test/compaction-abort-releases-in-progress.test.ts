@@ -228,7 +228,7 @@ describe("manual compact cancellation releases in-progress state", () => {
 		expect(compactions[0]?.summary).toBe("HEALTHY_HOOK_RETRY");
 	});
 
-	it("times out a stalled before-compaction hook and leaves the journal unchanged", async () => {
+	it.each(["manual", "idle"] as const)("times out a stalled %s compaction and leaves the journal unchanged", async mode => {
 		const entered = Promise.withResolvers<AbortSignal>();
 		const release = Promise.withResolvers<void>();
 		pendingReleases.push(release);
@@ -241,16 +241,29 @@ describe("manual compact cancellation releases in-progress state", () => {
 			},
 		} as unknown as ExtensionRunner;
 		const { session, sessionManager } = await createCompactionFixture(extensionRunner);
+		const autoEnded = Promise.withResolvers<{ aborted: boolean; errorMessage?: string }>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") autoEnded.resolve(event);
+		});
 		vi.useFakeTimers();
 		try {
-			const compacting = session.compact().catch((error: unknown) => error);
+			const compacting =
+				mode === "manual" ? session.compact().catch((error: unknown) => error) : session.runIdleCompaction();
 			const signal = await entered.promise;
 			expect(signal.aborted).toBe(false);
 			vi.advanceTimersByTime(8 * 60_000);
-			expect(await compacting).toMatchObject({
-				name: "TimeoutError",
-				message: "Compaction timed out during before hook",
-			});
+			const result = await compacting;
+			if (mode === "manual") {
+				expect(result).toMatchObject({
+					name: "TimeoutError",
+					message: "Compaction timed out during before hook",
+				});
+			} else {
+				expect(await autoEnded.promise).toMatchObject({
+					aborted: false,
+					errorMessage: "Auto-compaction failed: Compaction timed out during before hook",
+				});
+			}
 			expect(signal.aborted).toBe(true);
 			expect(session.isCompacting).toBe(false);
 			expect(sessionManager.getBranch().some(entry => entry.type === "compaction")).toBe(false);
