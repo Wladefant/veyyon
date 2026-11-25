@@ -247,11 +247,11 @@ describe("manual compact cancellation releases in-progress state", () => {
 			const signal = await entered.promise;
 			expect(signal.aborted).toBe(false);
 			vi.advanceTimersByTime(8 * 60_000);
-			expect(signal.aborted).toBe(true);
 			expect(await compacting).toMatchObject({
 				name: "TimeoutError",
 				message: "Compaction timed out during before hook",
 			});
+			expect(signal.aborted).toBe(true);
 			expect(session.isCompacting).toBe(false);
 			expect(sessionManager.getBranch().some(entry => entry.type === "compaction")).toBe(false);
 		} finally {

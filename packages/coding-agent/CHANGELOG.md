@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Let Escape cancel stalled compaction preparation and bound hook and summary waits without racing journal writes ([Refs #1225](https://github.com/Wladefant/veyyon/issues/1225)).
 - Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).
 - Settle failed turns when the scheduler skips their automatic retry continuation ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
 - Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).

@@ -21,13 +21,15 @@
         "kernel/src/session/session-loader.ts",
         "kernel/src/session/session-manager.ts",
         "kernel/src/session/session-storage.ts",
-        "packages/coding-agent/src/session/runtime/compaction-runtime.ts"
+        "packages/coding-agent/src/session/runtime/compaction-runtime.ts",
+        "packages/coding-agent/src/session/runtime/compaction-summarizer.ts"
       ],
       "tests": [
         "packages/coding-agent/test/session/a-rewrite-drains-its-writer-before-locking.test.ts",
         "packages/coding-agent/test/session/a-staged-journal-rewrite-reads-only-new-bytes.test.ts",
         "packages/coding-agent/test/tailrev-compaction-elision-persist.test.ts",
-        "packages/coding-agent/test/steer-preview-drains-after-compaction.test.ts"
+        "packages/coding-agent/test/steer-preview-drains-after-compaction.test.ts",
+        "packages/coding-agent/test/compaction-abort-releases-in-progress.test.ts"
       ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1225",
       "risk": "high",
