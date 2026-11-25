@@ -23,6 +23,7 @@
         "kernel/src/session/session-storage.ts",
         "packages/agent/src/compaction/compaction.ts",
         "packages/coding-agent/src/extensibility/extensions/runner.ts",
+        "packages/coding-agent/src/session/agent-session.ts",
         "packages/coding-agent/src/session/runtime/compaction-runtime.ts",
         "packages/coding-agent/src/session/runtime/compaction-summarizer.ts"
       ],

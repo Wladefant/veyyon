@@ -319,10 +319,13 @@ export type { ShakeMode, ShakeResult };
 async function collectMemoryBackendContext(
 	session: AgentSession,
 	preparation: { messagesToSummarize: AgentMessage[]; turnPrefixMessages: AgentMessage[] },
+	signal: AbortSignal,
 ): Promise<string | undefined> {
 	const backend = await resolveMemoryBackend(session.settings);
+	signal.throwIfAborted();
 	if (!backend.preCompactionContext) return undefined;
 	await readCompactionSpanBack(preparation);
+	signal.throwIfAborted();
 	const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 	try {
 		return await backend.preCompactionContext(messages, session.settings, session);
@@ -617,7 +620,7 @@ export class AgentSession {
 		nonMessageTokens: () => computeNonMessageTokens(this),
 		nonMessageBreakdown: () => computeNonMessageBreakdown(this),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
-		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
+		memoryBackendContext: (preparation, signal) => collectMemoryBackendContext(this, preparation, signal),
 		withPlanProtection: config => this.#planMode.withProtection(config),
 		offloadAndApplyShakeRegions: regions => this.#rewrites.offloadAndApply(regions),
 		rebasePendingContextSnapshotAfterHistoryRewrite: () => this.#context.rebaseAfterHistoryRewrite(),

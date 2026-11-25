@@ -63,7 +63,7 @@ export interface CompactionSummarizerHost {
 	/** The session's system prompt before per-turn extension changes. */
 	baseSystemPrompt(): string[];
 	/** The active memory backend's extra summary context, or undefined. */
-	memoryBackendContext(preparation: CompactionPreparation): Promise<string | undefined>;
+	memoryBackendContext(preparation: CompactionPreparation, signal: AbortSignal): Promise<string | undefined>;
 }
 
 /** What `session_compacting` handlers and the memory backend add to a summary request. */
@@ -574,7 +574,7 @@ export class CompactionSummarizer {
 		}
 
 		signal.throwIfAborted();
-		const memoryBackendContext = await this.#host.memoryBackendContext(preparation);
+		const memoryBackendContext = await this.#host.memoryBackendContext(preparation, signal);
 		signal.throwIfAborted();
 		if (memoryBackendContext) {
 			// Memory backends are async and can race a secret-runtime refresh.
