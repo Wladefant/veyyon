@@ -227,4 +227,36 @@ describe("manual compact cancellation releases in-progress state", () => {
 		expect(compactions).toHaveLength(1);
 		expect(compactions[0]?.summary).toBe("HEALTHY_HOOK_RETRY");
 	});
+
+	it("times out a stalled before-compaction hook and leaves the journal unchanged", async () => {
+		const entered = Promise.withResolvers<AbortSignal>();
+		const release = Promise.withResolvers<void>();
+		pendingReleases.push(release);
+		const extensionRunner = {
+			hasHandlers: (eventType: string) => eventType === "session_before_compact",
+			emit: async (event: { type: string; signal: AbortSignal }) => {
+				if (event.type !== "session_before_compact") return;
+				entered.resolve(event.signal);
+				await release.promise;
+			},
+		} as unknown as ExtensionRunner;
+		const { session, sessionManager } = await createCompactionFixture(extensionRunner);
+		vi.useFakeTimers();
+		try {
+			const compacting = session.compact().catch((error: unknown) => error);
+			const signal = await entered.promise;
+			expect(signal.aborted).toBe(false);
+			vi.advanceTimersByTime(8 * 60_000);
+			expect(signal.aborted).toBe(true);
+			expect(await compacting).toMatchObject({
+				name: "TimeoutError",
+				message: "Compaction timed out during before hook",
+			});
+			expect(session.isCompacting).toBe(false);
+			expect(sessionManager.getBranch().some(entry => entry.type === "compaction")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+			release.resolve();
+		}
+	});
 });

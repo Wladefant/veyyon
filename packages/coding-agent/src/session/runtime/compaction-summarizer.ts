@@ -192,8 +192,10 @@ export class CompactionSummarizer {
 			remoteInstructions: this.#host.baseSystemPrompt().join("\n\n"),
 			codexCompaction,
 		});
+		signal.throwIfAborted();
 		if (remote) return remote;
 		await readCompactionSpanBack(preparation);
+		signal.throwIfAborted();
 		return this.#compactWithFallbackModel(
 			preparation,
 			customInstructions,
@@ -346,6 +348,7 @@ export class CompactionSummarizer {
 			return undefined;
 		}
 		const apiKey = await this.#session.modelRegistry.getApiKey(model, this.#session.sessionId);
+		signal.throwIfAborted();
 		if (!apiKey) {
 			// The loader announced a remote pass from the sync half of this gate;
 			// a missing credential must not downgrade to a local pass silently.
@@ -362,6 +365,7 @@ export class CompactionSummarizer {
 			return undefined;
 		}
 		if (!serverCompactionChainsWindow(preparation, model)) await readCompactionSpanBack(preparation);
+		signal.throwIfAborted();
 		try {
 			return await compactWithProvider(
 				this.#host.secrets().obfuscatePreparationForProvider(preparation),
@@ -439,6 +443,7 @@ export class CompactionSummarizer {
 				customInstructions,
 				candidateOptions,
 			);
+			signal.throwIfAborted();
 			const candidateWindow =
 				typeof configuredCompactionWindow === "number" && configuredCompactionWindow > 0
 					? configuredCompactionWindow
@@ -457,6 +462,7 @@ export class CompactionSummarizer {
 				continue;
 			}
 			const apiKey = await this.#session.modelRegistry.getApiKey(candidate, this.#session.sessionId);
+			signal.throwIfAborted();
 			if (!apiKey) {
 				skipReasons.set(formatModelString(candidate), "it is not authenticated");
 				continue;
@@ -510,11 +516,12 @@ export class CompactionSummarizer {
 						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					},
 				);
+				signal.throwIfAborted();
 				this.#recordSummaryStaging(candidate, compacted);
 				this.#announceCompactionFallback(candidates, candidate, skipReasons);
 				return compacted;
 			} catch (error) {
-				if (!AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
+				if (signal.aborted || !AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
 					throw error;
 				}
 				skipReasons.set(formatModelString(candidate), "its credentials were rejected");
@@ -620,6 +627,7 @@ export class CompactionSummarizer {
 			initiatorOverride: "agent",
 			codexCompaction,
 		});
+		signal.throwIfAborted();
 		if (remote) return remote;
 		await readCompactionSpanBack(preparation);
 
@@ -631,6 +639,7 @@ export class CompactionSummarizer {
 		for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
 			const candidate = candidates[candidateIndex];
 			const apiKey = await this.#session.modelRegistry.getApiKey(candidate, this.#session.sessionId);
+			signal.throwIfAborted();
 			if (!apiKey) {
 				skipReasons.set(formatModelString(candidate), "it is not authenticated");
 				continue;
@@ -708,6 +717,7 @@ export class CompactionSummarizer {
 				signal,
 				candidateIndex < candidates.length - 1,
 			);
+			signal.throwIfAborted();
 			if ("result" in attempt) {
 				this.#recordSummaryStaging(candidate, attempt.result);
 				this.#announceCompactionFallback(candidates, candidate, skipReasons);

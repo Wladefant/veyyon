@@ -44,7 +44,7 @@ import {
 import { type CompactModeDef, findCompactMode } from "@veyyon/kernel/session/compact-modes";
 import { getLatestCompactionEntry, type SessionContext } from "@veyyon/kernel/session/session-context";
 import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { errorMessage, isAbortError, logger } from "@veyyon/utils";
+import { errorMessage, isAbortError, isTimeoutError, logger, raceWithTimeout } from "@veyyon/utils";
 import {
 	type CompactionEngineAction,
 	resolveCompactionEngineAction,
@@ -125,6 +125,9 @@ function compactionRecord(
 		preserveData,
 	};
 }
+
+const COMPACTION_PREPARATION_TIMEOUT_MS = 8 * 60_000;
+
 interface AutoCompactionGuardState {
 	readonly postCompactionSize: number;
 	readonly resumeThreshold: number;
@@ -204,6 +207,7 @@ export class CompactionRuntime {
 		compactMode: CompactModeDef | undefined,
 		compactionAbortController: AbortController,
 	): Promise<CompactionResult> {
+		const deadline = performance.now() + COMPACTION_PREPARATION_TIMEOUT_MS;
 		// Hoisted so the catch can roll the preparation's tail elisions back:
 		// prepareCompaction applies them to the live branch as a side effect.
 		let preparation: CompactionPreparation | undefined;
@@ -229,12 +233,13 @@ export class CompactionRuntime {
 				availableModels,
 			);
 			const pathEntries = this.#session.sessionManager.getBranch();
-			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(effectiveSettings), {
+			const prepared = prepareCompaction(pathEntries, toAgentCompactionSettings(effectiveSettings), {
 				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
 				contextWindow: declaredContextWindow(this.#session.model),
 			});
-			if (!preparation) {
+			preparation = prepared;
+			if (!prepared) {
 				// Check why we can't compact
 				if (endsAtCompaction(pathEntries, RESTATED_BLOCK_TYPES)) {
 					throw new Error("Already compacted");
@@ -248,17 +253,19 @@ export class CompactionRuntime {
 				throw new Error("Nothing to compact (session too small)");
 			}
 
-			const beforeCompact = await this.#emitBeforeCompact(
-				preparation,
-				pathEntries,
-				customInstructions,
-				compactionAbortController.signal,
+			const beforeCompact = await this.#awaitPreparation(compactionAbortController, deadline, "before hook", () =>
+				this.#emitBeforeCompact(prepared, pathEntries, customInstructions, compactionAbortController.signal),
 			);
 			if (beforeCompact?.cancel) {
 				throw new CompactionCancelledError();
 			}
 			const hookCompaction = beforeCompact?.compaction || undefined;
-			const compactionPrep = await this.#summarizer.prepareCompactionFromHooks(preparation, hookCompaction);
+			const compactionPrep = await this.#awaitPreparation(
+				compactionAbortController,
+				deadline,
+				"hook preparation",
+				() => this.#summarizer.prepareCompactionFromHooks(prepared, hookCompaction),
+			);
 
 			let compactionResult: CompactionResult;
 			let codexCompaction: CodexCompactionContext | undefined;
@@ -266,58 +273,41 @@ export class CompactionRuntime {
 			if (compactionPrep.kind === "fromHook") {
 				compactionResult = compactionRecord(compactionPrep, compactionPrep.preserveData);
 			} else {
-				codexCompaction = createCodexCompactionContext({
+				const context = createCodexCompactionContext({
 					trigger: "manual",
 					reason: "user_requested",
 					phase: "standalone_turn",
 				});
-				// Generate compaction result. Only convert known abort-shaped
-				// rejections (AbortError raised while the abort signal is set,
-				// or an already-typed sentinel) into `CompactionCancelledError`
-				// so downstream callers can discriminate cancel from generic
-				// failure via `instanceof` without inspecting message strings.
-				// Real compaction bugs (network, server, parsing, etc.) keep
-				// their original shape — they must not be silently relabeled
-				// as cancellations even if the signal happens to be aborted
-				// for an unrelated reason. The assignment lives inside the try
-				// block because every catch path throws — the post-try read
-				// of the result is reachable only on success.
-				try {
-					const result = await this.#summarizer.summarizeManual(
-						preparation,
+				codexCompaction = context;
+				const result = await this.#awaitPreparation(compactionAbortController, deadline, "summary", () =>
+					this.#summarizer.summarizeManual(
+						prepared,
 						options?.internalGuidance ?? customInstructions,
 						compactionPrep,
-						codexCompaction,
+						context,
 						compactionCandidates,
 						compactionAbortController.signal,
-					);
-					compactionResult = compactionRecord(
-						result,
-						mergeLlmCompactionPreserveData(compactionPrep.preserveData, result.preserveData),
-					);
-				} catch (err) {
-					if (err instanceof CompactionCancelledError) {
-						throw err;
-					}
-					if (compactionAbortController.signal.aborted && isAbortError(err)) {
-						throw new CompactionCancelledError();
-					}
-					throw err;
-				}
+					),
+				);
+				compactionResult = compactionRecord(
+					result,
+					mergeLlmCompactionPreserveData(compactionPrep.preserveData, result.preserveData),
+				);
 			}
 
 			if (compactionAbortController.signal.aborted) {
 				throw new CompactionCancelledError();
 			}
 
-			await this.#applyCompaction(preparation, compactionResult, hookCompaction !== undefined, codexCompaction);
+			await this.#applyCompaction(prepared, compactionResult, hookCompaction !== undefined, codexCompaction);
 			options?.onComplete?.(compactionResult);
 			return compactionResult;
 		} catch (error) {
 			this.#rollbackCompactionTailElisions(preparation);
-			const err = error instanceof Error ? error : new Error(errorMessage(error));
-			options?.onError?.(err);
-			throw error;
+			const err =
+				compactionAbortController.signal.aborted && isAbortError(error) ? new CompactionCancelledError() : error;
+			options?.onError?.(err instanceof Error ? err : new Error(errorMessage(err)));
+			throw err;
 		} finally {
 			if (this.#compactionAbortController === compactionAbortController) {
 				this.#compactionAbortController = undefined;
@@ -612,6 +602,7 @@ export class CompactionRuntime {
 		this.#autoCompactionAbortController = autoCompactionAbortController;
 		this.#host.phaseChanged();
 		const autoCompactionSignal = autoCompactionAbortController.signal;
+		const deadline = performance.now() + COMPACTION_PREPARATION_TIMEOUT_MS;
 
 		// Hoisted so failure paths can roll the preparation's tail elisions
 		// back: prepareCompaction applies them to the live branch as a side
@@ -633,43 +624,57 @@ export class CompactionRuntime {
 
 			const pathEntries = this.#session.sessionManager.getBranch();
 
-			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(compactionSettings), {
+			const prepared = prepareCompaction(pathEntries, toAgentCompactionSettings(compactionSettings), {
 				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
 				contextWindow: declaredContextWindow(this.#session.model),
 			});
-			if (!preparation) {
+			preparation = prepared;
+			if (!prepared) {
 				await this.#emitEmptyAutoCompactionEnd(action, "skipped");
 				return this.#recovery.afterNothingToSummarize(reason, generation, suppressContinuation);
 			}
 
-			const beforeCompact = await this.#emitBeforeCompact(preparation, pathEntries, undefined, autoCompactionSignal);
+			const beforeCompact = await this.#awaitPreparation(
+				autoCompactionAbortController,
+				deadline,
+				"before hook",
+				() => this.#emitBeforeCompact(prepared, pathEntries, undefined, autoCompactionSignal),
+			);
 			if (beforeCompact?.cancel) {
 				this.#rollbackCompactionTailElisions(preparation);
 				await this.#emitEmptyAutoCompactionEnd(action, "aborted");
 				return COMPACTION_CHECK_NONE;
 			}
 			const hookCompaction = beforeCompact?.compaction || undefined;
-			const compactionPrep = await this.#summarizer.prepareCompactionFromHooks(preparation, hookCompaction);
+			const compactionPrep = await this.#awaitPreparation(
+				autoCompactionAbortController,
+				deadline,
+				"hook preparation",
+				() => this.#summarizer.prepareCompactionFromHooks(prepared, hookCompaction),
+			);
 
 			let result: CompactionResult;
 			let codexCompaction: CodexCompactionContext | undefined;
 			if (compactionPrep.kind === "fromHook") {
 				result = compactionRecord(compactionPrep, compactionPrep.preserveData);
 			} else {
-				codexCompaction = createCodexCompactionContext({
+				const context = createCodexCompactionContext({
 					trigger: "auto",
 					reason: "context_limit",
 					phase:
 						options.phase ??
 						(reason === "threshold" ? "pre_turn" : reason === "idle" ? "standalone_turn" : "mid_turn"),
 				});
-				const compacted = await this.#summarizer.summarizeForAutoCompaction(
-					preparation,
-					compactionPrep,
-					codexCompaction,
-					availableModels,
-					autoCompactionSignal,
+				codexCompaction = context;
+				const compacted = await this.#awaitPreparation(autoCompactionAbortController, deadline, "summary", () =>
+					this.#summarizer.summarizeForAutoCompaction(
+						prepared,
+						compactionPrep,
+						context,
+						availableModels,
+						autoCompactionSignal,
+					),
 				);
 				result = compactionRecord(
 					compacted,
@@ -684,7 +689,7 @@ export class CompactionRuntime {
 			}
 
 			const savedCompactionEntry = await this.#applyCompaction(
-				preparation,
+				prepared,
 				result,
 				hookCompaction !== undefined,
 				codexCompaction,
@@ -716,7 +721,7 @@ export class CompactionRuntime {
 			return compactionCheckOutcome(continuationScheduled, progress.deadEnd);
 		} catch (error) {
 			this.#rollbackCompactionTailElisions(preparation);
-			if (autoCompactionSignal.aborted) {
+			if (autoCompactionSignal.aborted && !isTimeoutError(autoCompactionSignal.reason)) {
 				await this.#emitEmptyAutoCompactionEnd(action, "aborted");
 				return COMPACTION_CHECK_NONE;
 			}
@@ -737,6 +742,14 @@ export class CompactionRuntime {
 							? `Incomplete response recovery failed: ${failure}`
 							: `Auto-compaction failed: ${failure}`,
 			});
+			if (autoCompactionSignal.aborted && reason !== "idle") {
+				const deliverQueued = this.#recovery.scheduleAfterCompaction(generation, {
+					retry: false,
+					autoContinue: false,
+					deliverQueued: !suppressContinuation,
+				});
+				return compactionCheckOutcome(deliverQueued, true);
+			}
 			return await this.#recovery.afterFailedCompaction(reason, willRetry, autoCompactionSignal, generation, {
 				suppressContinuation,
 				shouldAutoContinue,
@@ -748,6 +761,31 @@ export class CompactionRuntime {
 				this.#host.phaseChanged();
 			}
 		}
+	}
+
+	/** Race preparation only. Do not release compaction state while a journal write is active. */
+	async #awaitPreparation<T>(
+		controller: AbortController,
+		deadline: number,
+		stage: string,
+		run: () => Promise<T>,
+	): Promise<T> {
+		const { signal } = controller;
+		signal.throwIfAborted();
+		const makeTimeoutError = () => new DOMException(`Compaction timed out during ${stage}`, "TimeoutError");
+		const remaining = deadline - performance.now();
+		if (remaining <= 0) {
+			controller.abort(makeTimeoutError());
+			signal.throwIfAborted();
+		}
+		const pending = Promise.resolve().then(() => {
+			signal.throwIfAborted();
+			return run();
+		});
+		return raceWithTimeout(pending, remaining, makeTimeoutError, {
+			signal,
+			onTimeout: async () => controller.abort(makeTimeoutError()),
+		});
 	}
 
 	/** End an automatic pass that wrote nothing: skipped before it began, or aborted. */
