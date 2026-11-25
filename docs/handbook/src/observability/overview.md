@@ -29,6 +29,20 @@ Prompt text, tokens, and credentials are never included in trace records or seri
 
 `/dump`, `/context`, `/debug`, and standalone tool CLIs such as `veyyon grep` for inspecting what the agent would see.
 
+## Automatic rejected-request dumps
+
+For provider HTTP 400 and 413 responses, Veyyon can record one JSON file per
+rejected request under the profile's `logs/http-400-requests/retained-v1/`.
+The error message gives the path. Keep these files private: credential headers
+are redacted, but request bodies can contain sensitive data.
+
+Each profile holds up to 256 new dumps and 64 MiB of dump data. On a new
+eligible rejection, Veyyon removes managed dumps at least seven days old.
+If the new dump still does not fit, Veyyon reports that it could not save it.
+It does not evict a dump within its seven-day window, alter the provider error,
+or remove files written outside `retained-v1/`. Save incident evidence you need
+to keep longer to your approved evidence store.
+
 ## Recording raw provider traffic
 
 When a model behaves in a way you cannot explain from the transcript, record the
