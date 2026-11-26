@@ -52,7 +52,7 @@ export function isWaitingPollDetails(details: unknown): boolean {
 	const d = details as JobToolDetails | undefined;
 	if (!d || !Array.isArray(d.jobs) || d.jobs.length === 0) return false;
 	if (d.cancelled?.length) return false;
-	return d.jobs.every(job => job?.status === "running");
+	return d.jobs.every(job => job?.status === "running" || job?.status === "starting");
 }
 
 /** The columns a job's label may spend before it is cut. */
@@ -89,6 +89,8 @@ function statusMark(job: Pick<JobSnapshot, "status" | "queued">): ViewStatus {
 			return "error";
 		case "cancelled":
 			return "aborted";
+		case "starting":
+			return "pending";
 		case "running":
 			return job.queued ? "pending" : "running";
 	}
@@ -103,6 +105,8 @@ function statusTone(job: Pick<JobSnapshot, "status" | "queued">): ViewTone {
 			return "error";
 		case "cancelled":
 			return "warning";
+		case "starting":
+			return "muted";
 		case "running":
 			return job.queued ? "muted" : "accent";
 	}
@@ -169,7 +173,16 @@ function jobLines(job: JobSnapshot, context: ToolViewContext): ViewLine[] {
 		{ text: " " },
 		{ text: visibleLabelLines[0] ?? "", tone: live ? "accent" : "output", ...(live ? { live: true } : {}) },
 		{ text: " " },
-		{ text: job.queued ? `queued ${formatDuration(job.durationMs)}` : formatDuration(job.durationMs), tone: "dim" },
+		{
+			text: job.queued
+				? `queued ${formatDuration(job.durationMs)}`
+				: job.status === "starting"
+					? job.startupPhase
+						? `starting (${job.startupPhase}) ${formatDuration(job.durationMs)}`
+						: `starting ${formatDuration(job.durationMs)}`
+					: formatDuration(job.durationMs),
+			tone: "dim",
+		},
 	]);
 	for (let index = 1; index < visibleLabelLines.length; index++) {
 		lines.push([{ text: ROW_BODY_INDENT }, { text: visibleLabelLines[index]!, tone: "output" }]);
@@ -237,7 +250,13 @@ function heldBack(jobs: number, agents: number): ViewHiddenCount | undefined {
 }
 
 /** Running first, so a reader sees what is still pending, then failed, then what settled. */
-const STATUS_ORDER: Record<JobSnapshot["status"], number> = { running: 0, failed: 1, cancelled: 2, completed: 3 };
+const STATUS_ORDER: Record<JobSnapshot["status"], number> = {
+	starting: 0,
+	running: 0,
+	failed: 1,
+	cancelled: 2,
+	completed: 3,
+};
 
 /** The row that reports the set: how many are still going, and what became of the rest. */
 function summaryRow(
@@ -250,6 +269,7 @@ function summaryRow(
 	const meta: ViewLine[] = [];
 	const queued = jobs.reduce((count, job) => (job.queued ? count + 1 : count), 0);
 	if (queued > 0) meta.push([{ text: `${queued} queued`, tone: "muted" }]);
+	if (counts.starting > 0) meta.push([{ text: `${counts.starting} starting`, tone: "muted" }]);
 	if (counts.completed > 0) meta.push([{ text: `${counts.completed} done`, tone: "success" }]);
 	if (counts.failed > 0) meta.push([{ text: `${counts.failed} failed`, tone: "error" }]);
 	if (counts.cancelled > 0) meta.push([{ text: `${counts.cancelled} cancelled`, tone: "warning" }]);
@@ -257,17 +277,18 @@ function summaryRow(
 		meta.push([{ text: formatCount("agent", agents.length), tone: "accent" }]);
 	}
 	const jobsNoun = jobs.length === 1 ? "job" : "jobs";
+	const activeCount = counts.running + counts.starting;
 	const title =
 		jobs.length === 0
 			? `${formatCount("running agent", agents.length)} — no jobs`
-			: counts.running > 0
-				? counts.running === jobs.length
+			: activeCount > 0
+				? activeCount === jobs.length
 					? `waiting on ${jobs.length} ${jobsNoun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
+					: `waiting on ${activeCount} of ${jobs.length} ${jobsNoun}`
 				: `${jobs.length} ${jobsNoun} settled`;
 	return {
 		kind: "statusRow",
-		status: counts.failed > 0 ? "warning" : counts.running > 0 || agents.length > 0 ? "info" : "success",
+		status: counts.failed > 0 ? "warning" : activeCount > 0 || agents.length > 0 ? "info" : "success",
 		title,
 		meta,
 	};
@@ -324,11 +345,17 @@ export const jobToolView: Required<ToolViewRenderer<JobRenderArgs, JobViewResult
 		// Agent-carrying results (list / empty-poll roster) are real snapshots, not displaceable
 		// waiting frames — only agentless polls collapse their still-running rows once sealed.
 		if (!context.partial && isPollCall && agents.length === 0) {
-			jobs = jobs.filter(job => job.status !== "running");
+			jobs = jobs.filter(job => job.status !== "running" && job.status !== "starting");
 			if (jobs.length === 0) return NOTHING;
 		}
 
-		const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
+		const counts: Record<JobSnapshot["status"], number> = {
+			starting: 0,
+			running: 0,
+			completed: 0,
+			failed: 0,
+			cancelled: 0,
+		};
 		for (const job of jobs) counts[job.status]++;
 
 		const sorted = [...jobs].sort(

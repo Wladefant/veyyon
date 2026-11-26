@@ -691,7 +691,7 @@ export class SpawnScheduler {
 		return options.manager.register(
 			"task", // not-a-tool-name: async job kind
 			agentId,
-			async ({ signal, reportProgress, markRunning }) => {
+			async ({ signal, reportProgress, markRunning, setStartupPhase }) => {
 				const startedAt = Date.now();
 				let admitted = false;
 				let settled = false;
@@ -700,8 +700,9 @@ export class SpawnScheduler {
 					admitted = true;
 					const acquiredAt = Date.now();
 					markRunning();
-					progress.status = "running";
-					await reportProgress(`Running background task ${agentId}...`);
+					setStartupPhase("prepare-spawn");
+					progress.startupPhase = "prepare-spawn";
+					void reportProgress(`Starting background task ${agentId}...`);
 					const result = await runSpawn(this.#session, this.#parentApprovalBypassed, {
 						toolCallId: call.toolCallId,
 						grantRootSessionId: call.grantRootSessionId,
@@ -711,6 +712,17 @@ export class SpawnScheduler {
 						index: spawn.index,
 						detached: true,
 						launchTiming: { invokedAt: startedAt, acquiredAt },
+						onStartupPhase: phase => {
+							if (signal.aborted) return;
+							setStartupPhase(phase);
+							progress.startupPhase = phase;
+							if (phase === "ready") progress.status = "running";
+							void reportProgress(
+								phase === "ready"
+									? `Running background task ${agentId}...`
+									: `Starting background task ${agentId}: ${phase}.`,
+							);
+						},
 					});
 					const single = result.details?.results[0];
 					const failed = settleJobProgress(progress, single, startedAt);
