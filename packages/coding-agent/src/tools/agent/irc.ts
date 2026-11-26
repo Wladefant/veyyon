@@ -90,8 +90,8 @@ const TASK_STARTUP_REFUSALS = {
 	queued_not_yet_on_irc: "The child is waiting for a concurrency slot.",
 	starting_not_yet_on_irc: "The child has started but has not registered with IRC.",
 	registered_no_live_session: "The child has registered with IRC but has no live session.",
-	recipient_cancelled: "The child was cancelled before it became messageable.",
-	startup_failed: "The child's job failed and it has no live IRC session.",
+	recipient_cancelled: "The child's job was cancelled and it has no live IRC session.",
+	recipient_job_failed: "The child's job failed and it has no live IRC session.",
 } as const;
 
 interface IrcTaskStartupRefusal extends IrcDeliveryReceipt {
@@ -298,7 +298,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 
 		let code: IrcTaskStartupRefusal["code"];
 		if (job.status === "cancelled") code = "recipient_cancelled";
-		else if (job.status === "failed") code = "startup_failed";
+		else if (job.status === "failed") code = "recipient_job_failed";
 		else if (target) code = "registered_no_live_session";
 		else if (job.queued) code = "queued_not_yet_on_irc";
 		else code = "starting_not_yet_on_irc";

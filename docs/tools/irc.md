@@ -44,7 +44,7 @@ Session aliases resolve against live owner-only terminal records, not offline qu
   - `wait`: the consumed message as `[<msgId>] <from>: <body>` (with a reply-to tag), or `No message within <duration>.`
   - `inbox`: `Inbox empty.` or `<n> message(s):` bullets.
 - `details: IrcDetails`: `{ op, from?, to?, receipts?, waited?, inbox?, peers? }`. `waited` is `null` when a wait timed out; `receipts` carry `{ to, outcome, error? }`.
-  Startup refusals also carry a `code` (`queued_not_yet_on_irc`, `starting_not_yet_on_irc`, `registered_no_live_session`, `recipient_cancelled`, or `startup_failed`), `jobId`, and explicit `accepted: false`, `retained: false`, and `delivered: false` flags. Cancelled and failed jobs are identifiable only while the job manager retains them. Broadcasts do not include unregistered jobs.
+  Startup refusals also carry a `code` (`queued_not_yet_on_irc`, `starting_not_yet_on_irc`, `registered_no_live_session`, `recipient_cancelled`, or `recipient_job_failed`), `jobId`, and explicit `accepted: false`, `retained: false`, and `delivered: false` flags. Cancelled and failed jobs are identifiable only while the job manager retains them. Broadcasts do not include unregistered jobs.
 
 ## Flow
 1. `IrcTool.createIf` constructs the tool only when `isIrcEnabled` passes and the session has both an `AgentRegistry` and `getAgentId`. There is no `irc.enabled` setting: availability is derived: true for every agent (`taskDepth > 0`; a parent always exists) and for any session that can still spawn agents through the task tool. Only a top-level session with task spawning unavailable has no peers, hence no irc.
