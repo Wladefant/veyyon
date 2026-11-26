@@ -26,10 +26,12 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { initSessionCpuLimit, resetSessionCpuLimitsForTests } from "@veyyon/coding-agent/session/cpu-limit";
 import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
+import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import type { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import { type CallSpawn, type SpawnCall, SpawnScheduler } from "@veyyon/coding-agent/task/spawn-scheduler";
 import { resetTreeSpawnSemaphoresForTests, treeSpawnSemaphore } from "@veyyon/coding-agent/task/spawn-semaphore";
 import type { AgentDefinition, AgentProgress, TaskToolDetails } from "@veyyon/coding-agent/task/types";
+import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
 import { makeCgroupRoot, makeDelegatedParent, makeFakeHost, removeCgroupRoots } from "../helpers/fake-cgroup";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { makeToolSession } from "../helpers/tool-session";
@@ -38,6 +40,8 @@ import { makeToolSession } from "../helpers/tool-session";
 useIsolatedAgentDir();
 
 const ROOT_SESSION = "root";
+
+const PARENT_AGENT = "main:root";
 
 const taskAgent: AgentDefinition = {
 	name: "task",
@@ -55,14 +59,14 @@ function createManager(): AsyncJobManager {
 }
 
 /** A scheduler for the registered root session, with a ceiling of one spawn for the whole tree. */
-function createScheduler(): SpawnScheduler {
+function createScheduler(ownerId?: string): SpawnScheduler {
 	return new SpawnScheduler(
 		makeToolSession({
 			hasUI: false,
 			settings: Settings.isolated({ "async.enabled": true, "agent.maxConcurrency": 1 }),
 			getSessionSpawns: () => "*",
 			getSessionId: () => ROOT_SESSION,
-			getAgentId: () => null,
+			getAgentId: () => ownerId ?? null,
 		}),
 	);
 }
@@ -130,6 +134,7 @@ function rowOf(details: TaskToolDetails | undefined, id: string): AgentProgress 
 beforeEach(() => {
 	AgentRegistry.resetGlobalForTests();
 	AgentLifecycleManager.resetGlobalForTests();
+	IrcBus.resetGlobalForTests();
 	vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
 });
 
@@ -154,6 +159,55 @@ function recordRuns(): string[] {
 }
 
 describe("a background spawn and its session tree's spawn slot", () => {
+	it.each([
+		{ queued: true, awaitReply: false, code: "queued_not_yet_on_irc" },
+		{ queued: false, awaitReply: true, code: "starting_not_yet_on_irc" },
+	])("reports $code for the parent's detached child without accepting the message", async ({
+		queued,
+		awaitReply,
+		code,
+	}) => {
+		const semaphore = await treeSemaphore();
+		await semaphore.acquire();
+		const registry = AgentRegistry.global();
+		registry.register({ id: PARENT_AGENT, kind: "main", displayName: "Main", scope: ROOT_SESSION, session: null });
+		const manager = createManager();
+		const childStart = Promise.withResolvers<void>();
+		const releaseChild = Promise.withResolvers<void>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
+			childStart.resolve();
+			await releaseChild.promise;
+			throw new Error("Test stopped before IRC registration");
+		});
+		const irc = new IrcTool(makeToolSession({ agentRegistry: registry, asyncJobManager: manager, getAgentId: () => PARENT_AGENT }));
+		await createScheduler(PARENT_AGENT).runInBackground(callFor([]), spawnsNamed("Child"), {
+			manager,
+			ircEnabled: true,
+			advisory: undefined,
+		});
+		const job = manager.getJob("Child");
+		try {
+			if (!queued) {
+				semaphore.release();
+				await childStart.promise;
+			}
+			expect(job?.queued).toBe(queued);
+			expect(registry.get("Child")).toBeUndefined();
+			const result = await irc.execute("irc-child", { op: "send", to: "Child", message: "Steering", await: awaitReply });
+			expect(result.isError).toBe(true);
+			expect(result.details?.receipts).toMatchObject([
+				{ to: "Child", outcome: "failed", code, jobId: job?.id, accepted: false, retained: false, delivered: false },
+			]);
+			expect(result.content[0]).toMatchObject({ text: expect.stringContaining(code) });
+			expect(IrcBus.global().unreadCount("Child")).toBe(0);
+		} finally {
+			manager.cancel("Child");
+			releaseChild.resolve();
+			if (queued) semaphore.release();
+			await job?.promise;
+		}
+	});
+
 	it("queues behind a slot another spawner in the tree holds, and frees none when cancelled there", async () => {
 		const semaphore = await treeSemaphore();
 		await semaphore.acquire();
