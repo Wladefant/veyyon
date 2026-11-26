@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Report when a detached child cannot receive IRC yet, with its job ID and confirmation that no message was buffered ([Refs Wladefant/superboard#3110](https://github.com/Wladefant/superboard/issues/3110)).
 - Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).
 - Settle failed turns when the scheduler skips their automatic retry continuation ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
 - Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).

@@ -86,11 +86,30 @@ interface IrcPeerInfo {
 	activity?: string;
 }
 
+const TASK_STARTUP_REFUSALS = {
+	queued_not_yet_on_irc: "The child is waiting for a concurrency slot.",
+	starting_not_yet_on_irc: "The child has started but has not registered with IRC.",
+	registered_no_live_session: "The child has registered with IRC but has no live session.",
+	recipient_cancelled: "The child was cancelled before it became messageable.",
+	startup_failed: "The child's job failed and it has no live IRC session.",
+} as const;
+
+interface IrcTaskStartupRefusal extends IrcDeliveryReceipt {
+	outcome: "failed";
+	code: keyof typeof TASK_STARTUP_REFUSALS;
+	jobId: string;
+	accepted: false;
+	retained: false;
+	delivered: false;
+}
+
+type IrcSendReceipt = IrcDeliveryReceipt | IrcTaskStartupRefusal;
+
 export interface IrcDetails {
 	op: "send" | "wait" | "inbox" | "list";
 	from?: string;
 	to?: string;
-	receipts?: IrcDeliveryReceipt[];
+	receipts?: IrcSendReceipt[];
 	/** Message consumed by `wait` / `send await:true`; null when the wait timed out. */
 	waited?: IrcMessage | null;
 	inbox?: IrcMessage[];
@@ -260,6 +279,42 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		}
 	}
 
+	#taskStartupRefusal(registry: AgentRegistry, senderId: string, to: string): IrcTaskStartupRefusal | undefined {
+		const scope = registry.scopeOf(senderId);
+		if (!scope) return undefined;
+		const target = registry.get(to);
+		if (
+			target &&
+			(target.kind !== "sub" ||
+				target.parentId !== senderId ||
+				target.scope !== scope ||
+				target.status !== "running" ||
+				target.session)
+		) {
+			return undefined;
+		}
+		const job = this.session.asyncJobManager?.findOwnedTask(to, senderId, scope);
+		if (!job || job.status === "completed") return undefined;
+
+		let code: IrcTaskStartupRefusal["code"];
+		if (job.status === "cancelled") code = "recipient_cancelled";
+		else if (job.status === "failed") code = "startup_failed";
+		else if (target) code = "registered_no_live_session";
+		else if (job.queued) code = "queued_not_yet_on_irc";
+		else code = "starting_not_yet_on_irc";
+
+		return {
+			to,
+			outcome: "failed",
+			code,
+			jobId: job.id,
+			accepted: false,
+			retained: false,
+			delivered: false,
+			error: `${code}: ${TASK_STARTUP_REFUSALS[code]} Message not accepted, buffered, or delivered. Check job "${job.id}".`,
+		};
+	}
+
 	async #executeSend(
 		registry: AgentRegistry,
 		senderId: string,
@@ -307,6 +362,17 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 				op: "send",
 				from: senderId,
 				to,
+			});
+		}
+
+		// Refuse before arming a reply waiter or handing the message to the bus.
+		const refusal = isBroadcast ? undefined : this.#taskStartupRefusal(registry, senderId, to);
+		if (refusal) {
+			return errorResult(`No recipients received the message.\n- ${to}: failed — ${refusal.error}`, {
+				op: "send",
+				from: senderId,
+				to,
+				receipts: [refusal],
 			});
 		}
 

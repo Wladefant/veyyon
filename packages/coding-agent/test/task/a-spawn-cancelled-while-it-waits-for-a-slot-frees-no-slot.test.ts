@@ -179,7 +179,9 @@ describe("a background spawn and its session tree's spawn slot", () => {
 			await releaseChild.promise;
 			throw new Error("Test stopped before IRC registration");
 		});
-		const irc = new IrcTool(makeToolSession({ agentRegistry: registry, asyncJobManager: manager, getAgentId: () => PARENT_AGENT }));
+		const irc = new IrcTool(
+			makeToolSession({ agentRegistry: registry, asyncJobManager: manager, getAgentId: () => PARENT_AGENT }),
+		);
 		await createScheduler(PARENT_AGENT).runInBackground(callFor([]), spawnsNamed("Child"), {
 			manager,
 			ircEnabled: true,
@@ -189,17 +191,40 @@ describe("a background spawn and its session tree's spawn slot", () => {
 		try {
 			if (!queued) {
 				semaphore.release();
-				await childStart.promise;
+				await Promise.race([childStart.promise, job?.promise]);
 			}
 			expect(job?.queued).toBe(queued);
 			expect(registry.get("Child")).toBeUndefined();
-			const result = await irc.execute("irc-child", { op: "send", to: "Child", message: "Steering", await: awaitReply });
+			const send = { op: "send", to: "Child", message: "Steering", await: awaitReply } as const;
+			const result = await irc.execute("irc-child", send);
 			expect(result.isError).toBe(true);
 			expect(result.details?.receipts).toMatchObject([
 				{ to: "Child", outcome: "failed", code, jobId: job?.id, accepted: false, retained: false, delivered: false },
 			]);
 			expect(result.content[0]).toMatchObject({ text: expect.stringContaining(code) });
 			expect(IrcBus.global().unreadCount("Child")).toBe(0);
+
+			if (queued) {
+				registry.rescope(PARENT_AGENT, "other-root");
+				const hidden = await irc.execute("irc-hidden-child", send);
+				expect(hidden.details?.receipts).toMatchObject([
+					{ to: "Child", outcome: "failed", error: expect.stringContaining("Unknown agent") },
+				]);
+				expect(hidden.details?.receipts?.[0]).not.toHaveProperty("code");
+				registry.rescope(PARENT_AGENT, ROOT_SESSION);
+				manager.cancel("Child");
+				const cancelled = await irc.execute("irc-cancelled-child", send);
+				expect(cancelled.details?.receipts).toMatchObject([
+					{ to: "Child", outcome: "failed", code: "recipient_cancelled", jobId: job?.id },
+				]);
+			} else {
+				registry.register({ id: "Child", kind: "sub", displayName: "Child", parentId: PARENT_AGENT, session: null });
+				const unattached = await irc.execute("irc-unattached-child", send);
+				expect(unattached.details?.receipts).toMatchObject([
+					{ to: "Child", outcome: "failed", code: "registered_no_live_session", jobId: job?.id },
+				]);
+				expect(IrcBus.global().unreadCount("Child")).toBe(0);
+			}
 		} finally {
 			manager.cancel("Child");
 			releaseChild.resolve();
