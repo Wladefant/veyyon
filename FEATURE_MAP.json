@@ -142,6 +142,18 @@
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1157",
       "risk": "high",
       "components": ["utils", "coding-agent"]
+    },
+    "gemini-4-cloud-code-tool-replay": {
+      "name": "Gemini 4 Cloud Code Assist tool replay",
+      "description": "Preserve native tool signatures and mark a step's first tool call if it has no usable signature, including after compaction or a model switch.",
+      "entry_files": ["packages/ai/src/providers/google-shared.ts"],
+      "tests": [
+        "packages/ai/test/google-gemini3-unsigned-tool-call.test.ts",
+        "packages/coding-agent/test/session/compacted-gemini-tool-replay.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1284",
+      "risk": "medium",
+      "components": ["ai", "Cloud Code Assist"]
     }
   }
 }
