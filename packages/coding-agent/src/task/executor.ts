@@ -2231,23 +2231,28 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 	marks.resolvedAt = performance.now();
 	const buildSessionOptions = childSessionOptionsBuilder(ctx, runModel);
 	options.onStartupPhase?.("open-transcript");
-	const opening = openNativeTranscript(ctx.sessionFile, ctx.effectiveCwd, async sessionManager => {
-		monitor.abortSignal.throwIfAborted();
-		marks.transcriptOpenedAt = performance.now();
-		if (options.beforeChildStart) {
-			options.onStartupPhase?.("record-launch-grant");
-			await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+	const opening = openNativeTranscript(
+		ctx.sessionFile,
+		ctx.effectiveCwd,
+		async sessionManager => {
 			monitor.abortSignal.throwIfAborted();
-		}
-		if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
-		marks.sessionOpenedAt = performance.now();
-		options.onStartupPhase?.("create-session");
-		const { session } = await createSubagentSession(
-			options.parentSessionId,
-			buildSessionOptions(sessionManager, ctx.settings),
-		);
-		return session;
-	}, options.beforeChildStart !== undefined);
+			marks.transcriptOpenedAt = performance.now();
+			if (options.beforeChildStart) {
+				options.onStartupPhase?.("record-launch-grant");
+				await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+				monitor.abortSignal.throwIfAborted();
+			}
+			if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
+			marks.sessionOpenedAt = performance.now();
+			options.onStartupPhase?.("create-session");
+			const { session } = await createSubagentSession(
+				options.parentSessionId,
+				buildSessionOptions(sessionManager, ctx.settings),
+			);
+			return session;
+		},
+		options.beforeChildStart !== undefined,
+	);
 	let session: AgentSession;
 	try {
 		session = await ctx.awaitAbortable(opening);
@@ -2525,9 +2530,7 @@ function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: Lau
 		resolveMs: elapsedMs(marks.perfStart, marks.resolvedAt),
 		sessionOpenMs: elapsedMs(marks.resolvedAt, marks.sessionOpenedAt),
 		transcriptOpenMs: elapsedMs(marks.resolvedAt, marks.transcriptOpenedAt),
-		launchGrantMs: options.beforeChildStart
-			? elapsedMs(marks.transcriptOpenedAt, marks.sessionOpenedAt)
-			: undefined,
+		launchGrantMs: options.beforeChildStart ? elapsedMs(marks.transcriptOpenedAt, marks.sessionOpenedAt) : undefined,
 		createSessionMs: elapsedMs(marks.sessionOpenedAt, marks.sessionCreatedAt),
 		readyMs: elapsedMs(marks.sessionCreatedAt, marks.readyAt),
 		promptToFirstChatMs: elapsedMs(marks.readyAt, marks.firstChatDispatchAt),

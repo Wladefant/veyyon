@@ -170,7 +170,9 @@ describe("job list snapshot", () => {
 		const startingJob = starting.details?.jobs.find(job => job.id === "AuthLoader");
 		expect(startingJob?.status).toBe("starting");
 		expect(startingJob?.startupPhase).toBe("resolve-model");
-		expect(firstToolResultText(starting)).toMatch(/`AuthLoader` \[task\] — AuthLoader \(starting: resolve-model, up \S+\)/);
+		expect(firstToolResultText(starting)).toMatch(
+			/`AuthLoader` \[task\] — AuthLoader \(starting: resolve-model, up \S+\)/,
+		);
 
 		markReady();
 		await Promise.resolve();

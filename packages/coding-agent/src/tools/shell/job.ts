@@ -7,11 +7,11 @@ import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import type { AgentRegistry } from "../../registry/agent-registry";
+import type { TaskStartupPhase } from "../../task/types";
 import { formatArtifactErrorNotice, type OutputMeta } from "../core/output-meta";
 import { PREVIEW_LIMITS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import type { ToolSession } from "../index";
-import type { TaskStartupPhase } from "../../task/types";
 import { isWaitingPollDetails, jobToolView } from "./job-view";
 
 export { isWaitingPollDetails } from "./job-view";
@@ -155,7 +155,11 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			}
 			if (existing.status !== "running") {
 				const ref = this.session.agentRegistry?.get(id);
-				if (ref && ref.kind === "sub" && (ref.session !== null || ref.status === "idle" || ref.status === "running")) {
+				if (
+					ref &&
+					ref.kind === "sub" &&
+					(ref.session !== null || ref.status === "idle" || ref.status === "running")
+				) {
 					cancelOutcomes.push(await this.#cancelAgent(id, ownerId));
 					continue;
 				}
@@ -552,7 +556,6 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		};
 	}
 }
-
 
 /**
  * Resolve a list of job ids to job records visible to the calling agent.

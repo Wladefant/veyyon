@@ -163,76 +163,89 @@ describe("a background spawn and its session tree's spawn slot", () => {
 	it.each([
 		{ queued: true, awaitReply: false, code: "queued_not_yet_on_irc" },
 		{ queued: false, awaitReply: true, code: "starting_not_yet_on_irc" },
-	])("reports $code for the parent's detached child without accepting the message", async ({
-		queued,
-		awaitReply,
-		code,
-	}) => {
-		const semaphore = await treeSemaphore();
-		await semaphore.acquire();
-		const registry = AgentRegistry.global();
-		registry.register({ id: PARENT_AGENT, kind: "main", displayName: "Main", scope: ROOT_SESSION, session: null });
-		const manager = createManager();
-		const childStart = Promise.withResolvers<void>();
-		const releaseChild = Promise.withResolvers<void>();
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
-			childStart.resolve();
-			await releaseChild.promise;
-			throw new Error("Test stopped before IRC registration");
-		});
-		const irc = new IrcTool(
-			makeToolSession({ agentRegistry: registry, asyncJobManager: manager, getAgentId: () => PARENT_AGENT }),
-		);
-		await createScheduler(PARENT_AGENT).runInBackground(callFor([]), spawnsNamed("Child"), {
-			manager,
-			ircEnabled: true,
-			advisory: undefined,
-		});
-		const job = manager.getJob("Child");
-		try {
-			if (!queued) {
-				semaphore.release();
-				await Promise.race([childStart.promise, job?.promise]);
-			}
-			expect(job?.queued).toBe(queued);
-			expect(registry.get("Child")).toBeUndefined();
-			const send = { op: "send", to: "Child", message: "Steering", await: awaitReply } as const;
-			const result = await irc.execute("irc-child", send);
-			expect(result.isError).toBe(true);
-			expect(result.details?.receipts).toMatchObject([
-				{ to: "Child", outcome: "failed", code, jobId: job?.id, accepted: false, retained: false, delivered: false },
-			]);
-			expect(result.content[0]).toMatchObject({ text: expect.stringContaining(code) });
-			expect(IrcBus.global().unreadCount("Child")).toBe(0);
-
-			if (queued) {
-				registry.rescope(PARENT_AGENT, "other-root");
-				const hidden = await irc.execute("irc-hidden-child", send);
-				expect(hidden.details?.receipts).toMatchObject([
-					{ to: "Child", outcome: "failed", error: expect.stringContaining("Unknown agent") },
+	])(
+		"reports $code for the parent's detached child without accepting the message",
+		async ({ queued, awaitReply, code }) => {
+			const semaphore = await treeSemaphore();
+			await semaphore.acquire();
+			const registry = AgentRegistry.global();
+			registry.register({ id: PARENT_AGENT, kind: "main", displayName: "Main", scope: ROOT_SESSION, session: null });
+			const manager = createManager();
+			const childStart = Promise.withResolvers<void>();
+			const releaseChild = Promise.withResolvers<void>();
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
+				childStart.resolve();
+				await releaseChild.promise;
+				throw new Error("Test stopped before IRC registration");
+			});
+			const irc = new IrcTool(
+				makeToolSession({ agentRegistry: registry, asyncJobManager: manager, getAgentId: () => PARENT_AGENT }),
+			);
+			await createScheduler(PARENT_AGENT).runInBackground(callFor([]), spawnsNamed("Child"), {
+				manager,
+				ircEnabled: true,
+				advisory: undefined,
+			});
+			const job = manager.getJob("Child");
+			try {
+				if (!queued) {
+					semaphore.release();
+					await Promise.race([childStart.promise, job?.promise]);
+				}
+				expect(job?.queued).toBe(queued);
+				expect(registry.get("Child")).toBeUndefined();
+				const send = { op: "send", to: "Child", message: "Steering", await: awaitReply } as const;
+				const result = await irc.execute("irc-child", send);
+				expect(result.isError).toBe(true);
+				expect(result.details?.receipts).toMatchObject([
+					{
+						to: "Child",
+						outcome: "failed",
+						code,
+						jobId: job?.id,
+						accepted: false,
+						retained: false,
+						delivered: false,
+					},
 				]);
-				expect(hidden.details?.receipts?.[0]).not.toHaveProperty("code");
-				registry.rescope(PARENT_AGENT, ROOT_SESSION);
-				manager.cancel("Child");
-				const cancelled = await irc.execute("irc-cancelled-child", send);
-				expect(cancelled.details?.receipts).toMatchObject([
-					{ to: "Child", outcome: "failed", code: "recipient_cancelled", jobId: job?.id },
-				]);
-			} else {
-				registry.register({ id: "Child", kind: "sub", displayName: "Child", parentId: PARENT_AGENT, session: null });
-				const unattached = await irc.execute("irc-unattached-child", send);
-				expect(unattached.details?.receipts).toMatchObject([
-					{ to: "Child", outcome: "failed", code: "registered_no_live_session", jobId: job?.id },
-				]);
+				expect(result.content[0]).toMatchObject({ text: expect.stringContaining(code) });
 				expect(IrcBus.global().unreadCount("Child")).toBe(0);
+
+				if (queued) {
+					registry.rescope(PARENT_AGENT, "other-root");
+					const hidden = await irc.execute("irc-hidden-child", send);
+					expect(hidden.details?.receipts).toMatchObject([
+						{ to: "Child", outcome: "failed", error: expect.stringContaining("Unknown agent") },
+					]);
+					expect(hidden.details?.receipts?.[0]).not.toHaveProperty("code");
+					registry.rescope(PARENT_AGENT, ROOT_SESSION);
+					manager.cancel("Child");
+					const cancelled = await irc.execute("irc-cancelled-child", send);
+					expect(cancelled.details?.receipts).toMatchObject([
+						{ to: "Child", outcome: "failed", code: "recipient_cancelled", jobId: job?.id },
+					]);
+				} else {
+					registry.register({
+						id: "Child",
+						kind: "sub",
+						displayName: "Child",
+						parentId: PARENT_AGENT,
+						session: null,
+					});
+					const unattached = await irc.execute("irc-unattached-child", send);
+					expect(unattached.details?.receipts).toMatchObject([
+						{ to: "Child", outcome: "failed", code: "registered_no_live_session", jobId: job?.id },
+					]);
+					expect(IrcBus.global().unreadCount("Child")).toBe(0);
+				}
+			} finally {
+				manager.cancel("Child");
+				releaseChild.resolve();
+				if (queued) semaphore.release();
+				await job?.promise;
 			}
-		} finally {
-			manager.cancel("Child");
-			releaseChild.resolve();
-			if (queued) semaphore.release();
-			await job?.promise;
-		}
-	});
+		},
+	);
 
 	it("shows an admitted child as starting in both job and IRC lists before registration", async () => {
 		const registry = AgentRegistry.global();

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
-import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
@@ -24,7 +24,6 @@ function sessionForAgent(registry: AgentRegistry, agentId: string): ToolSession 
 		getAgentId: () => agentId,
 	});
 }
-
 
 async function listText(registry: AgentRegistry, selfId: string): Promise<string> {
 	const tool = new IrcTool(sessionForAgent(registry, selfId));
@@ -264,7 +263,9 @@ describe("IRC roster activity", () => {
 			expect(registry.get("Child")).toBeUndefined();
 			expect(registry.get("QueuedChild")).toBeUndefined();
 			expect(registry.get("FailedChild")).toBeUndefined();
-			expect(list.details?.peers?.some(p => p.id === "Child" || p.id === "QueuedChild" || p.id === "FailedChild")).toBe(false);
+			expect(
+				list.details?.peers?.some(p => p.id === "Child" || p.id === "QueuedChild" || p.id === "FailedChild"),
+			).toBe(false);
 			expect(list.details?.startingChildren).toEqual([
 				{
 					state: "starting",

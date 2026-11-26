@@ -45,14 +45,12 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/agent/review";
 import { jsonTreeViewLines } from "../tools/core/json-tree-view";
-import { TRUNCATE_LENGTHS } from "../tools/core/render-limits";
 import {
 	extractResultText,
 	formatMoreItems,
 	previewLine,
 	replaceTabs,
 	shortenEmbeddedPaths,
-	shortenPath,
 	type ToolViewResult,
 	truncateToWidth,
 } from "../tools/core/render-utils";

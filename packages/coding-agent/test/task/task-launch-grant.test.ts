@@ -138,7 +138,10 @@ describe("task launch grants", () => {
 			const tool = await TaskTool.create(session);
 			const result = await tool.execute("grant-stall", {
 				context: "Test concurrent child startup.",
-				tasks: [{ ...lane, grants }, { ...lane, name: "UngrantLane" }],
+				tasks: [
+					{ ...lane, grants },
+					{ ...lane, name: "UngrantLane" },
+				],
 			});
 			expect(result.isError).not.toBe(true);
 			const granted = manager.getJob(lane.name);

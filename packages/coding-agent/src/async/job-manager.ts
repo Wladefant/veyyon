@@ -363,7 +363,12 @@ export class AsyncJobManager {
 	findOwnedTask(agentId: string, ownerId: string, ownerScope: string): AsyncJob | undefined {
 		let latest: AsyncJob | undefined;
 		for (const job of this.#jobs.values()) {
-			if (job.type === "task" && job.agentId === agentId && job.ownerId === ownerId && job.ownerScope === ownerScope) {
+			if (
+				job.type === "task" &&
+				job.agentId === agentId &&
+				job.ownerId === ownerId &&
+				job.ownerScope === ownerScope
+			) {
 				latest = job;
 			}
 		}
