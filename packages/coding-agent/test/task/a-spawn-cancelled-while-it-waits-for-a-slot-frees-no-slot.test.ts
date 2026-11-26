@@ -32,6 +32,7 @@ import { type CallSpawn, type SpawnCall, SpawnScheduler } from "@veyyon/coding-a
 import { resetTreeSpawnSemaphoresForTests, treeSpawnSemaphore } from "@veyyon/coding-agent/task/spawn-semaphore";
 import type { AgentDefinition, AgentProgress, TaskToolDetails } from "@veyyon/coding-agent/task/types";
 import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
+import { JobTool } from "@veyyon/coding-agent/tools/shell/job";
 import { makeCgroupRoot, makeDelegatedParent, makeFakeHost, removeCgroupRoots } from "../helpers/fake-cgroup";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { makeToolSession } from "../helpers/tool-session";
@@ -231,6 +232,47 @@ describe("a background spawn and its session tree's spawn slot", () => {
 			if (queued) semaphore.release();
 			await job?.promise;
 		}
+	});
+
+	it("shows an admitted child as starting in both job and IRC lists before registration", async () => {
+		const registry = AgentRegistry.global();
+		registry.register({ id: PARENT_AGENT, kind: "main", displayName: "Main", scope: ROOT_SESSION, session: null });
+		const manager = createManager();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => {
+			entered.resolve();
+			await release.promise;
+			throw new Error("Native transcript unavailable");
+		});
+		const session = makeToolSession({
+			agentRegistry: registry,
+			asyncJobManager: manager,
+			getAgentId: () => PARENT_AGENT,
+		});
+		const jobs = new JobTool(session);
+		const irc = new IrcTool(session);
+		await createScheduler(PARENT_AGENT).runInBackground(callFor([]), spawnsNamed("Child"), {
+			manager,
+			ircEnabled: true,
+			advisory: undefined,
+		});
+		const job = manager.getJob("Child");
+		try {
+			await Promise.race([entered.promise, job?.promise]);
+			const snapshot = await jobs.execute("child-job", { list: true });
+			expect(snapshot.details?.jobs).toMatchObject([{ id: "Child", status: "starting" }]);
+			const roster = await irc.execute("child-roster", { op: "list" });
+			expect(roster.content[0]).toMatchObject({ text: expect.stringContaining("Child (starting") });
+			expect(registry.get("Child")).toBeUndefined();
+		} finally {
+			release.resolve();
+			await job?.promise;
+		}
+		const terminal = await jobs.execute("child-terminal", { list: true });
+		expect(terminal.details?.jobs).toMatchObject([
+			{ id: "Child", status: "failed", errorText: expect.stringContaining("Native transcript unavailable") },
+		]);
 	});
 
 	it("queues behind a slot another spawner in the tree holds, and frees none when cancelled there", async () => {
