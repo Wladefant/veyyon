@@ -6,9 +6,16 @@
   "features": {
     "irc-send-receipts": {
       "name": "IRC send receipts",
-      "description": "Report confirmed or unconfirmed peer delivery without waiting indefinitely for revival or journal persistence.",
-      "entry_files": ["packages/coding-agent/src/tools/agent/irc.ts"],
-      "tests": ["packages/coding-agent/test/tools/an-irc-send-has-a-bounded-delivery.test.ts"],
+      "description": "Report confirmed, refused, or unconfirmed peer delivery, including detached children that cannot receive IRC yet.",
+      "entry_files": [
+        "packages/coding-agent/src/async/job-manager.ts",
+        "packages/coding-agent/src/task/spawn-scheduler.ts",
+        "packages/coding-agent/src/tools/agent/irc.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/task/a-spawn-cancelled-while-it-waits-for-a-slot-frees-no-slot.test.ts",
+        "packages/coding-agent/test/tools/an-irc-send-has-a-bounded-delivery.test.ts"
+      ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1224",
       "risk": "high",
       "components": ["coding-agent", "IRC"],

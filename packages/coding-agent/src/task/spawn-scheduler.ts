@@ -686,6 +686,8 @@ export class SpawnScheduler {
 		params: TaskParams,
 	): string {
 		const { agentId, progress } = spawn;
+		const ownerId = this.#session.getAgentId?.() ?? undefined;
+		const ownerScope = (this.#session.agentRegistry ?? AgentRegistry.global()).scopeOf(ownerId);
 		return options.manager.register(
 			"task", // not-a-tool-name: async job kind
 			agentId,
@@ -748,7 +750,8 @@ export class SpawnScheduler {
 				id: agentId,
 				agentId,
 				queued: true,
-				ownerId: this.#session.getAgentId?.() ?? undefined,
+				ownerId,
+				ownerScope,
 				toolCallId: call.toolCallId,
 				onProgress: text => {
 					call.onUpdate?.({ content: [{ type: "text", text }], details: batch.details() });
