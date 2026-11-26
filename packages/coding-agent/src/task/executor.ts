@@ -98,6 +98,7 @@ import {
 	type SalvageState,
 	type SingleResult,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	type TaskStartupPhase,
 	type YieldItem,
 } from "./types";
 import { arrayValuedLabels, assembleYieldResult } from "./yield-assembly";
@@ -301,6 +302,8 @@ export interface ExecutorOptions {
 	parentToolCallId?: string;
 	/** Root-only startup gate, after reserving a fresh transcript and before constructing the child. */
 	beforeChildStart?: (childSessionId: string, sessionFile: string) => Promise<void>;
+	/** Synchronous observation only; must not hold up readiness or grant publication. */
+	onStartupPhase?: (phase: TaskStartupPhase) => void;
 	/**
 	 * Spawn runs as a detached background job (parent turn not blocked on it).
 	 * Rides the agent lifecycle/progress payloads so HUD-style surfaces can
@@ -1935,6 +1938,7 @@ function throwIfRunAborted(abortSignal: AbortSignal): void {
 interface LaunchMarks {
 	perfStart: number;
 	resolvedAt?: number;
+	transcriptOpenedAt?: number;
 	sessionOpenedAt?: number;
 	sessionCreatedAt?: number;
 	readyAt?: number;
@@ -2221,23 +2225,34 @@ interface OpenedChildSession {
 /** Open the child's durable session on its resolved model and register it with the monitor and the agent registry. */
 async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSession> {
 	const { options, monitor, marks } = ctx;
+	options.onStartupPhase?.("resolve-model");
 	const runModel = await resolveRunModel(ctx);
+	monitor.abortSignal.throwIfAborted();
 	marks.resolvedAt = performance.now();
 	const buildSessionOptions = childSessionOptionsBuilder(ctx, runModel);
-	const opening = openNativeTranscript(ctx.sessionFile, ctx.effectiveCwd, async sessionManager => {
-		monitor.abortSignal.throwIfAborted();
-		if (options.beforeChildStart) {
-			await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+	options.onStartupPhase?.("open-transcript");
+	const opening = openNativeTranscript(
+		ctx.sessionFile,
+		ctx.effectiveCwd,
+		async sessionManager => {
 			monitor.abortSignal.throwIfAborted();
-		}
-		if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
-		marks.sessionOpenedAt = performance.now();
-		const { session } = await createSubagentSession(
-			options.parentSessionId,
-			buildSessionOptions(sessionManager, ctx.settings),
-		);
-		return session;
-	}, options.beforeChildStart !== undefined);
+			marks.transcriptOpenedAt = performance.now();
+			if (options.beforeChildStart) {
+				options.onStartupPhase?.("record-launch-grant");
+				await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+				monitor.abortSignal.throwIfAborted();
+			}
+			if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
+			marks.sessionOpenedAt = performance.now();
+			options.onStartupPhase?.("create-session");
+			const { session } = await createSubagentSession(
+				options.parentSessionId,
+				buildSessionOptions(sessionManager, ctx.settings),
+			);
+			return session;
+		},
+		options.beforeChildStart !== undefined,
+	);
 	let session: AgentSession;
 	try {
 		session = await ctx.awaitAbortable(opening);
@@ -2403,17 +2418,21 @@ async function startChildSession(
  * the spawner cannot match the declared names: it forwards them as a `deferred` plan and they are
  * judged present or missing against the tree the child was pointed at.
  */
-async function autoloadChildSkills(session: AgentSession, options: ExecutorOptions): Promise<void> {
+async function autoloadChildSkills(session: AgentSession, ctx: ChildSessionContext): Promise<void> {
+	const { options, monitor, awaitAbortable } = ctx;
 	for (const skill of settleAutoloadSkills(options.autoloadSkills, session.skills, options.agent.name)) {
-		const { message } = await buildSkillPromptMessage(skill, "", "autoload");
-		await session.sendCustomMessage(
-			{
-				customType: SKILL_PROMPT_MESSAGE_TYPE,
-				content: message,
-				display: false,
-				details: { name: skill.name, path: skill.filePath },
-			},
-			{ triggerTurn: false },
+		const { message } = await awaitAbortable(buildSkillPromptMessage(skill, "", "autoload"));
+		monitor.abortSignal.throwIfAborted();
+		await awaitAbortable(
+			session.sendCustomMessage(
+				{
+					customType: SKILL_PROMPT_MESSAGE_TYPE,
+					content: message,
+					display: false,
+					details: { name: skill.name, path: skill.filePath },
+				},
+				{ triggerTurn: false },
+			),
 		);
 	}
 }
@@ -2510,6 +2529,8 @@ function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: Lau
 		preRunMs: elapsedMs(acquiredAt, startTime),
 		resolveMs: elapsedMs(marks.perfStart, marks.resolvedAt),
 		sessionOpenMs: elapsedMs(marks.resolvedAt, marks.sessionOpenedAt),
+		transcriptOpenMs: elapsedMs(marks.resolvedAt, marks.transcriptOpenedAt),
+		launchGrantMs: options.beforeChildStart ? elapsedMs(marks.transcriptOpenedAt, marks.sessionOpenedAt) : undefined,
 		createSessionMs: elapsedMs(marks.sessionOpenedAt, marks.sessionCreatedAt),
 		readyMs: elapsedMs(marks.sessionCreatedAt, marks.readyAt),
 		promptToFirstChatMs: elapsedMs(marks.readyAt, marks.firstChatDispatchAt),
@@ -2540,12 +2561,16 @@ async function driveChildRun(
 	try {
 		const opened = await openChildSession(ctx);
 		reviveSession = opened.reviveSession;
+		options.onStartupPhase?.("start-session");
 		await startChildSession(ctx, opened.session, sessionAbortController.signal);
 		unsubscribe = monitor.attach(opened.session);
 		throwIfRunAborted(abortSignal);
-		await autoloadChildSkills(opened.session, options);
+		options.onStartupPhase?.("autoload-skills");
+		await autoloadChildSkills(opened.session, ctx);
+		throwIfRunAborted(abortSignal);
 		ctx.marks.readyAt = performance.now();
 		driveStarted = true;
+		options.onStartupPhase?.("ready");
 		outcome = await driveSessionToYield(opened.session, monitor, options.task, options.outputSchema);
 		if (monitor.abortKind() === "stalled") {
 			if ((await settleActiveSessionAbort(monitor)) && monitor.prepareStallRecovery()) {

@@ -4,12 +4,14 @@ import * as fs from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import * as os from "node:os";
 import { dirname } from "node:path";
+import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, mainAgentIdFor } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdk from "@veyyon/coding-agent/sdk";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
+import { JobTool } from "@veyyon/coding-agent/tools/shell/job";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -108,6 +110,66 @@ describe("task launch grants", () => {
 		root.appendCustomEntry("test", { persisted: true });
 		await root.flush();
 		expect(await receipts(rootFile)).toEqual(persisted);
+	});
+
+	it("shows a pending grant separately while an ungranted sibling starts from the same journal", async () => {
+		root.appendCustomEntry("large-parent", { payload: "x".repeat(8 * 1024 * 1024) });
+		await root.flush();
+		const id = root.getSessionId();
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const grantStarted = Promise.withResolvers<void>();
+		const releaseGrant = Promise.withResolvers<void>();
+		const run = observeChild(async () => {});
+		const session = makeToolSession({
+			settings: Settings.isolated({ "agent.batch": true, "async.enabled": true, "agent.maxConcurrency": 2 }),
+			asyncJobManager: manager,
+			getSessionSpawns: () => "*",
+			getSessionId: () => id,
+			getAgentId: () => mainAgentIdFor(id),
+			getSessionFile: () => rootFile,
+			taskDepth: 0,
+			recordSubagentLaunchGrant: async record => {
+				grantStarted.resolve();
+				await releaseGrant.promise;
+				await root.appendSubagentLaunchGrant(record);
+			},
+		});
+		try {
+			const tool = await TaskTool.create(session);
+			const result = await tool.execute("grant-stall", {
+				context: "Test concurrent child startup.",
+				tasks: [
+					{ ...lane, grants },
+					{ ...lane, name: "UngrantLane" },
+				],
+			});
+			expect(result.isError).not.toBe(true);
+			const granted = manager.getJob(lane.name);
+			const ungranted = manager.getJob("UngrantLane");
+			if (!granted || !ungranted) throw new Error("Both children must have detached jobs");
+
+			await Promise.race([grantStarted.promise, granted.promise]);
+			await ungranted.promise;
+			const jobTool = new JobTool(session);
+			const snapshot = await jobTool.execute("inspect", { list: true });
+			expect(snapshot.details?.jobs).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ id: lane.name, status: "starting", startupPhase: "record-launch-grant" }),
+					expect.objectContaining({ id: "UngrantLane", status: "completed" }),
+				]),
+			);
+			expect(run.mock.calls).toHaveLength(1);
+			expect(root.getSubagentLaunchGrants()).toEqual([]);
+
+			releaseGrant.resolve();
+			await granted.promise;
+			expect(granted.status).toBe("completed");
+			expect(run.mock.calls).toHaveLength(2);
+			expect(await receipts(rootFile)).toHaveLength(1);
+		} finally {
+			releaseGrant.resolve();
+			await manager.dispose({ timeoutMs: 1000 });
+		}
 	});
 
 	it.skipIf(process.platform === "win32")(

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
@@ -22,7 +24,6 @@ function sessionForAgent(registry: AgentRegistry, agentId: string): ToolSession 
 		getAgentId: () => agentId,
 	});
 }
-
 
 async function listText(registry: AgentRegistry, selfId: string): Promise<string> {
 	const tool = new IrcTool(sessionForAgent(registry, selfId));
@@ -175,5 +176,208 @@ describe("IRC roster activity", () => {
 		registry.setActivity("Ghost", "noop");
 		expect(registry.get("Ghost")).toBeUndefined();
 		expect(registry.list().length).toBe(before);
+	});
+
+	it("lists own same-scope queued, starting, and terminal pre-ready children separately from peers", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		registry.register({ id: "Parent", displayName: "main", kind: "main", scope: "root-a", session: null });
+		registry.register({ id: "OtherOwner", displayName: "sub", kind: "sub", scope: "root-a", session: null });
+		registry.register({ id: "OtherScope", displayName: "main", kind: "main", scope: "root-b", session: null });
+
+		const releaseStart = Promise.withResolvers<void>();
+		const releaseQueue = Promise.withResolvers<void>();
+		manager.register(
+			"task",
+			"Child",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("resolve-model");
+				await releaseStart.promise;
+				return "done";
+			},
+			{ id: "Child", agentId: "Child", ownerId: "Parent", ownerScope: "root-a" },
+		);
+		manager.register(
+			"task",
+			"QueuedChild",
+			async () => {
+				await releaseQueue.promise;
+				return "done";
+			},
+			{ id: "QueuedChild", agentId: "QueuedChild", ownerId: "Parent", ownerScope: "root-a", queued: true },
+		);
+		manager.register(
+			"task",
+			"FailedChild",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("open-transcript");
+				throw new Error("Native transcript unavailable");
+			},
+			{ id: "FailedChild", agentId: "FailedChild", ownerId: "Parent", ownerScope: "root-a" },
+		);
+		manager.register(
+			"task",
+			"ForeignChild",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("prepare-spawn");
+				await releaseStart.promise;
+				return "done";
+			},
+			{ id: "ForeignChild", agentId: "ForeignChild", ownerId: "Parent", ownerScope: "root-b" },
+		);
+		manager.register(
+			"task",
+			"SiblingChild",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("prepare-spawn");
+				await releaseStart.promise;
+				return "done";
+			},
+			{ id: "SiblingChild", agentId: "SiblingChild", ownerId: "OtherOwner", ownerScope: "root-a" },
+		);
+		manager.register(
+			"bash",
+			"bash-1",
+			async () => {
+				await releaseStart.promise;
+				return "ok";
+			},
+			{ id: "bash-1", ownerId: "Parent", ownerScope: "root-a" },
+		);
+		await manager.getJob("FailedChild")?.promise;
+
+		const session = makeToolSession({
+			...sessionForAgent(registry, "Parent"),
+			asyncJobManager: manager,
+		});
+		const irc = new IrcTool(session);
+		try {
+			const list = await irc.execute("list-1", { op: "list" });
+			const text = list.content.find(part => part.type === "text")?.text ?? "";
+			expect(text).toContain("Child (starting, phase resolve-model");
+			expect(text).toContain("QueuedChild (queued");
+			expect(text).toContain("FailedChild (failed, phase open-transcript");
+			expect(text).toContain("Native transcript unavailable");
+			expect(text).not.toContain("ForeignChild");
+			expect(text).not.toContain("SiblingChild");
+			expect(text).not.toContain("bash-1");
+			expect(registry.get("Child")).toBeUndefined();
+			expect(registry.get("QueuedChild")).toBeUndefined();
+			expect(registry.get("FailedChild")).toBeUndefined();
+			expect(
+				list.details?.peers?.some(p => p.id === "Child" || p.id === "QueuedChild" || p.id === "FailedChild"),
+			).toBe(false);
+			expect(list.details?.startingChildren).toEqual([
+				{
+					state: "starting",
+					phase: "resolve-model",
+					jobId: "Child",
+					agentId: "Child",
+					registered: false,
+					attached: false,
+					routable: false,
+				},
+				{
+					state: "queued",
+					jobId: "QueuedChild",
+					agentId: "QueuedChild",
+					registered: false,
+					attached: false,
+					routable: false,
+				},
+				{
+					state: "failed",
+					phase: "open-transcript",
+					jobId: "FailedChild",
+					agentId: "FailedChild",
+					registered: false,
+					attached: false,
+					routable: false,
+					terminalReason: "Native transcript unavailable",
+				},
+			]);
+
+			const startRefusal = await irc.execute("send-starting", { op: "send", to: "Child", message: "hi" });
+			expect(startRefusal.isError).toBe(true);
+			expect(startRefusal.details?.receipts).toMatchObject([
+				{
+					to: "Child",
+					outcome: "failed",
+					code: "starting_not_yet_on_irc",
+					jobId: "Child",
+					phase: "resolve-model",
+				},
+			]);
+
+			const failedRefusal = await irc.execute("send-failed", { op: "send", to: "FailedChild", message: "hi" });
+			expect(failedRefusal.isError).toBe(true);
+			expect(failedRefusal.details?.receipts).toMatchObject([
+				{
+					to: "FailedChild",
+					outcome: "failed",
+					code: "recipient_job_failed",
+					jobId: "FailedChild",
+					phase: "open-transcript",
+					terminalReason: "Native transcript unavailable",
+				},
+			]);
+		} finally {
+			releaseStart.resolve();
+			releaseQueue.resolve();
+			await manager.dispose();
+		}
+	});
+
+	it("distinguishes registry routability from setup readiness and omits startingChildren when empty", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		registry.register({ id: "Parent", displayName: "main", kind: "main", scope: "root-a", session: null });
+		const session = makeToolSession({
+			...sessionForAgent(registry, "Parent"),
+			asyncJobManager: manager,
+		});
+		const irc = new IrcTool(session);
+
+		const empty = await irc.execute("empty", { op: "list" });
+		expect(empty.details?.startingChildren).toBeUndefined();
+
+		const release = Promise.withResolvers<void>();
+		manager.register(
+			"task",
+			"SetupPeer",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("autoload-skills");
+				await release.promise;
+				return "done";
+			},
+			{ id: "SetupPeer", agentId: "SetupPeer", ownerId: "Parent", ownerScope: "root-a" },
+		);
+		registry.register({
+			id: "SetupPeer",
+			displayName: "task",
+			kind: "sub",
+			parentId: "Parent",
+			scope: "root-a",
+			status: "running",
+			session: {} as AgentSession,
+		});
+
+		try {
+			const list = await irc.execute("with-peer", { op: "list" });
+			expect(list.details?.startingChildren).toEqual([
+				{
+					state: "starting",
+					phase: "autoload-skills",
+					jobId: "SetupPeer",
+					agentId: "SetupPeer",
+					registered: true,
+					attached: true,
+					routable: true,
+				},
+			]);
+			const text = list.content.find(part => part.type === "text")?.text ?? "";
+			expect(text).toContain("routable on IRC; setup not ready");
+		} finally {
+			release.resolve();
+			await manager.dispose();
+		}
 	});
 });
