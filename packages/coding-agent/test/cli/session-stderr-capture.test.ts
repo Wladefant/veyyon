@@ -7,9 +7,8 @@ import { PassThrough } from "node:stream";
 import { startStderrCapture } from "../../src/cli/supervisor/session-stderr";
 
 /**
- * The stderr capture of a supervised child: it writes `<pid>.stderr.log`, rotates it at `maxBytes`,
- * forwards every byte to the sink, and reports one status. A fake child stream stands in for the
- * process. The only IO is a temporary log directory.
+ * The stderr capture of a supervised child seals bounded segments, forwards bytes to the sink,
+ * and reports the retained paths. Each test uses its own temporary log directory.
  */
 let dir: string;
 
@@ -38,7 +37,7 @@ function recordingSink() {
 }
 
 describe("startStderrCapture", () => {
-	it("captures a child's stderr to its pid log and forwards every byte to the sink", async () => {
+	it("captures a child's stderr and forwards every byte to the sink", async () => {
 		const { child, stderr } = fakeChild();
 		const sink = recordingSink();
 		const capture = startStderrCapture(child, 4242, {
@@ -52,7 +51,7 @@ describe("startStderrCapture", () => {
 		const result = await capture.drain();
 		expect(result.status).toBe("captured");
 		expect(result.bytesWritten).toBe(5);
-		expect(result.logPath).toBe(path.join(dir, "4242.stderr.log"));
+		expect(path.basename(result.logPath)).toMatch(/^4242-.*\.sealed\.log$/);
 		expect(result.files).toEqual([result.logPath]);
 		expect(fs.readFileSync(result.logPath, "utf8")).toBe("boom\n");
 		expect(sink.text()).toBe("boom\n");
@@ -86,10 +85,10 @@ describe("startStderrCapture", () => {
 		expect(result.status).toBe("empty");
 		expect(result.bytesWritten).toBe(0);
 		expect(result.files).toEqual([]);
-		expect(fs.existsSync(path.join(dir, "12.stderr.log"))).toBe(false);
+		expect(fs.readdirSync(dir)).toEqual([]);
 	});
 
-	it("rotates the log at maxBytes, keeping the older bytes in the numbered file", async () => {
+	it("rotates the log at maxBytes and keeps both segments", async () => {
 		const { child, stderr } = fakeChild();
 		const capture = startStderrCapture(child, 7, {
 			sessionStderrDir: dir,
@@ -102,7 +101,7 @@ describe("startStderrCapture", () => {
 		stderr.end();
 
 		const result = await capture.drain();
-		const rotated = path.join(dir, "7.stderr.1.log");
+		const rotated = result.files[1];
 		expect(result.status).toBe("captured");
 		expect(result.bytesWritten).toBe(8);
 		expect(fs.readFileSync(rotated, "utf8")).toBe("abcd");
@@ -163,6 +162,30 @@ describe("startStderrCapture", () => {
 		expect(fs.existsSync(first.logPath)).toBe(false);
 		expect(fs.readFileSync(next.logPath, "utf8")).toBe("dddd");
 		expect(fs.readFileSync(second.logPath, "utf8")).toBe("bbbb");
+	});
+
+	it("accounts for active reservations and refuses growth past the shared byte cap", async () => {
+		const first = fakeChild();
+		const second = fakeChild();
+		const sink = recordingSink();
+		const options = { sessionStderrDir: dir, maxBytes: 4, maxRetainedBytes: 6 };
+		const firstCapture = startStderrCapture(first.child, 60, { ...options, forwardStderr: false });
+		first.stderr.write("a");
+		const secondCapture = startStderrCapture(second.child, 61, { ...options, stderrSink: sink.stream });
+		second.stderr.end("bbbb");
+		expect(await secondCapture.drain()).toMatchObject({ status: "error", bytesWritten: 0, files: [] });
+		expect(sink.text()).toBe("bbbb");
+
+		first.stderr.end("b");
+		const retained = await firstCapture.drain();
+		expect(fs.readFileSync(retained.logPath, "utf8")).toBe("ab");
+
+		const third = fakeChild();
+		const thirdCapture = startStderrCapture(third.child, 62, { ...options, forwardStderr: false });
+		third.stderr.end("cccc");
+		const admitted = await thirdCapture.drain();
+		expect(admitted.status).toBe("captured");
+		expect(fs.readFileSync(admitted.logPath, "utf8")).toBe("cccc");
 	});
 
 	it("keeps concurrent generations with the same PID separate", async () => {
