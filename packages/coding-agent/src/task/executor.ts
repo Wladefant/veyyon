@@ -339,12 +339,9 @@ export interface ExecutorOptions {
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	/**
-	 * Epochs (ms, `Date.now()`) bracketing the concurrency-semaphore wait:
-	 * `invokedAt` is stamped at the spawn boundary before `acquire()`,
-	 * `acquiredAt` immediately after. {@link runSubprocess} reports true queue
-	 * wait (`acquiredAt - invokedAt`) and pre-run setup (`startTime - acquiredAt`)
-	 * separately in the launch-timing debug log. Undefined for callers that
-	 * bypass the semaphore path.
+	 * Monotonic marks (ms, `performance.now()`) immediately before and after permit admission.
+	 * The launch-timing log uses them to separate queue wait from pre-run setup.
+	 * Undefined for callers that bypass the semaphore.
 	 */
 	invokedAt?: number;
 	acquiredAt?: number;
@@ -2513,20 +2510,15 @@ function elapsedMs(from: number | undefined, to: number | undefined): number | u
 	return from !== undefined && to !== undefined ? Math.round(to - from) : undefined;
 }
 
-/**
- * Log the launch-latency breakdown (agent invocation → first chat dispatch). Phase deltas are
- * `performance.now()` spans; the task-tool concurrency brackets use the `Date.now()` epochs captured
- * by the spawn site (invokedAt before acquire, acquiredAt after) so queue wait and pre-run setup are
- * reported apart.
- */
-function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: LaunchMarks): void {
+/** Log monotonic launch spans from permit wait through first chat dispatch. */
+function logLaunchTiming(options: ExecutorOptions, perfStartedAt: number, marks: LaunchMarks): void {
 	const { invokedAt, acquiredAt } = options;
 	const setupToFirstChatMs = elapsedMs(marks.perfStart, marks.firstChatDispatchAt);
 	logger.debug("agent launch timing", {
 		id: options.id,
 		agent: options.agent.name,
 		queueMs: elapsedMs(invokedAt, acquiredAt),
-		preRunMs: elapsedMs(acquiredAt, startTime),
+		preRunMs: elapsedMs(acquiredAt, perfStartedAt),
 		resolveMs: elapsedMs(marks.perfStart, marks.resolvedAt),
 		sessionOpenMs: elapsedMs(marks.resolvedAt, marks.sessionOpenedAt),
 		transcriptOpenMs: elapsedMs(marks.resolvedAt, marks.transcriptOpenedAt),
@@ -2535,10 +2527,7 @@ function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: Lau
 		readyMs: elapsedMs(marks.sessionCreatedAt, marks.readyAt),
 		promptToFirstChatMs: elapsedMs(marks.readyAt, marks.firstChatDispatchAt),
 		setupToFirstChatMs,
-		invokeToFirstChatMs:
-			invokedAt !== undefined && setupToFirstChatMs !== undefined
-				? Math.round(startTime - invokedAt) + setupToFirstChatMs
-				: undefined,
+		invokeToFirstChatMs: elapsedMs(invokedAt, marks.firstChatDispatchAt),
 	});
 }
 
@@ -2549,6 +2538,7 @@ function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: Lau
 async function driveChildRun(
 	ctx: ChildSessionContext,
 	startTime: number,
+	perfStartedAt: number,
 	lifecycle: Pick<RunRelease, "agentIdleTtlMs" | "prune">,
 ): Promise<DriveOutcome & { durationMs: number }> {
 	const { options, monitor } = ctx;
@@ -2607,7 +2597,7 @@ async function driveChildRun(
 			reviveSession,
 		});
 	}
-	logLaunchTiming(options, startTime, ctx.marks);
+	logLaunchTiming(options, perfStartedAt, ctx.marks);
 	return { ...outcome, durationMs: Date.now() - startTime };
 }
 
@@ -2618,6 +2608,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 	const { agent, id, worktree, modelOverride, signal } = spawnOptions;
 	const startTime = Date.now();
 	if (signal?.aborted) return cancelledBeforeStart(spawnOptions);
+	const perfStartedAt = performance.now();
 
 	// An agent ALWAYS gets a durable session file — never an in-memory session that would silently lose
 	// its transcript (Law 10, no silent fallback). When the caller provides no artifacts dir, route the
@@ -2705,6 +2696,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 				marks: { perfStart: performance.now() },
 			},
 			startTime,
+			perfStartedAt,
 			{ agentIdleTtlMs: resolveAgentIdleTtlMs(settings), prune: resolveAgentPruneBudget(settings) },
 		);
 		monitor.finish();

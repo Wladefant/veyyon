@@ -5,6 +5,7 @@
 ### Added
 
 - Expose a bounded live agent roster through the session owner's authenticated terminal control endpoint ([Refs Wladefant/superboard#3039](https://github.com/Wladefant/superboard/issues/3039)).
+- Log monotonic child permit wait times for both admitted and cancelled task spawns ([Refs Wladefant/superboard#2869](https://github.com/Wladefant/superboard/issues/2869)).
 
 ### Fixed
 
