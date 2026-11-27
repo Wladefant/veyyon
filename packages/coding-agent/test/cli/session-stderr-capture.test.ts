@@ -133,6 +133,95 @@ describe("startStderrCapture", () => {
 		expect(sink.text()).toBe("abcdefgh");
 	});
 
+	it("bounds retained stderr across short child runs without evicting recent evidence", async () => {
+		const legacy = path.join(dir, "200.stderr.log");
+		fs.writeFileSync(legacy, "legacy incident");
+		const options = { sessionStderrDir: dir, maxBytes: 4, maxRetainedSegments: 2, forwardStderr: false };
+		const run = async (pid: number, text: string) => {
+			const { child, stderr } = fakeChild();
+			const capture = startStderrCapture(child, pid, options);
+			stderr.end(text);
+			return capture.drain();
+		};
+		const first = await run(200, "aaaa");
+		const second = await run(201, "bbbb");
+		for (let pid = 202; pid < 210; pid++) {
+			const full = await run(pid, "cccc");
+			expect(full.status).toBe("error");
+			expect(full.error).toContain("retention budget");
+			expect(full.bytesWritten).toBe(0);
+			expect(full.files).toEqual([]);
+		}
+		expect(fs.readFileSync(first.logPath, "utf8")).toBe("aaaa");
+		expect(fs.readFileSync(second.logPath, "utf8")).toBe("bbbb");
+		expect(fs.readFileSync(legacy, "utf8")).toBe("legacy incident");
+
+		const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+		fs.utimesSync(first.logPath, expired, expired);
+		const next = await run(210, "dddd");
+		expect(next.status).toBe("captured");
+		expect(fs.existsSync(first.logPath)).toBe(false);
+		expect(fs.readFileSync(next.logPath, "utf8")).toBe("dddd");
+		expect(fs.readFileSync(second.logPath, "utf8")).toBe("bbbb");
+	});
+
+	it("keeps concurrent generations with the same PID separate", async () => {
+		const first = fakeChild();
+		const second = fakeChild();
+		const options = { sessionStderrDir: dir, maxBytes: 16, forwardStderr: false };
+		const firstCapture = startStderrCapture(first.child, 42, options);
+		first.stderr.write("first ");
+		const secondCapture = startStderrCapture(second.child, 42, options);
+		second.stderr.end("second");
+		const secondResult = await secondCapture.drain();
+		first.stderr.end("late");
+		const firstResult = await firstCapture.drain();
+		expect(firstResult.logPath).not.toBe(secondResult.logPath);
+		expect(fs.readFileSync(firstResult.logPath, "utf8")).toBe("first late");
+		expect(fs.readFileSync(secondResult.logPath, "utf8")).toBe("second");
+	});
+
+	it("keeps a live writer's segment even when its mtime is outside the incident window", async () => {
+		const first = fakeChild();
+		const options = { sessionStderrDir: dir, maxBytes: 16, maxRetainedSegments: 1, forwardStderr: false };
+		const capture = startStderrCapture(first.child, 50, options);
+		first.stderr.write("first ");
+		const [relative] = fs.readdirSync(dir, { recursive: true }).filter(name => name.endsWith(".log"));
+		const active = path.join(dir, relative);
+		const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+		fs.utimesSync(active, expired, expired);
+		const contender = fakeChild();
+		const refused = startStderrCapture(contender.child, 51, options);
+		contender.stderr.end("contending write");
+		expect((await refused.drain()).status).toBe("error");
+		first.stderr.end("late");
+		const result = await capture.drain();
+		expect(result.status).toBe("captured");
+		expect(fs.readFileSync(result.logPath, "utf8")).toBe("first late");
+	});
+
+	it("preserves earlier segments when a later rollover fails and forwards all stderr", async () => {
+		const { child, stderr } = fakeChild();
+		const sink = recordingSink();
+		let attempts = 0;
+		const capture = startStderrCapture(child, 52, {
+			sessionStderrDir: dir,
+			maxBytes: 4,
+			maxFiles: 2,
+			stderrSink: sink.stream,
+			renameSync: (source, dest) => {
+				if (++attempts > 1) throw new Error("segment locked");
+				fs.renameSync(source, dest);
+			},
+		});
+		stderr.end("aaaabbbbcccc");
+		const result = await capture.drain();
+		expect(result.status).toBe("rotation_error");
+		expect(result.error).toBe("segment locked");
+		expect(result.files.map(file => fs.readFileSync(file, "utf8"))).toEqual(["bbbb", "aaaa"]);
+		expect(sink.text()).toBe("aaaabbbbcccc");
+	});
+
 	it("reports a spawn error and writes nothing when no pid was assigned", async () => {
 		const capture = startStderrCapture(undefined, undefined, { sessionStderrDir: dir });
 		capture.recordSpawnError(new Error("ENOENT: codex not found"));
