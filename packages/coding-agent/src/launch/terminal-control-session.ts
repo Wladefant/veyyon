@@ -1,6 +1,7 @@
 import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { logTelegramDeliveryTrace } from "@veyyon/utils";
+import { type SessionManager } from "@veyyon/kernel/session/session-manager";
+import { logger, logTelegramDeliveryTrace, parseTelegramTrace, type TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { InteractiveMode } from "../modes/terminal/interactive-mode";
 import type { SecretIntakeResult } from "../secrets/intake-broker";
 import {
@@ -13,6 +14,7 @@ import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../session/operat
 import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
 import { TOOL } from "../tools/core/builtin-names";
 import {
+	durableTerminalDeliveryId,
 	serveTerminalControl,
 	type TerminalControlHandle,
 	type TerminalDeliveryOptions,
@@ -86,6 +88,142 @@ type TerminalTranscriptText = {
 	turn?: TerminalTurnProvenance;
 };
 
+const STEERING_ENTRY = "terminal:pending-steering";
+const STEERING_ALERT_MS = 60_000;
+
+interface PendingSteering {
+	version: 1;
+	sessionId: string;
+	messageId: string;
+	text: string;
+	mode: "auto" | "steer" | "followUp";
+	acceptedAt: number;
+	telegramTrace?: TelegramDeliveryTraceData;
+}
+
+function readPendingSteering(journal: SessionManager): Map<string, PendingSteering> {
+	const pending = new Map<string, PendingSteering>();
+	const sessionId = journal.getSessionId();
+	for (const entry of journal.getEntries()) {
+		if (entry.type === "custom" && entry.customType === STEERING_ENTRY) {
+			const record = entry.data as Partial<PendingSteering> | null;
+			if (
+				record?.version === 1 &&
+				record.sessionId === sessionId &&
+				typeof record.messageId === "string" &&
+				typeof record.text === "string" &&
+				durableTerminalDeliveryId(record.text) === record.messageId &&
+				(record.mode === "auto" || record.mode === "steer" || record.mode === "followUp") &&
+				typeof record.acceptedAt === "number" &&
+				Number.isFinite(record.acceptedAt)
+			) {
+				if (!pending.has(record.messageId)) pending.set(record.messageId, record as PendingSteering);
+			}
+		} else if (pending.size && entry.type === "message" && entry.message.role === "user") {
+			const readable = readColdEntry(entry) ?? entry;
+			if (readable.type !== "message" || readable.message.role !== "user") continue;
+			const { content, attribution, synthetic } = readable.message;
+			if (synthetic || attribution === "agent") continue;
+			const body = typeof content === "string" ? content : content.find(block => block.type === "text")?.text;
+			const id = body === undefined ? undefined : durableTerminalDeliveryId(body);
+			if (id) pending.delete(id);
+		}
+	}
+	return pending;
+}
+
+function createSteeringInbox(mode: InteractiveMode) {
+	let journal = mode.sessionManager;
+	let pending = readPendingSteering(journal);
+	const replayed = new Set<string>();
+	let alertedId: string | undefined;
+	return {
+		async recover() {
+			if (!pending.size) return;
+			try {
+				await journal.assertReplayJournalCurrent();
+			} catch {
+				logger.warn("Cannot verify the terminal steering journal; pending input was not replayed");
+				return;
+			}
+			const owner = journal;
+			pending = readPendingSteering(owner);
+			for (const record of pending.values()) {
+				if (mode.sessionManager !== owner || mode.isShuttingDown) return;
+				const options = { telegramTrace: parseTelegramTrace(record.telegramTrace) };
+				try {
+					if (record.mode === "followUp") await mode.session.followUp(record.text, undefined, undefined, options);
+					else await mode.session.steer(record.text, undefined, undefined, options);
+					replayed.add(record.messageId);
+				} catch {
+					logger.warn("Pending terminal steering did not enter the queue", {
+						sessionId: record.sessionId,
+						messageId: record.messageId,
+					});
+					// Do not dispatch a later input ahead of one that could not be queued.
+					return;
+				}
+			}
+		},
+		async record(
+			sessionId: string,
+			messageId: string,
+			text: string,
+			behavior: PendingSteering["mode"],
+			options?: TerminalDeliveryOptions,
+		): Promise<boolean> {
+			if (mode.sessionManager.getSessionId() !== sessionId || mode.isShuttingDown || !mode.isInitialized)
+				throw new TerminalNotReadyError("Terminal is not ready to accept steering");
+			// Answers have their own journal. Do not replay terminal commands as model input.
+			if (operatorAnswerQuestionId(text) || /^[!/]/.test(text.trimStart())) return false;
+			const owner = mode.sessionManager;
+			if (owner !== journal) {
+				journal = owner;
+				pending = readPendingSteering(owner);
+				replayed.clear();
+			}
+			if (replayed.has(messageId)) return true;
+			if (!pending.has(messageId)) {
+				const record: PendingSteering = {
+					version: 1,
+					sessionId,
+					messageId,
+					text,
+					mode: behavior,
+					acceptedAt: Date.now(),
+					telegramTrace: options?.telegramTrace,
+				};
+				owner.appendCustomEntry(STEERING_ENTRY, record);
+				pending.set(messageId, record);
+			}
+			await owner.ensureOnDisk();
+			await owner.sync();
+			if (mode.sessionManager !== owner || owner.getSessionId() !== sessionId)
+				throw new Error("Terminal changed sessions while persisting steering");
+			return false;
+		},
+		checkStall() {
+			if (mode.sessionManager !== journal || !pending.size) return;
+			pending = readPendingSteering(journal);
+			const oldest = pending.values().next().value;
+			if (!oldest || oldest.messageId === alertedId || Date.now() - oldest.acceptedAt < STEERING_ALERT_MS) return;
+			alertedId = oldest.messageId;
+			const waitReason = mode.session.isRetrying
+				? "provider retry"
+				: mode.session.hasPostPromptWork
+					? "post-turn work"
+					: mode.session.heartbeatPhase || "idle without queue consumption";
+			logger.warn("Accepted steering has not reached a turn", {
+				sessionId: oldest.sessionId,
+				messageId: oldest.messageId,
+				ageMs: Date.now() - oldest.acceptedAt,
+				waitReason,
+			});
+			mode.session.emitNotice("warning", `Steering ${oldest.messageId} has not reached a turn: ${waitReason}.`);
+		},
+	};
+}
+
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
 export async function startTerminalControl(mode: InteractiveMode): Promise<TerminalControlHandle> {
 	let revision = "";
@@ -149,13 +287,16 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<Termi
 		},
 	);
 	await answers.recover();
+	const steering = createSteeringInbox(mode);
+	await steering.recover();
 	let idleExitReserved = false;
-	return serveTerminalControl({
+	const control = await serveTerminalControl({
 		identity: () => ({
 			sessionId: mode.sessionManager.getSessionId(),
 			cwd: mode.sessionManager.getCwd(),
 			sessionFile: mode.sessionManager.getSessionFile() ?? "",
 		}),
+		recordSteering: steering.record,
 		registrySnapshot: mode.collabGuest
 			? undefined
 			: sessionId => (mode.collabGuest ? undefined : observeTerminalRegistry(sessionId, mode.session)),
@@ -318,4 +459,12 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<Termi
 			};
 		},
 	});
+	const timer = setInterval(steering.checkStall, STEERING_ALERT_MS).unref();
+	return Object.assign(
+		() => {
+			clearInterval(timer);
+			control();
+		},
+		{ refreshIdentity: control.refreshIdentity },
+	);
 }

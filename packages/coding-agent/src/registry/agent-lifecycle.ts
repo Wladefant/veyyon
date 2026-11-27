@@ -10,9 +10,12 @@
  * `parked` ↔ `idle`.
  */
 
+import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { clamp, errorMessage, logger } from "@veyyon/utils";
 import type { AgentSession } from "../session/agent-session";
+import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
+import { TOOL } from "../tools/core/builtin-names";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "./agent-registry";
 
 export type AgentReviver = () => Promise<AgentSession>;
@@ -542,14 +545,17 @@ export class AgentLifecycleManager {
 			const reason = "Parent session no longer exists.";
 			if (!ref.terminalOutcome) {
 				this.#stalling.add(ref.id);
-				let reported = false;
+				let outcome: "completed" | "stalled" | undefined;
 				try {
-					reported = await this.#reportStalled(ref, reason);
+					outcome = await this.#reconcilePruneOutcome(ref, reason);
 				} finally {
 					this.#stalling.delete(ref.id);
 				}
 				if (this.#disposed) return;
-				if (!reported) continue;
+				if (!outcome) continue;
+				if (this.#registry.get(ref.id) !== ref || ref.status !== "parked" || this.#registry.get(ref.parentId))
+					continue;
+				this.#registry.recordTerminalOutcome(ref.id, outcome, outcome === "stalled" ? reason : undefined);
 			}
 			const current = this.#registry.get(ref.id);
 			if (
@@ -561,9 +567,43 @@ export class AgentLifecycleManager {
 			) {
 				continue;
 			}
-			if (!ref.terminalOutcome) this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
 			await this.release(ref.id);
 		}
+	}
+
+	/** Check the current branch, not an old yield from a previous assignment. */
+	async #reconcilePruneOutcome(ref: AgentRef, reason: string): Promise<"completed" | "stalled" | undefined> {
+		if (ref.sessionFile) {
+			let transcript: SessionManager | undefined;
+			try {
+				transcript = await SessionManager.open(ref.sessionFile, undefined, undefined, {
+					suppressBreadcrumb: true,
+				});
+				const branch = transcript.getBranch();
+				for (let i = branch.length - 1; i >= 0; i--) {
+					const entry = branch[i];
+					if (entry.type === "custom" && entry.customType === "irc:continuation-phase") break;
+					if (entry.type !== "message") continue;
+					if (entry.message.role === "user") break;
+					if (entry.message.role !== "toolResult" || entry.message.toolName !== TOOL.yield) continue;
+					const materialized = readColdEntry(entry) ?? entry;
+					if (materialized.type !== "message" || materialized.message.role !== "toolResult") continue;
+					const { toolName, isError, details } = materialized.message;
+					if (isTerminalYieldToolResult({ toolName, isError, result: { details } })) return "completed";
+				}
+			} catch (error) {
+				logger.warn("AgentLifecycleManager: child result could not be verified; keeping agent registered", {
+					id: ref.id,
+					error: errorMessage(error),
+				});
+				return undefined;
+			} finally {
+				await transcript?.close();
+			}
+		}
+		if (this.#disposed || this.#registry.get(ref.id) !== ref || ref.status !== "parked") return undefined;
+		if (ref.terminalOutcome) return undefined;
+		return (await this.#reportStalled(ref, reason)) ? "stalled" : undefined;
 	}
 
 	async #reportStalled(ref: AgentRef, reason: string): Promise<boolean> {
@@ -718,13 +758,13 @@ export class AgentLifecycleManager {
 		if (!ref.terminalOutcome) {
 			const reason = "Assignment was pruned before reporting a terminal outcome.";
 			this.#stalling.add(id);
-			let reported = false;
+			let outcome: "completed" | "stalled" | undefined;
 			try {
-				reported = await this.#reportStalled(ref, reason);
+				outcome = await this.#reconcilePruneOutcome(ref, reason);
 			} finally {
 				this.#stalling.delete(id);
 			}
-			if (!reported) {
+			if (!outcome) {
 				const adopted = this.#adopted.get(id);
 				if (adopted) arm(adopted, Date.now() + PARKED_ORPHAN_RECHECK_MS, "prune");
 				this.#scheduleNext();
@@ -732,7 +772,7 @@ export class AgentLifecycleManager {
 			}
 			const current = this.#registry.get(id);
 			if (current !== ref || current.status !== "parked" || this.#revivals.has(id) || this.#parking.has(id)) return;
-			this.#registry.recordTerminalOutcome(id, "stalled", reason);
+			this.#registry.recordTerminalOutcome(id, outcome, outcome === "stalled" ? reason : undefined);
 		}
 		const current = this.#registry.get(id);
 		if (current !== ref || current.status !== "parked" || this.#revivals.has(id) || this.#parking.has(id)) return;

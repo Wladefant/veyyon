@@ -47,6 +47,13 @@ export interface TerminalDeliveryOptions {
 export interface TerminalControlTarget {
 	identity(): { sessionId: string; cwd: string; sessionFile: string };
 	deliver(text: string, mode: "auto" | "steer" | "followUp", options?: TerminalDeliveryOptions): Promise<string>;
+	recordSteering?(
+		sessionId: string,
+		messageId: string,
+		text: string,
+		mode: "auto" | "steer" | "followUp",
+		options?: TerminalDeliveryOptions,
+	): Promise<boolean>;
 	abort(): Promise<boolean>;
 	isIdle?(): boolean;
 	reserveExit?(): void;
@@ -129,6 +136,11 @@ interface DeliveryRecord {
 	status: DeliveryState;
 	watchers: Set<TerminalSocket>;
 	promise: Promise<string>;
+	accepted?: Promise<void>;
+}
+
+export function durableTerminalDeliveryId(text: string): string | undefined {
+	return DURABLE_DELIVERY_TAG.exec(text.slice(text.lastIndexOf("\n") + 1))?.[1];
 }
 
 /** The daemon writes this tag on the final line of each durable input. Use the same journal receipt rule. */
@@ -146,7 +158,7 @@ function durableReceipt(line: Buffer): string | undefined {
 	const body = Array.isArray(content)
 		? content.find(block => isRecord(block) && block.type === "text")?.text
 		: content;
-	if (typeof body === "string") return DURABLE_DELIVERY_TAG.exec(body.slice(body.lastIndexOf("\n") + 1))?.[1];
+	if (typeof body === "string") return durableTerminalDeliveryId(body);
 }
 
 class DurableDeliveryReadback {
@@ -506,18 +518,30 @@ export async function serveTerminalControl(
 		mode: "auto" | "steer" | "followUp",
 		deliveryOptions?: TerminalDeliveryOptions,
 		durableId?: string,
+		acceptance?: PromiseWithResolvers<void>,
 	): Promise<string> => {
 		if (exitReserved) throw new Error("Terminal is exiting; delivery refused");
 		if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
 			throw new Error("Terminal busy: too many deliveries pending; retry later");
 		const trace = deliveryOptions?.telegramTrace;
-		if (trace) logTelegramDeliveryTrace(trace, { stage: "session_acceptance", sessionId });
+		if (trace && !acceptance) logTelegramDeliveryTrace(trace, { stage: "session_acceptance", sessionId });
 		pendingDeliveries++;
 		const run = deliveryChain.then(async () => {
 			// Reserve the slot before any disk read. Cold readback must not create an unbounded second queue.
 			if (durableId && (await refreshReadback(sessionId)).consumed.has(durableId)) {
+				acceptance?.resolve();
 				return CONSUMED_DELIVERY.outcome;
 			}
+			if (closed || sessionId !== target.identity().sessionId) {
+				throw new TerminalSessionChangedError("Terminal session detached or changed; message not delivered");
+			}
+			const duplicate =
+				acceptance && durableId
+					? await target.recordSteering?.(sessionId, durableId, text, mode, deliveryOptions)
+					: false;
+			acceptance?.resolve();
+			if (duplicate) return "duplicate";
+			if (trace && acceptance) logTelegramDeliveryTrace(trace, { stage: "session_acceptance", sessionId });
 			for (let attempt = 0; ; attempt++) {
 				// The session may have changed since the message was accepted. Never deliver it to another one.
 				if (closed || sessionId !== target.identity().sessionId) {
@@ -542,6 +566,7 @@ export async function serveTerminalControl(
 					});
 			},
 			error => {
+				acceptance?.reject(error);
 				pendingDeliveries--;
 				if (trace)
 					logTelegramDeliveryTrace(trace, {
@@ -566,14 +591,18 @@ export async function serveTerminalControl(
 		index: DurableDeliveryReadback | undefined,
 	): DeliveryRecord => {
 		const key = deliveryKey(sessionId, messageId);
-		const promise = runDelivery(sessionId, text, mode, deliveryOptions, index ? messageId : undefined);
-		const tagged = index && DURABLE_DELIVERY_TAG.exec(text.slice(text.lastIndexOf("\n") + 1))?.[1] === messageId;
+		const tagged = index && durableTerminalDeliveryId(text) === messageId;
+		const acceptance = tagged && target.recordSteering ? Promise.withResolvers<void>() : undefined;
+		// A non-ACK request waits on delivery, not the acceptance promise.
+		void acceptance?.promise.catch(() => {});
+		const promise = runDelivery(sessionId, text, mode, deliveryOptions, index ? messageId : undefined, acceptance);
 		const record: DeliveryRecord = {
 			sessionId,
 			messageId,
 			status: { state: "pending" },
 			watchers: new Set(),
 			promise,
+			accepted: acceptance?.promise,
 		};
 		deliveries.set(key, record);
 		evictOldDeliveries();
@@ -828,6 +857,10 @@ export async function serveTerminalControl(
 									status = record.status;
 								}
 								if (request.ack === true) {
+									if (record?.accepted) {
+										await record.accepted;
+										status = record.status;
+									}
 									if (record && status.state === "pending") {
 										if (!socket.destroyed) record.watchers.add(socket);
 									} else if (record && status === record.status) {

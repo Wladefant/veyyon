@@ -873,6 +873,7 @@ describe("AgentLifecycleManager", () => {
 				isError: false,
 				timestamp: 2,
 			});
+			await transcript.ensureOnDisk();
 			await transcript.flush();
 			const sessionFile = transcript.getSessionFile();
 			if (!sessionFile) throw new Error("Missing child transcript");
