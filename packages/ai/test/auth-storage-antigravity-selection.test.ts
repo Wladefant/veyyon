@@ -432,7 +432,7 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		const healthy = report("acct-a", 0);
 		healthy.metadata = { ...healthy.metadata, authoritativeCounters: ["google"] };
 		usageByAccount.set("acct-a", healthy);
-		usageByAccount.set("acct-b", report("acct-b", 1));
+		usageByAccount.set("acct-b", report("acct-b", 0.4));
 		const peer = new AuthStorage(store, {
 			loadBalancing: true,
 			usageProviderResolver: p => (p === provider ? usageProvider : undefined),
