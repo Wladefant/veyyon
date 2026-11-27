@@ -994,7 +994,10 @@ export class ProducerOutputGuard {
 		if (this.#withholding) return prefix;
 		const structured = this.#structured || lines.some(line => structuredStart(line, true) >= 0);
 		if (structured || assignment || separator) {
-			if (!this.#candidateOversized && this.#candidate.length + record.length + newline.length > this.maxRecordChars) {
+			if (
+				!this.#candidateOversized &&
+				this.#candidate.length + record.length + newline.length > this.maxRecordChars
+			) {
 				this.#candidate = "";
 				this.#candidateOversized = true;
 			}

@@ -12,12 +12,17 @@ import {
 	type ShellOptions,
 	type ShellRunResult,
 } from "@veyyon/natives";
-import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { hasOversizedLine, ProducerOutputGuard } from "../secrets/producer-output";
 import { sessionCpuLimit } from "../session/cpu-limit";
-import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink, type OutputSummary } from "../session/streaming-output";
+import {
+	DEFAULT_MAX_BYTES,
+	LIVE_OUTPUT_INTERVAL_MS,
+	OutputSink,
+	type OutputSummary,
+} from "../session/streaming-output";
 import {
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,

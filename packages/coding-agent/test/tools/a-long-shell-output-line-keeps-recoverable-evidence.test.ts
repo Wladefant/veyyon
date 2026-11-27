@@ -56,7 +56,7 @@ test("Bash scans the tail of a long record before it can enter the artifact", as
 	const { session } = await fixture();
 	const syntheticValue = "synthetic-fixture-not-a-real-credential";
 	const result = await new BashTool(session).execute("credential", {
-		command: longLine(70_000, ` password=\"${syntheticValue}\" `),
+		command: longLine(70_000, ` password="${syntheticValue}" `),
 		timeout: 20,
 	});
 	const text = toolResultText(result);
