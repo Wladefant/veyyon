@@ -1466,6 +1466,74 @@ export function hostReachableCommand(
 const PROCESS_STOP_PREFIX = /^(?:command|exec|then|do|else|if|elif|while|until|!|\{)$/;
 const CMD_SCRIPT_FLAG = /^\/{1,2}[ck]$/i;
 const POWERSHELL_SCRIPT_FLAG = /^-(?:c|command)$/i;
+const SLOT_RUNNERS: Record<string, true> = { vitest: true, jest: true, pytest: true, tsc: true };
+const SLOT_PACKAGE_MANAGERS: Record<string, true> = { npm: true, yarn: true, bun: true, pnpm: true };
+const SLOT_INPUT_OVERRIDE = /^(?:BUILD_SLOT_|PYTHON(?:HOME|PATH|STARTUP)(?:=|$))/i;
+
+function testRunner(words: readonly ExpandedWord[], index: number): string | undefined {
+	const name = processCommandName(words[index]?.text ?? "").replace(/\.(?:cmd|bat|ps1)$/, "");
+	const firstArg = words[index + 1]?.text;
+	if (Object.hasOwn(SLOT_RUNNERS, name)) return name;
+	if (name === "node" && firstArg === "--test") return "node --test";
+	if (Object.hasOwn(SLOT_PACKAGE_MANAGERS, name)) {
+		if (firstArg === "test" || (firstArg === "run" && words[index + 2]?.text === "test")) return `${name} test`;
+	}
+	return undefined;
+}
+
+/**
+ * Refuse known direct runners before Bash creates a process. This recognizes the
+ * installed helper's explicit CLI form; it is not an admission receipt or a
+ * sandbox for aliases, scripts, interpreters, or other tools.
+ */
+export function findBuildSlotDenial(
+	command: string,
+	helperPath: string,
+	env: NodeJS.ProcessEnv,
+	callEnv: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+	const comparePath = (value: string) => {
+		const path = value.replaceAll("\\", "/");
+		return process.platform === "win32" ? path.toLowerCase() : path;
+	};
+	const canonical = comparePath(helperPath);
+	const home = resolveGuardHome(env);
+	for (const { text } of splitCommandSpans(command, true)) {
+		const words = splitWords(text).map(word => expandWord(word, home, env));
+		let index = 0;
+		while (index < words.length) {
+			const word = words[index]!.text;
+			if (word === "command" && /^-[vV]$/.test(words[index + 1]?.text ?? "")) break;
+			if (!PROCESS_STOP_PREFIX.test(word) && !isPrefixCommand(word)) break;
+			index += 1;
+		}
+		const rawRunner = testRunner(words, index);
+		if (rawRunner) {
+			return `Refused raw ${rawRunner}. Use remote CI, or for a permitted local check use the installed build_slot.py run wrapper.`;
+		}
+		const python = processCommandName(words[index]?.text ?? "");
+		const helper = words[index + 1]?.text ?? "";
+		if (!/^(?:python(?:3(?:\.\d+)?)?|py)$/.test(python) || !/(?:^|[/\\])build_slot\.py$/i.test(helper)) {
+			continue;
+		}
+		const delimiter = words.findIndex((word, position) => position > index + 1 && word.text === "--");
+		if (delimiter < 0 || !testRunner(words, delimiter + 1)) continue;
+		const options = words.slice(index + 4, delimiter);
+		if (
+			comparePath(helper) !== canonical ||
+			words[index + 2]?.text !== "run" ||
+			delimiter < index + 4 ||
+			!words[index + 3]?.text ||
+			options.some(({ text }) => text.startsWith("--f")) ||
+			(callEnv && Object.keys(callEnv).some(key => SLOT_INPUT_OVERRIDE.test(key))) ||
+			words.slice(0, index).some(({ text }) => text.includes("=") && SLOT_INPUT_OVERRIDE.test(text))
+		) {
+			return "Refused test wrapper. Use the installed build_slot.py run <name> [options] -- <command> without overriding admission.";
+		}
+	}
+	return undefined;
+}
+
 const PROCESS_STOP_DENIAL = "Stopping processes by name or pattern is blocked. Use a verified process ID (PID).";
 
 /** A host guard for common process-stop commands, not a sandbox for external scripts. */

@@ -79,6 +79,19 @@
       "risk": "high",
       "components": ["coding-agent", "SageOx"]
     },
+    "bash-build-slot-guard": {
+      "name": "Bash build slot guard",
+      "description": "Refuse known direct test runners on Windows before Bash starts a process.",
+      "entry_files": [
+        "packages/coding-agent/src/tools/shell/bash.ts",
+        "packages/coding-agent/src/tools/shell/bash-guard.ts"
+      ],
+      "tests": ["packages/coding-agent/test/tools/bash-build-slot.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/2596",
+      "risk": "medium",
+      "components": ["coding-agent", "bash"],
+      "docs": ["docs/tools/bash.md"]
+    },
     "launch-incarnation-guard": {
       "name": "Launch incarnation guard",
       "description": "Daemon process supervision and incarnation-guarded lifecycle controls preventing stale operations on replaced or restarted daemons.",

@@ -11,6 +11,7 @@
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
 - Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
 - Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).
+- Refuse direct test runners in the Windows Bash tool. Send tests to CI, or use the installed slot helper when local checks are permitted ([Refs Wladefant/superboard#2596](https://github.com/Wladefant/superboard/issues/2596)).
 - Report terminal queue capacity while delivery is blocked. Keep durable Telegram input IDs separate from confirmed journal entries ([Refs Wladefant/superboard#3473](https://github.com/Wladefant/superboard/issues/3473)).
 - Show detached child startup phases in `job list` and `irc list`, even before the child registers. Measure transcript open and launch-grant publication separately ([Refs Wladefant/superboard#3081](https://github.com/Wladefant/superboard/issues/3081)).
 - Report when a detached child cannot receive IRC yet, with its job ID and confirmation that no message was buffered ([Refs Wladefant/superboard#3110](https://github.com/Wladefant/superboard/issues/3110)).
