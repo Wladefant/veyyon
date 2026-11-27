@@ -404,6 +404,17 @@ function reportStartedJobs(
 	};
 }
 
+/** Record every finished permit wait, even if the spawn never reaches the executor. */
+function logPermitWait(
+	toolCallId: string,
+	index: number,
+	detached: boolean,
+	outcome: "admitted" | "cancelled",
+	waitMs: number,
+): void {
+	logger.info("agent permit wait", { toolCallId, index, detached, outcome, waitMs: Math.round(waitMs) });
+}
+
 /**
  * Runs the spawns of a `task` call, each once the spawn semaphore admits it.
  *
@@ -529,10 +540,16 @@ export class SpawnScheduler {
 
 	/** Run one spawn inline once the semaphore admits it, stamping the wait for the launch-timing log. */
 	async #runAdmitted(request: Omit<SpawnRequest, "launchTiming">): Promise<AgentToolResult<TaskToolDetails>> {
-		const invokedAt = Date.now();
-		await this.#semaphore().acquire(request.signal, request.params.priority);
-		const acquiredAt = Date.now();
+		const invokedAt = performance.now();
 		try {
+			await this.#semaphore().acquire(request.signal, request.params.priority);
+		} catch (error) {
+			logPermitWait(request.toolCallId, request.index, false, "cancelled", performance.now() - invokedAt);
+			throw error;
+		}
+		const acquiredAt = performance.now();
+		try {
+			logPermitWait(request.toolCallId, request.index, false, "admitted", acquiredAt - invokedAt);
 			return await runSpawn(this.#session, this.#parentApprovalBypassed, {
 				...request,
 				launchTiming: { invokedAt, acquiredAt },
@@ -657,17 +674,22 @@ export class SpawnScheduler {
 	 */
 	async #admitJob(
 		signal: AbortSignal,
+		toolCallId: string,
 		progress: AgentProgress,
 		batch: BackgroundBatch,
 		priority?: SpawnPriority,
-	): Promise<void> {
+	): Promise<NonNullable<SpawnRequest["launchTiming"]>> {
+		const invokedAt = performance.now();
 		const admitted = await this.#semaphore()
 			.acquire(signal, priority)
 			.then(
 				() => true,
 				() => false,
 			);
-		if (admitted && !signal.aborted) return;
+		const acquiredAt = performance.now();
+		const willRun = admitted && !signal.aborted;
+		logPermitWait(toolCallId, progress.index, true, willRun ? "admitted" : "cancelled", acquiredAt - invokedAt);
+		if (willRun) return { invokedAt, acquiredAt };
 		if (admitted) this.#release();
 		progress.status = "aborted";
 		batch.settle(true);
@@ -696,9 +718,8 @@ export class SpawnScheduler {
 				let admitted = false;
 				let settled = false;
 				try {
-					await this.#admitJob(signal, progress, batch, params.priority);
+					const launchTiming = await this.#admitJob(signal, call.toolCallId, progress, batch, params.priority);
 					admitted = true;
-					const acquiredAt = Date.now();
 					markRunning();
 					setStartupPhase("prepare-spawn");
 					progress.startupPhase = "prepare-spawn";
@@ -711,7 +732,7 @@ export class SpawnScheduler {
 						preAllocatedId: agentId,
 						index: spawn.index,
 						detached: true,
-						launchTiming: { invokedAt: startedAt, acquiredAt },
+						launchTiming,
 						onStartupPhase: phase => {
 							if (signal.aborted) return;
 							setStartupPhase(phase);

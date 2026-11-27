@@ -72,7 +72,7 @@ export interface SpawnRequest {
 	index: number;
 	/** The spawn runs as a background job, so the parent's turn is not waiting on it. */
 	detached: boolean;
-	/** Epochs bracketing the spawn semaphore wait; see `ExecutorOptions.invokedAt`. */
+	/** Monotonic marks bracketing the spawn semaphore wait; see `ExecutorOptions.invokedAt`. */
 	launchTiming?: { invokedAt: number; acquiredAt: number };
 	onStartupPhase?: ExecutorOptions["onStartupPhase"];
 }
