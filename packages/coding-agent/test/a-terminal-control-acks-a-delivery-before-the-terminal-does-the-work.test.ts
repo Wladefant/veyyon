@@ -630,6 +630,93 @@ test("the terminal refuses a delivery with busy when too many are pending", asyn
 	await client.next(frame => frame.event?.messageId === "m-63" && frame.event?.state === "delivered");
 });
 
+test("capacity replies over a socket whose plain delivery is still running", async () => {
+	const gate = Promise.withResolvers<void>();
+	const started = Promise.withResolvers<void>();
+	const owner = await serve(async () => {
+		started.resolve();
+		await gate.promise;
+		return "started";
+	});
+	try {
+		expect((await rpc(owner, "deliveryCapacity")).response).toMatchObject({
+			ok: true,
+			result: { limit: 64, available: 64 },
+		});
+		expect(owner.capabilities).toContain("delivery-readback");
+		const client = connect(owner);
+		client.send({ id: "slow", op: "deliver", text: "slow", mode: "auto" });
+		await started.promise;
+		client.send({ id: "capacity", op: "deliveryCapacity" });
+		expect(await client.next(frame => frame.id === "capacity")).toMatchObject({
+			ok: true,
+			result: { limit: 64, available: 63 },
+		});
+		expect(client.frames.some(frame => frame.id === "slow")).toBe(false);
+		gate.resolve();
+		await client.next(frame => frame.id === "slow");
+		expect((await rpc(owner, "deliveryCapacity")).response.result).toEqual({ limit: 64, available: 64 });
+	} finally {
+		gate.resolve();
+	}
+}, 10_000);
+
+test("a saturated route recovers in order on reconnect and reads back each durable input once", async () => {
+	const gate = Promise.withResolvers<void>();
+	const queued: string[] = [];
+	const owner = await serve(async text => {
+		await gate.promise;
+		queued.push(text);
+		return "queued";
+	});
+	const other = await serve(async () => "started", () => "other");
+	const inputs = Array.from({ length: 68 }, (_, index) => {
+		const messageId = `telegram-${index.toString(16).padStart(64, "0")}`;
+		return { messageId, text: `input ${index}\n[telegram-delivery id=${messageId}]`, mode: "auto", ack: true };
+	});
+	const deliver = async (input: (typeof inputs)[number]) => (await rpc(owner, "deliver", input)).response;
+	const status = async (messageId: string) => (await rpc(owner, "deliveryStatus", { messageId })).response.result;
+	const settleRoute = async (input: (typeof inputs)[number]) => {
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if ((await status(input.messageId)).state === "delivered") return;
+		}
+		throw new Error("Delivery did not settle");
+	};
+	const entry = (text: string) => JSON.stringify({ type: "message", message: { role: "user", content: text } });
+	try {
+		// Each RPC closes its connection. The original IDs must survive without those sockets.
+		for (const input of inputs.slice(0, 64)) {
+			expect(await deliver(input)).toMatchObject({ ok: true, result: { state: "pending" } });
+		}
+		expect(await status(inputs[0].messageId)).toEqual({ state: "pending" });
+		for (const input of inputs.slice(64)) {
+			expect(await deliver(input)).toMatchObject({ ok: false, error: expect.stringContaining("busy") });
+		}
+		expect((await rpc(other, "deliver", { text: "unaffected", mode: "auto" })).response.result).toBe("started");
+		expect(await deliver(inputs[0])).toMatchObject({ ok: true, result: { state: "pending" } });
+		gate.resolve();
+		await settleRoute(inputs[63]);
+		expect(await status(inputs[0].messageId)).toEqual({ state: "delivered", outcome: "queued" });
+		for (const input of inputs.slice(64)) expect((await deliver(input)).ok).toBe(true);
+		await settleRoute(inputs[67]);
+		expect(queued).toEqual(inputs.map(input => input.text));
+
+		// The trailing record does not count until its newline is on disk.
+		await fs.writeFile(owner.sessionFile, queued.map(entry).join("\n"));
+		expect(await status(inputs[67].messageId)).toEqual({ state: "delivered", outcome: "queued" });
+		await fs.appendFile(owner.sessionFile, "\n");
+		for (const input of inputs) {
+			expect(await status(input.messageId)).toMatchObject({ state: "delivered", consumed: true });
+			expect(await deliver(input)).toMatchObject({ ok: true, result: { state: "delivered", consumed: true } });
+		}
+		expect(queued).toEqual(inputs.map(input => input.text));
+		const journal = (await fs.readFile(owner.sessionFile, "utf8")).trimEnd().split("\n");
+		expect(journal.map(line => JSON.parse(line).message.content)).toEqual(inputs.map(input => input.text));
+	} finally {
+		gate.resolve();
+	}
+}, 20_000);
+
 test("the ack is written before a delivery that blocks the event loop starts", async () => {
 	const owner = await serve(async () => {
 		const until = performance.now() + 200;
