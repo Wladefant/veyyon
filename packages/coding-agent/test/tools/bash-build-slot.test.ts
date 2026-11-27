@@ -26,9 +26,11 @@ function fixture() {
 		},
 		getClientBridge: () => ({ capabilities: { terminal: true }, createTerminal }),
 	});
-	// Reflect.construct also exercises the unmodified constructor on the red commit.
-	const tool: BashTool = Reflect.construct(BashTool, [session, { buildSlotPath: helper }]);
-	return { createTerminal, run: (command: string) => tool.execute("build-slot-test", { command }) };
+	const tool = new BashTool(session, { buildSlotPath: helper });
+	return {
+		createTerminal,
+		run: (command: string, env?: Record<string, string>) => tool.execute("build-slot-test", { command, env }),
+	};
 }
 
 it.each([
@@ -59,13 +61,19 @@ it.each([
 	expect(createTerminal).not.toHaveBeenCalled();
 });
 
+it("refuses an explicit wrapper with caller-supplied admission inputs", async () => {
+	const { run, createTerminal } = fixture();
+	await expect(run(wrap("yarn test"), { BUILD_SLOT_HELD: "copied" })).rejects.toThrow("build_slot.py");
+	expect(createTerminal).not.toHaveBeenCalled();
+});
+
 it("passes the canonical explicit wrapper and its payload to the terminal unchanged", async () => {
 	const { run, createTerminal } = fixture();
 	const command = wrap("yarn test");
 	const result = await run(command);
 	expect(result.isError).not.toBe(true);
 	expect(createTerminal).toHaveBeenCalledTimes(1);
-	expect(createTerminal.mock.calls[0]?.[0].args).toEqual(["-c", `{\n${command}\n} </dev/null`]);
+	expect(createTerminal.mock.calls[0]?.[0].args).toEqual(["-c", `{\n${command}\n\n} </dev/null`]);
 });
 
 it("does not mistake runner names in command arguments for a launch", async () => {

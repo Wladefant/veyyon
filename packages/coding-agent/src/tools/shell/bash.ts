@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { join } from "node:path";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -15,6 +16,7 @@ import type {
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
 import { errorMessage, isEnoent, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
@@ -55,6 +57,7 @@ import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
 	findBroadProcessStopDenial,
+	findBuildSlotDenial,
 	findCriticalBashRisk,
 	findFlaggedBashPattern,
 	hostReachableCommand,
@@ -321,7 +324,10 @@ export interface BashToolDetails {
 	};
 }
 
-export interface BashToolOptions {}
+export interface BashToolOptions {
+	/** Host-supplied helper path; tests can select an isolated installation. */
+	buildSlotPath?: string;
+}
 
 type ManagedBashJobCompletion =
 	| {
@@ -606,8 +612,12 @@ export class BashTool
 	readonly #autoBackgroundThresholdMs: number;
 	readonly #stallDetectionEnabled: boolean;
 	readonly #stallMs: number;
+	readonly #buildSlotPath: string | undefined;
 
-	constructor(private readonly session: ToolSession) {
+	constructor(private readonly session: ToolSession, options: BashToolOptions = {}) {
+		this.#buildSlotPath =
+			options.buildSlotPath ??
+			(process.platform === "win32" ? join(getGlobalConfigRootDir(), "workflows", "build_slot.py") : undefined);
 		this.#asyncEnabled = this.session.settings.get("async.enabled");
 		this.#autoBackgroundEnabled = this.session.settings.get("bash.autoBackground.enabled");
 		this.#autoBackgroundThresholdMs = Math.max(
@@ -1112,6 +1122,15 @@ export class BashTool
 		const expanded = await this.#expandInternalUrls(extracted.command, env, extracted.cwd);
 		const processStopDenial = findBroadProcessStopDenial(expanded.command, bashJudgementEnv(input));
 		if (processStopDenial) throw new ToolError(processStopDenial);
+		if (this.#buildSlotPath) {
+			const slotDenial = findBuildSlotDenial(
+				stripHeredocBodies(expanded.command),
+				this.#buildSlotPath,
+				bashJudgementEnv({ env: expanded.env }),
+				expanded.env,
+			);
+			if (slotDenial) throw new ToolError(slotDenial);
+		}
 
 		// Best-effort cache invalidation: drop github-cache rows for any issue/PR
 		// number touched by a mutating `gh` subcommand inside this bash call so

@@ -52,6 +52,20 @@ The tool returns a single `text` content block plus optional `details`.
 
 Stdout and stderr are merged before the model sees them. Definite non-zero exit codes are appended to the returned error result text as `Command exited with code <n>`.
 
+### Local test runners on Windows
+
+The Bash tool refuses direct launches of `node --test`, package manager `test` commands, `vitest`, `jest`, `pytest`, and `tsc` on Windows. It checks each recognized command before choosing the foreground, PTY, background, or client-terminal route. This also prevents raw starts when RAM is low, so there is no separate RAM threshold to maintain in Veyyon.
+
+Use remote CI by default. If policy permits a local check, use the installed `build_slot.py run` CLI with `--` before the runner:
+
+```sh
+python ~/.veyyon/workflows/build_slot.py run focused-check --class light --timeout 60 -- yarn test
+```
+
+Choose the class for the workload. Do not override admission with `--force` or per-call `BUILD_SLOT_*` variables. Veyyon recognizes the configured installation path for explicit wrappers around the listed runners. The slot helper still decides when the workload can start.
+
+This check recognizes direct commands. It does not inspect arbitrary package scripts, aliases, interpreter code, or launches through other tools. Recognition is not a receipt for slot admission or process-tree cleanup.
+
 ### Runner and build bookkeeping is folded out
 
 Output from a test runner is condensed before it goes into the conversation. Lines that only say a
