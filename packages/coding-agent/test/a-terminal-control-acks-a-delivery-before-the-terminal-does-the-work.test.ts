@@ -338,7 +338,7 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 	await manager.close();
 	first.close();
 	steered.length = 0;
-	manager = await SessionManager.open(file, { suppressBreadcrumb: true });
+	manager = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
 	const reopened = await start();
 	expect(steered).toEqual(deliveries.slice(1).map(delivery => delivery.text));
 	const retry = await rpc(reopened.owner, "deliver", { ...deliveries[1], mode: "steer" });
