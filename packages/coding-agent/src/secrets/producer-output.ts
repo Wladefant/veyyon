@@ -7,6 +7,8 @@ import { currentProducerSecretOwner } from "./producer-owner";
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
+// Local shell capture can scan wider records before spilling them to disk.
+const MAX_SHELL_CAPTURE_RECORD_CHARS = 256 * 1024;
 const MAX_SCALAR_CHARS = 16 * 1024 * 1024;
 const MAX_PENDING_LOOKBEHIND_CHARS = 1024 * 1024;
 const MAX_DIRECT_SANITIZE_CHARS = 4 * 1024 * 1024;
@@ -536,12 +538,13 @@ function classifyJsonStringScalar(text: string, first: number): "scalar" | "over
 	return text.length > MAX_SCALAR_CHARS ? "oversized" : "scalar";
 }
 
-function hasOversizedLine(text: string): boolean {
+export function hasOversizedLine(text: string, maxChars = MAX_RECORD_CHARS): boolean {
+	if (text.length <= maxChars) return false;
 	let lineStart = 0;
 	while (lineStart <= text.length) {
 		const newline = text.indexOf("\n", lineStart);
 		const end = newline < 0 ? text.length : newline;
-		if (end - lineStart > MAX_RECORD_CHARS) return true;
+		if (end - lineStart > maxChars) return true;
 		if (newline < 0) break;
 		lineStart = newline + 1;
 	}
@@ -675,7 +678,7 @@ function appendBoundedTail(existing: string, addition: string, maxChars: number)
 }
 
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
-export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
+export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard, maxChars = MAX_RECORD_CHARS): unknown {
 	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
 		cycles: "mark",
 		transformValue: (nested, key) => {
@@ -697,7 +700,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 		},
 	});
 	const serialized = JSON.stringify(safe);
-	if (typeof serialized === "string" && serialized.length > MAX_RECORD_CHARS) return OVERSIZED_OUTPUT_RECORD;
+	if (typeof serialized === "string" && serialized.length > maxChars) return OVERSIZED_OUTPUT_RECORD;
 	return typeof serialized !== "string" || isInventory(sanitizeText(serialized)) ? BLOCKED_OUTPUT_RECORD : safe;
 }
 
@@ -731,12 +734,21 @@ export class ProducerOutputGuard {
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
-	constructor(redact?: (text: string) => string, pendingPrefixLength?: (text: string) => number) {
+	constructor(
+		redact?: (text: string) => string,
+		pendingPrefixLength?: (text: string) => number,
+		private readonly maxRecordChars = MAX_RECORD_CHARS,
+	) {
 		const owner = currentProducerSecretOwner();
 		const rawRedact = redact ?? owner?.redact;
 		this.#redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
+
+	static forShellCapture(redact?: (text: string) => string): ProducerOutputGuard {
+		return new ProducerOutputGuard(redact, undefined, MAX_SHELL_CAPTURE_RECORD_CHARS);
+	}
+
 	sanitize(text: string): string {
 		return this.#sanitize(text, true);
 	}
@@ -761,11 +773,11 @@ export class ProducerOutputGuard {
 			}
 			const original = sanitizeText(text);
 			if (isInventory(original)) return BLOCKED_OUTPUT_RECORD;
-			if (hasOversizedLine(original)) return this.#sanitizeOversizedRecords(text);
+			if (hasOversizedLine(original, this.maxRecordChars)) return this.#sanitizeOversizedRecords(text);
 			if (/^\s*[{[]/.test(text)) {
 				try {
 					const value = JSON.parse(text);
-					const serialized = JSON.stringify(sanitizeProducerJson(value, this));
+					const serialized = JSON.stringify(sanitizeProducerJson(value, this, this.maxRecordChars));
 					return serialized === JSON.stringify(value) ? original : serialized;
 				} catch {
 					// util.inspect records are not JSON; the bounded record guard owns them.
@@ -783,7 +795,7 @@ export class ProducerOutputGuard {
 			const sanitized = sanitizeText(filtered);
 			const normalized = this.#redact?.(sanitized) ?? sanitized;
 			if (isInventory(normalized)) return BLOCKED_OUTPUT_RECORD;
-			if (normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return OVERSIZED_OUTPUT_RECORD;
+			if (hasOversizedLine(normalized, this.maxRecordChars)) return OVERSIZED_OUTPUT_RECORD;
 			let redacted = normalized;
 			for (const family of BARE_PROVIDER_SECRET_FAMILIES) redacted = family.redact(redacted);
 			return redacted.replace(EXTRA_PREFIXED_KEY, "[REDACTED]");
@@ -797,6 +809,7 @@ export class ProducerOutputGuard {
 		const guard = new ProducerOutputGuard(
 			this.#redact ? value => this.#redact!(value) : undefined,
 			this.#pendingPrefixLength ? value => this.#pendingPrefixLength!(value) : undefined,
+			this.maxRecordChars,
 		);
 		return guard.#pushRecords(text) + guard.#finishRecords();
 	}
@@ -808,6 +821,7 @@ export class ProducerOutputGuard {
 		const guard = new ProducerOutputGuard(
 			value => this.#redact?.(value) ?? value,
 			value => this.#pendingPrefixLength?.(value) ?? 0,
+			this.maxRecordChars,
 		);
 		return guard.push(text) + guard.finish();
 	}
@@ -836,7 +850,7 @@ export class ProducerOutputGuard {
 
 	#holdOversizedCandidateLine(newline: string): void {
 		const entry = `${OVERSIZED_OUTPUT_RECORD}${newline}`;
-		if (!this.#candidateOversized && this.#candidate.length + entry.length > MAX_RECORD_CHARS) {
+		if (!this.#candidateOversized && this.#candidate.length + entry.length > this.maxRecordChars) {
 			this.#candidate = "";
 			this.#candidateOversized = true;
 		}
@@ -980,7 +994,7 @@ export class ProducerOutputGuard {
 		if (this.#withholding) return prefix;
 		const structured = this.#structured || lines.some(line => structuredStart(line, true) >= 0);
 		if (structured || assignment || separator) {
-			if (!this.#candidateOversized && this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS) {
+			if (!this.#candidateOversized && this.#candidate.length + record.length + newline.length > this.maxRecordChars) {
 				this.#candidate = "";
 				this.#candidateOversized = true;
 			}
@@ -1209,8 +1223,8 @@ export class ProducerOutputGuard {
 						this.#recordLength += segmentLength;
 					}
 				} else if (
-					this.#recordLength + segmentLength + separator.length > MAX_RECORD_CHARS ||
-					this.#pending.length + segmentLength + separator.length > MAX_RECORD_CHARS
+					this.#recordLength + segmentLength + separator.length > this.maxRecordChars ||
+					this.#pending.length + segmentLength + separator.length > this.maxRecordChars
 				) {
 					const buffered = this.#pending;
 					const prospective = buffered + segment + separator;
