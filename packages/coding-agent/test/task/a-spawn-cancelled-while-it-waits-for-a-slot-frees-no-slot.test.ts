@@ -33,6 +33,7 @@ import { resetTreeSpawnSemaphoresForTests, treeSpawnSemaphore } from "@veyyon/co
 import type { AgentDefinition, AgentProgress, TaskToolDetails } from "@veyyon/coding-agent/task/types";
 import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
 import { JobTool } from "@veyyon/coding-agent/tools/shell/job";
+import { logger } from "@veyyon/utils";
 import { makeCgroupRoot, makeDelegatedParent, makeFakeHost, removeCgroupRoots } from "../helpers/fake-cgroup";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { makeToolSession } from "../helpers/tool-session";
@@ -285,6 +286,62 @@ describe("a background spawn and its session tree's spawn slot", () => {
 		const terminal = await jobs.execute("child-terminal", { list: true });
 		expect(terminal.details?.jobs).toMatchObject([
 			{ id: "Child", status: "failed", errorText: expect.stringContaining("Native transcript unavailable") },
+		]);
+	});
+
+	it.each([
+		{ detached: false, outcome: "admitted" },
+		{ detached: false, outcome: "cancelled" },
+		{ detached: true, outcome: "admitted" },
+		{ detached: true, outcome: "cancelled" },
+	])("records a $outcome permit wait (detached: $detached) despite a wall-clock rewind", async ({
+		detached,
+		outcome,
+	}) => {
+		const semaphore = await treeSemaphore();
+		await semaphore.acquire();
+		const scheduler = createScheduler();
+		const ran = recordRuns();
+		const log = vi.spyOn(logger, "info");
+		const monotonic = vi.spyOn(performance, "now").mockReturnValue(100);
+		const wall = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+		const controller = new AbortController();
+		const call = { ...callFor([]), signal: controller.signal };
+		const spawns = spawnsNamed("Timed");
+		let settled: Promise<unknown> | undefined;
+		let released = false;
+		try {
+			let cancel = () => controller.abort();
+			if (detached) {
+				const manager = createManager();
+				await scheduler.runInBackground(call, spawns, { manager, ircEnabled: false, advisory: undefined });
+				const job = manager.getJob("Timed");
+				expect(job?.queued).toBe(true);
+				settled = job?.promise;
+				cancel = () => {
+					manager.cancel("Timed");
+				};
+			} else {
+				settled = scheduler.runInline(call, spawns.map(({ item }) => item)).catch(() => undefined);
+			}
+			await drainMicrotasks();
+			wall.mockReturnValue(Date.now() - 60_000);
+			monotonic.mockReturnValue(137);
+			if (outcome === "cancelled") {
+				cancel();
+			} else {
+				semaphore.release();
+				released = true;
+			}
+			await settled;
+		} finally {
+			controller.abort();
+			if (!released) semaphore.release();
+			await settled;
+		}
+		expect(ran).toHaveLength(outcome === "admitted" ? 1 : 0);
+		expect(log.mock.calls.filter(([message]) => message === "agent permit wait")).toEqual([
+			["agent permit wait", { toolCallId: call.toolCallId, index: 0, detached, outcome, waitMs: 37 }],
 		]);
 	});
 
