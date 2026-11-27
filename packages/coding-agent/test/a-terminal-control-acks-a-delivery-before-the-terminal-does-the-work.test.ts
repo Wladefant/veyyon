@@ -129,6 +129,30 @@ async function serve(
 	return readOwner(root);
 }
 
+test("scheduler delivery requires an ID before either kind of acceptance", async () => {
+	const delivered: string[] = [];
+	const owner = await serve(async text => {
+		delivered.push(text);
+		return "started";
+	});
+	for (const ack of [false, true]) {
+		for (const messageId of [undefined, null, 5, "", " padded", "control\n", "x".repeat(129)]) {
+			const { response } = await rpc(owner, "deliver", {
+				text: "scheduler notice",
+				mode: "auto",
+				origin: "scheduler",
+				messageId,
+				ack,
+			});
+			expect(response).toMatchObject({ ok: false });
+		}
+	}
+	expect(delivered).toEqual([]);
+	const { response } = await rpc(owner, "deliver", { text: "scheduler notice", mode: "auto" });
+	expect(response).toMatchObject({ ok: true, result: "started" });
+	expect(delivered).toEqual(["scheduler notice"]);
+});
+
 test("idleExit refuses queued work and reserves delivery before flushing the accepted exit", async () => {
 	const gate = Promise.withResolvers<void>();
 	let exited = false;
