@@ -4424,29 +4424,75 @@ export class SessionManager {
 			}
 		}
 		if (accepted.length === 0) return;
-		this.#receiptLines = nextLines;
-		this.#grants = nextGrants;
+		const appendedLines = nextLines.slice(previousLines.length).map(line => `${line}\n`);
 		this.#forceFileCreation = true;
+		// Appending avoids relocating every entry when the receipt list, stored at the file head, grows.
+		// Fence synchronous appends until the receipt and every entry accumulated behind it are durable.
+		let appendAttempted = false;
+		this.#atomicRewriteFenceEpoch = epoch;
 		try {
-			// The file backend waits for the replacement to be durable before we acknowledge the receipt.
-			await this.#rewriteAtomically(this.#entries.length);
+			await this.#scheduleDiskWork(async () => {
+				await this.#closeWriterHandle();
+				const append = async () => {
+					const published = this.#publishedFileState;
+					if (
+						!published ||
+						!this.#fileIsCurrent ||
+						this.#rewriteRequired ||
+						!this.#fileIsExactlyAsPublished()
+					) {
+						throw new Error("Cannot append a launch grant to a changed session journal");
+					}
+					if (this.#diskEpoch !== epoch || this.#sessionFile !== sessionFile || this.#sessionId !== rootId) {
+						throw new Error("Root session changed before recording launch grants");
+					}
+					this.#receiptLines = nextLines;
+					this.#grants = nextGrants;
+					this.#forceFileCreation = true;
+					let entryCount = published.lines?.entryOffsets.length ?? published.ownedIds?.size ?? 0;
+					const writer = this.#appendWriter();
+					appendAttempted = true;
+					for (const line of appendedLines) {
+						await writer.append(line);
+						published.size += Buffer.byteLength(line, "utf8");
+					}
+					for (; entryCount < this.#entries.length; entryCount++) {
+						const entry = this.#entries[entryCount]!;
+						const line = this.#lineFor(entry);
+						await writer.append(line);
+						this.#notePublishedAppend(entry, line);
+					}
+					await writer.sync();
+				};
+				if (this.#storage.withJournalLock) await this.#storage.withJournalLock(sessionFile, append);
+				else await append();
+				if (this.#diskEpoch !== epoch || this.#sessionFile !== sessionFile || this.#sessionId !== rootId) {
+					throw new Error("Root session changed before launch grant publication completed");
+				}
+				this.#atomicRewriteDirty = false;
+				this.#rewriteRequired = this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY;
+				this.#fileIsCurrent = !this.#rewriteRequired;
+			});
 			if (
 				this.#diskEpoch !== epoch ||
 				this.#sessionFile !== sessionFile ||
 				this.#sessionId !== rootId ||
-				this.#grantsAmbiguous !== undefined ||
-				!this.#fileIsCurrent ||
-				this.#rewriteRequired
+				this.#grantsAmbiguous !== undefined
 			) {
 				throw new Error("Subagent launch grant was not published to the session journal");
 			}
 			for (const request of accepted) request.resolve();
 		} catch (error) {
-			if (this.#sessionFile === sessionFile && this.#sessionId === rootId) {
+			if (appendAttempted) this.#grantsAmbiguous = "a launch grant append may not have reached durable storage";
+			if (!appendAttempted && this.#sessionFile === sessionFile && this.#sessionId === rootId) {
 				this.#receiptLines = previousLines;
 				this.#grants = previousGrants;
 			}
+			this.#rewriteRequired = true;
+			this.#fileIsCurrent = false;
 			throw error;
+		} finally {
+			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 		}
 	}
 
