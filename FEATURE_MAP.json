@@ -162,6 +162,19 @@
       "risk": "medium",
       "components": ["ai", "Cloud Code Assist"]
     },
+    "terminal-registry-snapshot": {
+      "name": "Terminal registry snapshot",
+      "description": "Read a bounded live agent roster from the authenticated terminal owner of one session.",
+      "entry_files": [
+        "packages/coding-agent/src/launch/terminal-control.ts",
+        "packages/coding-agent/src/launch/terminal-control-session.ts",
+        "packages/coding-agent/src/launch/terminal-registry-snapshot.ts"
+      ],
+      "tests": ["packages/coding-agent/test/terminal-registry-snapshot.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/3039",
+      "risk": "high",
+      "components": ["coding-agent", "terminal-control", "agent-registry"]
+    },
     "terminal-delivery-readback": {
       "name": "Terminal delivery readback",
       "description": "Report terminal queue capacity and confirm durable user entries by their stable delivery IDs.",

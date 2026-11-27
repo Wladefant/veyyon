@@ -69,6 +69,7 @@ import type {
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import type { Skill } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
+import type { TerminalControlHandle } from "../../launch/terminal-control";
 import { startTerminalControl } from "../../launch/terminal-control-session";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../../lsp/startup-events";
 import type { MCPManager } from "../../mcp";
@@ -408,7 +409,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
 	readonly #herdrReporter = new HerdrReporter();
-	#closeTerminalControl?: () => void;
+	#closeTerminalControl?: TerminalControlHandle;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	readonly #planMode: PlanModeController;
@@ -3240,6 +3241,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#goalMode.unsubscribeFromSession();
 		this.session = next;
 		this.sessionManager = next.sessionManager;
+		void this.#closeTerminalControl?.refreshIdentity();
 		this.settings = next.settings;
 		this.agent = next.agent;
 		this.#eventController.resetTranscriptAnchors();

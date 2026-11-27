@@ -18,6 +18,11 @@ import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
+import {
+	MAX_REGISTRY_SNAPSHOT_TEXT,
+	REGISTRY_SNAPSHOT_CAPABILITY,
+	type RegistrySnapshotObservation,
+} from "./terminal-registry-snapshot";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -31,6 +36,8 @@ export interface TerminalOwner {
 	loadedVersion: string;
 	loadedBuildSha: string | null;
 	capabilities: readonly string[];
+	/** Required by registrySnapshot. Changes when this owner switches sessions or rotates its credential. */
+	ownerGeneration?: string;
 }
 
 export interface TerminalDeliveryOptions {
@@ -46,6 +53,7 @@ export interface TerminalControlTarget {
 	shutdown?(): Promise<void>;
 	history(): { entryId: string; text: string }[];
 	subscribe(listener: (event: unknown) => void): () => void;
+	registrySnapshot?(sessionId: string): RegistrySnapshotObservation | undefined;
 	registerSecretIntake?(registration: TerminalSecretRegistration): Promise<TerminalSecretActorContext>;
 	secretIntakeContext?(): TerminalSecretActorContext | undefined;
 	secretRequest?(request: TerminalSecretRequest): Promise<SecretRequestMetadata>;
@@ -72,6 +80,11 @@ export interface TerminalControlOptions {
 	writeOwner?: (recordPath: string, record: TerminalOwner) => Promise<void>;
 }
 
+export interface TerminalControlHandle {
+	(): void;
+	refreshIdentity(): Promise<void> | undefined;
+}
+
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
 export const TERMINAL_CAPABILITIES = [
 	"deliver-ack",
@@ -79,6 +92,7 @@ export const TERMINAL_CAPABILITIES = [
 	"session-notices",
 	"rotate",
 	"idle-exit",
+	REGISTRY_SNAPSHOT_CAPABILITY,
 ] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
@@ -129,7 +143,9 @@ function durableReceipt(line: Buffer): string | undefined {
 	if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) return;
 	const { role, synthetic, attribution, content } = entry.message;
 	if (role !== "user" || synthetic || attribution === "agent") return;
-	const body = Array.isArray(content) ? content.find(block => isRecord(block) && block.type === "text")?.text : content;
+	const body = Array.isArray(content)
+		? content.find(block => isRecord(block) && block.type === "text")?.text
+		: content;
 	if (typeof body === "string") return DURABLE_DELIVERY_TAG.exec(body.slice(body.lastIndexOf("\n") + 1))?.[1];
 }
 
@@ -262,7 +278,7 @@ export async function serveTerminalControl(
 	target: TerminalControlTarget,
 	root = getConfigRootDir(),
 	options: TerminalControlOptions = {},
-): Promise<() => void> {
+): Promise<TerminalControlHandle> {
 	const startupArgv = isCompiledBinary()
 		? [process.execPath, ...process.argv.slice(2)]
 		: [process.execPath, ...process.argv.slice(1)];
@@ -274,7 +290,9 @@ export async function serveTerminalControl(
 	};
 	const capabilities = (): readonly string[] => {
 		const available = TERMINAL_CAPABILITIES.filter(
-			capability => capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown),
+			capability =>
+				(capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown)) &&
+				(capability !== REGISTRY_SNAPSHOT_CAPABILITY || Boolean(target.registrySnapshot)),
 		);
 		return secretIntakeContext() ? [...available, "secret-intake"] : available;
 	};
@@ -290,21 +308,24 @@ export async function serveTerminalControl(
 	const subscribers = new Set<TerminalSocket>();
 	let closed = false;
 	let publishedSessionId = target.identity().sessionId;
+	let ownerGeneration = nonce;
 	let unsubscribe: (() => void) | undefined;
 	let refresh: NodeJS.Timeout | undefined;
 	let refreshing = false;
 	let publication: Promise<void> = Promise.resolve();
 	// No timer stays armed while no client is connected: a resting terminal wakes for no one. The
 	// owner poll runs only while a socket is open, the journal poll only while one is subscribed.
-	const reconcile = (): void => {
+	const reconcile = (): Promise<void> | undefined => {
 		if (closed || refreshing || publishedSessionId === target.identity().sessionId) return;
 		refreshing = true;
 		for (const socket of sockets) socket.destroy();
-		void publish()
-			.finally(() => {
+		return publish().then(
+			() => {
 				refreshing = false;
-			})
-			.catch(() => close());
+				return reconcile();
+			},
+			() => close(),
+		);
 	};
 	const armRefresh = (): void => {
 		if (refresh || closed) return;
@@ -615,6 +636,10 @@ export async function serveTerminalControl(
 							socket.destroy();
 							return;
 						}
+						if (request.op === "registrySnapshot" && id.length > MAX_REGISTRY_SNAPSHOT_TEXT) {
+							socket.destroy();
+							return;
+						}
 						clearTimeout(authDeadline);
 						if (
 							closed ||
@@ -625,6 +650,15 @@ export async function serveTerminalControl(
 						}
 						let result: unknown;
 						switch (request.op) {
+							case "registrySnapshot": {
+								if (!target.registrySnapshot) throw new Error("Registry snapshot unsupported");
+								if (request.ownerGeneration !== ownerGeneration)
+									throw new Error("Terminal owner generation changed; rediscover its owner");
+								const observation = target.registrySnapshot(publishedSessionId);
+								if (!observation) throw new Error("Registry snapshot unavailable");
+								result = { version: 1, sessionId: publishedSessionId, ownerGeneration, ...observation };
+								break;
+							}
 							case "subscribe": {
 								if (request.secretIntake !== undefined) {
 									const registration = request.secretIntake;
@@ -901,6 +935,7 @@ export async function serveTerminalControl(
 									...target.identity(),
 									pid: process.pid,
 									capabilities: capabilities(),
+									...(target.registrySnapshot ? { ownerGeneration } : {}),
 									...getLoadedBuildIdentity(),
 									argv: startupArgv,
 								};
@@ -926,8 +961,9 @@ export async function serveTerminalControl(
 						send(socket, { id, ok: false, error: String(error) });
 					}
 				};
-				// Readback and ack admission must not wait for a plain delivery on this socket.
+				// Read-only snapshots, readback and ack admission do not wait for a plain delivery.
 				if (
+					request?.op === "registrySnapshot" ||
 					request?.op === "deliveryCapacity" ||
 					request?.op === "deliveryStatus" ||
 					(request?.op === "deliver" && request.ack === true)
@@ -964,6 +1000,10 @@ export async function serveTerminalControl(
 			}
 			const identity = target.identity();
 			const credential = nextToken ?? token;
+			const generation =
+				nextToken !== undefined || identity.sessionId !== publishedSessionId
+					? crypto.randomUUID()
+					: ownerGeneration;
 			const build = getLoadedBuildIdentity();
 			const record: TerminalOwner = {
 				version: 1,
@@ -974,6 +1014,7 @@ export async function serveTerminalControl(
 				loadedVersion: build.version,
 				loadedBuildSha: build.buildSha,
 				capabilities: capabilities(),
+				...(target.registrySnapshot ? { ownerGeneration: generation } : {}),
 			};
 			await writeOwner(recordPath, record);
 			if (closed) {
@@ -981,6 +1022,7 @@ export async function serveTerminalControl(
 				throw new Error("Terminal control is closed");
 			}
 			token = credential;
+			ownerGeneration = generation;
 			const previousSessionId = publishedSessionId;
 			publishedSessionId = identity.sessionId;
 			if (previousSessionId !== identity.sessionId) {
@@ -1013,5 +1055,5 @@ export async function serveTerminalControl(
 	};
 	const cancelCleanup = postmortem.register(`terminal-control:${nonce}`, close);
 	server.onClose?.(close);
-	return close;
+	return Object.assign(close, { refreshIdentity: reconcile });
 }

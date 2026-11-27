@@ -36,15 +36,21 @@ async function request(owner: Owner, ...overrides: Record<string, unknown>[]) {
 	socket.on("error", reply.reject);
 	socket.on("close", () => reply.reject(new Error("closed")));
 	socket.on("connect", () => {
-		socket.write(overrides.map(fields => JSON.stringify({
-			version: 1,
-			id: "probe",
-			op: "registrySnapshot",
-			sessionId: owner.sessionId,
-			ownerGeneration: owner.ownerGeneration,
-			token: owner.token,
-			...fields,
-		})).join("\n") + "\n");
+		socket.write(
+			`${overrides
+				.map(fields =>
+					JSON.stringify({
+						version: 1,
+						id: "probe",
+						op: "registrySnapshot",
+						sessionId: owner.sessionId,
+						ownerGeneration: owner.ownerGeneration,
+						token: owner.token,
+						...fields,
+					}),
+				)
+				.join("\n")}\n`,
+		);
 	});
 	let frame = "";
 	socket.on("data", chunk => {
@@ -61,7 +67,9 @@ async function request(owner: Owner, ...overrides: Record<string, unknown>[]) {
 
 function register(input: Parameters<AgentRegistry["register"]>[0]) {
 	const registry = AgentRegistry.global();
-	cleanup.push(() => { registry.unregister(input.id); });
+	cleanup.push(() => {
+		registry.unregister(input.id);
+	});
 	return registry.register(input);
 }
 
@@ -70,7 +78,9 @@ async function interactive() {
 	let conversation = "snapshot-session";
 	const abortEntered = Promise.withResolvers<void>();
 	const abortRelease = Promise.withResolvers<void>();
-	cleanup.push(() => { abortRelease.resolve(); });
+	cleanup.push(() => {
+		abortRelease.resolve();
+	});
 	const manager = {
 		getSessionId: () => conversation,
 		getLeafId: () => "leaf",
@@ -88,15 +98,28 @@ async function interactive() {
 		},
 		model: { provider: "provider", id: "previous" },
 		*liveAdvisorStates() {
-			yield { name: "Review", slug: "review", model: { provider: "p", id: "review-model" }, isStreaming: true };
+			yield {
+				name: "Review",
+				slug: "review",
+				model: { provider: "p", id: "review-model" },
+				isStreaming: true,
+				lastActivity: 43,
+			};
 		},
 	};
 	register({ id: "snapshot-root", kind: "main", displayName: "Main", session: session as unknown as AgentSession });
 	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
-	cleanup.push(await startTerminalControl({ sessionManager: manager, session } as never));
+	const control = await startTerminalControl({ sessionManager: manager, session } as never);
+	cleanup.push(control);
 	return {
-		root, owner: await ownerAt(root), session, abortEntered: abortEntered.promise,
-		switchSession: () => { conversation = "after"; },
+		root,
+		control,
+		owner: await ownerAt(root),
+		session,
+		abortEntered: abortEntered.promise,
+		switchSession: () => {
+			conversation = "after";
+		},
 	};
 }
 
@@ -105,50 +128,115 @@ test("the terminal publishes only its own in-memory roster, including live advis
 	const before = Date.now();
 	session.model.id = "current";
 	const worker = register({
-		id: "snapshot-child", parentId: "snapshot-root", kind: "sub", displayName: "Worker",
-		session: { model: { provider: "p", id: "current-child" } } as AgentSession,
-		sessionFile: "/private/transcript", model: "stale-child", lastActivity: 42,
+		id: "snapshot-child",
+		parentId: "snapshot-root",
+		kind: "sub",
+		displayName: "Worker",
+		session: { model: { provider: "p", id: "current-child" }, *liveAdvisorStates() {} } as unknown as AgentSession,
+		sessionFile: "/private/transcript",
+		model: "stale-child",
+		lastActivity: 42,
 	});
 	worker.pendingApproval = { toolName: "private-tool", reason: "private-reason", since: 42 };
 	worker.waitingOnPeer = true;
-	register({ id: "snapshot-parked", parentId: worker.id, kind: "sub", displayName: "Parked", session: null, status: "parked", model: "stale-parked" });
-	register({ id: "snapshot-aborted", parentId: worker.id, kind: "sub", displayName: "Aborted", session: null, status: "aborted" });
-	register({ id: "snapshot-root/advisor:review", parentId: "snapshot-root", kind: "advisor", displayName: "Archived review", session: null, status: "parked" });
+	register({
+		id: "snapshot-parked",
+		parentId: worker.id,
+		kind: "sub",
+		displayName: "Parked",
+		session: null,
+		status: "parked",
+		model: "stale-parked",
+	});
+	register({
+		id: "snapshot-aborted",
+		parentId: worker.id,
+		kind: "sub",
+		displayName: "Aborted",
+		session: null,
+		status: "aborted",
+	});
+	register({
+		id: "snapshot-root/advisor:review",
+		parentId: "snapshot-root",
+		kind: "advisor",
+		displayName: "Archived review",
+		session: null,
+		status: "parked",
+	});
 	register({ id: "foreign-snapshot-root", kind: "main", displayName: "Foreign", scope: "foreign", session: null });
 	register({ id: "unattributed-snapshot", kind: "sub", displayName: "Unknown", session: null });
 
 	expect(owner.capabilities).toContain("registry-snapshot-v1");
 	expect(owner.ownerGeneration).toBeTruthy();
 	const frame = await request(owner, {});
-	expect(frame).toMatchObject({ ok: true, result: {
-		version: 1, sessionId: owner.sessionId, ownerGeneration: owner.ownerGeneration,
-		coverage: "complete", truncated: false,
-	} });
+	expect(frame).toMatchObject({
+		ok: true,
+		result: {
+			version: 1,
+			sessionId: owner.sessionId,
+			ownerGeneration: owner.ownerGeneration,
+			coverage: "complete",
+			truncated: false,
+		},
+	});
 	const result = frame.result!;
 	expect(result.observedAt).toBeWithin(before, Date.now() + 1);
 	const rows = result.agents as Record<string, unknown>[];
 	expect(rows.map(row => row.id).sort()).toEqual([
-		"snapshot-aborted", "snapshot-child", "snapshot-parked", "snapshot-root", "snapshot-root/advisor:review",
+		"snapshot-aborted",
+		"snapshot-child",
+		"snapshot-parked",
+		"snapshot-root",
+		"snapshot-root/advisor:review",
 	]);
-	expect(rows.find(row => row.id === "snapshot-root")).toMatchObject({ kind: "root", parentId: null, model: "provider/current", status: "idle", live: true });
-	expect(rows.find(row => row.id === worker.id)).toEqual({
-		id: worker.id, rootId: "snapshot-root", parentId: "snapshot-root", kind: "subagent", displayName: "Worker",
-		model: "p/current-child", status: "running", live: true, lastActivity: 42,
-		waitingOnPeer: true, blockedOnApproval: true,
+	expect(rows.find(row => row.id === "snapshot-root")).toMatchObject({
+		kind: "root",
+		parentId: null,
+		model: "provider/current",
+		status: "idle",
+		live: true,
 	});
-	expect(rows.find(row => row.id === "snapshot-root/advisor:review")).toMatchObject({ kind: "advisor", parentId: "snapshot-root", model: "p/review-model", live: true });
-	for (const id of ["snapshot-parked", "snapshot-aborted"]) expect(rows.find(row => row.id === id)).toMatchObject({ live: false, model: null });
+	expect(rows.find(row => row.id === worker.id)).toEqual({
+		id: worker.id,
+		rootId: "snapshot-root",
+		parentId: "snapshot-root",
+		kind: "subagent",
+		displayName: "Worker",
+		model: "p/current-child",
+		status: "running",
+		live: true,
+		lastActivity: 42,
+		waitingOnPeer: true,
+		blockedOnApproval: true,
+	});
+	expect(rows.find(row => row.id === "snapshot-root/advisor:review")).toMatchObject({
+		kind: "advisor",
+		parentId: "snapshot-root",
+		model: "p/review-model",
+		live: true,
+	});
+	for (const id of ["snapshot-parked", "snapshot-aborted"])
+		expect(rows.find(row => row.id === id)).toMatchObject({ live: false, model: null });
 	expect(JSON.stringify(result)).not.toMatch(/private|stale|foreign|unattributed/);
 });
 
 test("the socket rejects an invalid token, session, generation and detached owner", async () => {
-	const { owner, switchSession } = await interactive();
+	const { root, control, owner, switchSession } = await interactive();
 	await expect(request(owner, { token: "bad" })).rejects.toThrow();
 	expect(await request(owner, { sessionId: "different" })).toMatchObject({ ok: false });
 	expect(await request(owner, { ownerGeneration: "different" })).toMatchObject({ ok: false });
 	expect(await request(owner, {})).toMatchObject({ ok: true });
 	switchSession();
 	expect(await request(owner, {})).toMatchObject({ ok: false });
+	await control.refreshIdentity();
+	const rebound = await ownerAt(root);
+	expect(rebound.sessionId).toBe("after");
+	expect(rebound.ownerGeneration).not.toBe(owner.ownerGeneration);
+	expect(await request(rebound, { op: "ping" })).toMatchObject({
+		ok: true,
+		result: { sessionId: "after", ownerGeneration: rebound.ownerGeneration },
+	});
 });
 
 test("snapshot replies do not wait for an in-flight mutation on the same socket", async () => {
@@ -173,7 +261,14 @@ test("rotation publishes the new owner generation and token together", async () 
 test("large rosters return a bounded, explicitly partial projection", async () => {
 	const { owner } = await interactive();
 	for (let i = 0; i < 500; ++i) {
-		register({ id: `snapshot-bulk-${i}`, parentId: "snapshot-root", kind: "sub", displayName: "Worker", session: null, status: "parked" });
+		register({
+			id: `snapshot-bulk-${i}`,
+			parentId: "snapshot-root",
+			kind: "sub",
+			displayName: "Worker",
+			session: null,
+			status: "parked",
+		});
 	}
 	const { result, ok } = await request(owner, {});
 	expect(ok).toBe(true);
@@ -185,13 +280,18 @@ test("large rosters return a bounded, explicitly partial projection", async () =
 
 test("an unsupported terminal does not advertise or return an empty snapshot", async () => {
 	const root = await scratch();
-	cleanup.push(await serveTerminalControl({
-		identity: () => ({ sessionId: "unsupported", cwd: root, sessionFile: "" }),
-		deliver: async () => "started",
-		abort: async () => false,
-		history: () => [],
-		subscribe: () => () => {},
-	}, root));
+	cleanup.push(
+		await serveTerminalControl(
+			{
+				identity: () => ({ sessionId: "unsupported", cwd: root, sessionFile: "" }),
+				deliver: async () => "started",
+				abort: async () => false,
+				history: () => [],
+				subscribe: () => () => {},
+			},
+			root,
+		),
+	);
 	const owner = await ownerAt(root);
 	expect(owner.capabilities).not.toContain("registry-snapshot-v1");
 	expect(await request(owner, {})).toMatchObject({ ok: false });

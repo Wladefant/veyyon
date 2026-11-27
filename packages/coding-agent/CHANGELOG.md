@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Expose a bounded live agent roster through the session owner's authenticated terminal control endpoint ([Refs Wladefant/superboard#3039](https://github.com/Wladefant/superboard/issues/3039)).
+
 ### Fixed
 
 - Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).
