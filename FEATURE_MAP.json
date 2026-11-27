@@ -161,6 +161,19 @@
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1284",
       "risk": "medium",
       "components": ["ai", "Cloud Code Assist"]
+    },
+    "terminal-delivery-readback": {
+      "name": "Terminal delivery readback",
+      "description": "Report terminal queue capacity and confirm durable user entries by their stable delivery IDs.",
+      "entry_files": ["packages/coding-agent/src/launch/terminal-control.ts"],
+      "tests": [
+        "packages/coding-agent/test/a-terminal-control-acks-a-delivery-before-the-terminal-does-the-work.test.ts",
+        "packages/coding-agent/test/cli/terminal-control.test.ts",
+        "packages/coding-agent/test/a-telegram-delivery-trace-end-to-end.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/3473",
+      "risk": "high",
+      "components": ["coding-agent", "terminal-control"]
     }
   }
 }

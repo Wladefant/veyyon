@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Report terminal queue capacity while delivery is blocked. Keep durable Telegram input IDs separate from confirmed journal entries ([Refs Wladefant/superboard#3473](https://github.com/Wladefant/superboard/issues/3473)).
 - Show detached child startup phases in `job list` and `irc list`, even before the child registers. Measure transcript open and launch-grant publication separately ([Refs Wladefant/superboard#3081](https://github.com/Wladefant/superboard/issues/3081)).
 - Report when a detached child cannot receive IRC yet, with its job ID and confirmation that no message was buffered ([Refs Wladefant/superboard#3110](https://github.com/Wladefant/superboard/issues/3110)).
 - Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).
