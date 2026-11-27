@@ -159,7 +159,8 @@ Artifacts and side channels:
   - Missing-`yield` recovery sends up to three internal reminder prompts to the child session.
 
 ## Limits & Caps
-- Concurrency: one session-scoped `Semaphore` sized from `agent.maxConcurrency` bounds concurrent agents across parallel `task` calls: both async job bodies and the sync fallback acquire it. `#getSpawnSemaphore` resizes it on every acquire and release, so a mid-session settings change applies to queued work as well as to new spawns.
+- Concurrency: inline spawns and background jobs acquire a permit in `SpawnScheduler`. The semaphore is shared across the session tree when it has a budget group; otherwise the scheduler owns it. The scheduler applies `agent.maxConcurrency` on every acquire and release.
+  - The info log `agent permit wait` records one outcome (`admitted` or `cancelled`) for each finished permit wait. `waitMs` measures elapsed monotonic time in whole milliseconds from the acquire attempt until its outcome. `toolCallId`, `index`, and `detached` identify the item within its task call. An admitted permit does not mean the child session opened; see `agent launch timing` for later startup phases.
 - Idle TTL: `agent.idleTtlMs`, default 5 minutes. A positive millisecond value overrides it; `<= 0` disables parking and keeps idle sessions live until exit.
 - Per-agent output truncation: `MAX_OUTPUT_BYTES = 500_000` and `MAX_OUTPUT_LINES = 5000` in `packages/coding-agent/src/task/types.ts` (overridable via `VEYYON_TASK_MAX_OUTPUT_BYTES` / `VEYYON_TASK_MAX_OUTPUT_LINES`). Full raw output is still written to `<id>.md`.
 - Progress coalescing: `PROGRESS_COALESCE_MS = 150`; recent-output tail: `RECENT_OUTPUT_TAIL_BYTES = 8 * 1024` (last 8 non-empty lines).
