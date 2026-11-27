@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add optional terminal delivery provenance to `UserMessage` without changing the journal entry ID.
+
 ## [1.8.0] - 2026-11-05
 
 ### Added

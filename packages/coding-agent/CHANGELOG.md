@@ -12,6 +12,7 @@
 - Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
 - Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).
 - Report terminal queue capacity while delivery is blocked. Keep durable Telegram input IDs separate from confirmed journal entries ([Refs Wladefant/superboard#3473](https://github.com/Wladefant/superboard/issues/3473)).
+- Preserve terminal control delivery IDs in live user messages and saved sessions, and reject scheduler-attested requests without a valid ID ([Refs Wladefant/superboard#2823](https://github.com/Wladefant/superboard/issues/2823)).
 - Show detached child startup phases in `job list` and `irc list`, even before the child registers. Measure transcript open and launch-grant publication separately ([Refs Wladefant/superboard#3081](https://github.com/Wladefant/superboard/issues/3081)).
 - Report when a detached child cannot receive IRC yet, with its job ID and confirmation that no message was buffered ([Refs Wladefant/superboard#3110](https://github.com/Wladefant/superboard/issues/3110)).
 - Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).

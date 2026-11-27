@@ -9,7 +9,12 @@ import * as path from "node:path";
 import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import * as utils from "@veyyon/utils";
-import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
+import {
+	serveTerminalControl,
+	TerminalNotReadyError,
+	type TerminalControlTarget,
+	type TerminalOwner,
+} from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/launch/terminal-control-session";
 
 const cleanup: Array<() => void | Promise<void>> = [];
@@ -106,7 +111,7 @@ function connect(owner: TerminalOwner) {
 }
 
 async function serve(
-	deliver: (text: string) => Promise<string>,
+	deliver: TerminalControlTarget["deliver"],
 	sessionId: () => string = () => "busy",
 	options: { idle?: () => boolean; reserveExit?: () => void; shutdown?: () => void } = {},
 ) {
@@ -130,9 +135,9 @@ async function serve(
 }
 
 test("scheduler delivery requires an ID before either kind of acceptance", async () => {
-	const delivered: string[] = [];
-	const owner = await serve(async text => {
-		delivered.push(text);
+	const delivered: Array<{ text: string; provenance: unknown }> = [];
+	const owner = await serve(async (text, _mode, options) => {
+		delivered.push({ text, provenance: options?.provenance });
 		return "started";
 	});
 	for (const ack of [false, true]) {
@@ -147,10 +152,30 @@ test("scheduler delivery requires an ID before either kind of acceptance", async
 			expect(response).toMatchObject({ ok: false });
 		}
 	}
+	const messageId = "phone-throughput-0e34ee84534449da9e7812d206895331";
+	const answer = await rpc(owner, "deliver", {
+		text: "[operator-answer question=q1 event=e1] scheduled text",
+		mode: "auto",
+		origin: "scheduler",
+		messageId,
+		ack: true,
+	});
+	expect(answer.response).toMatchObject({ ok: false });
 	expect(delivered).toEqual([]);
 	const { response } = await rpc(owner, "deliver", { text: "scheduler notice", mode: "auto" });
 	expect(response).toMatchObject({ ok: true, result: "started" });
-	expect(delivered).toEqual(["scheduler notice"]);
+	expect(delivered).toEqual([{ text: "scheduler notice", provenance: undefined }]);
+	const accepted = await rpc(owner, "deliver", {
+		text: "scheduler notice",
+		mode: "auto",
+		origin: "scheduler",
+		messageId,
+	});
+	expect(accepted.response).toMatchObject({ ok: true, result: "started" });
+	expect(delivered.at(-1)).toEqual({
+		text: "scheduler notice",
+		provenance: { version: 1, origin: "scheduler", messageId, targetSessionId: owner.sessionId },
+	});
 });
 
 test("idleExit refuses queued work and reserves delivery before flushing the accepted exit", async () => {
@@ -693,7 +718,10 @@ test("a saturated route recovers in order on reconnect and reads back each durab
 		if (text.startsWith("input ")) queued.push(text);
 		return "queued";
 	});
-	const other = await serve(async () => "started", () => "other");
+	const other = await serve(
+		async () => "started",
+		() => "other",
+	);
 	const inputs = Array.from({ length: 68 }, (_, index) => {
 		const messageId = `telegram-${index.toString(16).padStart(64, "0")}`;
 		return { messageId, text: `input ${index} reçu\n[telegram-delivery id=${messageId}]`, mode: "auto", ack: true };

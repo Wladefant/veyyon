@@ -146,6 +146,15 @@ export interface DemotedReasoningSource {
 	model?: string;
 }
 
+/** Source metadata stamped by the terminal after it admits a control request. */
+export interface TerminalInputProvenance {
+	readonly version: 1;
+	/** Scheduler origin is attested by a trusted terminal caller, not a separately authenticated identity. */
+	readonly origin: "terminal" | "scheduler";
+	readonly messageId: string;
+	readonly targetSessionId: string;
+}
+
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent | VideoContent)[];
@@ -155,6 +164,8 @@ export interface UserMessage {
 	steering?: boolean;
 	/** Who initiated this message for billing/attribution semantics. */
 	attribution?: MessageAttribution;
+	/** Original terminal delivery identity, separate from the journal entry ID. */
+	provenance?: TerminalInputProvenance;
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	/**

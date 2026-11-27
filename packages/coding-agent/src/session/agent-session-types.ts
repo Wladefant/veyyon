@@ -18,6 +18,7 @@ import type {
 	Model,
 	ServiceTierByFamily,
 	SimpleStreamOptions,
+	TerminalInputProvenance,
 	ToolChoice,
 	VideoContent,
 } from "@veyyon/ai";
@@ -445,6 +446,7 @@ export interface PromptOptions {
 	skipCompactionCheck?: boolean;
 	/** Optional Telegram delivery trace metadata */
 	telegramTrace?: TelegramDeliveryTraceData;
+	provenance?: TerminalInputProvenance;
 }
 
 /** Options for AgentSession.followUp() */
@@ -457,11 +459,13 @@ export interface FollowUpOptions {
 	attribution?: MessageAttribution;
 	/** Optional Telegram delivery trace metadata */
 	telegramTrace?: TelegramDeliveryTraceData;
+	provenance?: TerminalInputProvenance;
 }
 /** Options for AgentSession.steer() */
 export interface SteerOptions {
 	/** Optional Telegram delivery trace metadata */
 	telegramTrace?: TelegramDeliveryTraceData;
+	provenance?: TerminalInputProvenance;
 }
 
 /** Result from a handoff operation. */

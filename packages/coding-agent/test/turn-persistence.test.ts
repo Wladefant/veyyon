@@ -86,6 +86,26 @@ describe("sessionMessagePersistenceKey", () => {
 		expect(sessionMessagePersistenceKey({ ...a, toolName: "edit" })).not.toBe(sessionMessagePersistenceKey(a));
 	});
 
+	test("identical terminal notices at the same time remain separate journal candidates", () => {
+		const provenance = {
+			version: 1,
+			origin: "scheduler",
+			targetSessionId: "session-a",
+			messageId: "notice-a",
+		} as const;
+		const first = { role: "user", content: "same text", timestamp: 1000, provenance } as const;
+		const second = { ...first, provenance: { ...provenance, messageId: "notice-b" } };
+		const persisted = sessionMessagePersistenceKey(first)!;
+		expect(sessionMessagePersistenceKey({ ...first, provenance: { ...provenance } })).toBe(persisted);
+		const pasted = { role: "user", content: first.content, timestamp: first.timestamp } as const;
+		expect(
+			planTurnPersistence(
+				[sessionMessagePersistenceKey(second), sessionMessagePersistenceKey(pasted)],
+				new Set([persisted]),
+			),
+		).toEqual({ kind: "ok", toPersist: [0, 1] });
+	});
+
 	test("user/developer identity discriminates on attribution, so a hook-injected user and a typed user at the same instant get distinct keys", () => {
 		// Old code keyed `${role}:${timestamp}` and collided two user messages
 		// posted in the same millisecond from different sources (typed vs hook),

@@ -468,6 +468,7 @@ export async function submitInteractiveInput(
 				images: input.images,
 				streamingBehavior,
 				telegramTrace: input.telegramTrace,
+				provenance: input.provenance,
 			});
 		}
 	} catch (error: unknown) {

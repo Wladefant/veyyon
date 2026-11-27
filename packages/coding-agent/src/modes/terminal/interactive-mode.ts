@@ -1721,6 +1721,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		display?: boolean;
 		streamingBehavior?: "steer" | "followUp";
 		telegramTrace?: TelegramDeliveryTraceData;
+		provenance?: SubmittedUserInput["provenance"];
 	}): SubmittedUserInput {
 		this.takeAtRestReading();
 		const submission: SubmittedUserInput = {
@@ -1731,6 +1732,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			display: input.display,
 			streamingBehavior: input.streamingBehavior,
 			telegramTrace: input.telegramTrace,
+			provenance: input.provenance,
 			cancelled: false,
 			started: false,
 		};
