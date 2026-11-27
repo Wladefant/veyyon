@@ -76,16 +76,7 @@ import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types"
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
-import {
-	attachTelegramTrace,
-	errorMessage,
-	logger,
-	postmortem,
-	prompt,
-	Snowflake,
-	type TelegramDeliveryTraceData,
-	withTimeout,
-} from "@veyyon/utils";
+import { attachTelegramTrace, errorMessage, logger, postmortem, prompt, Snowflake, withTimeout } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { clearToolCallInFlight, markToolCallInFlight, reportAbandonedToolCalls } from "@veyyon/utils/inflight-marker";
 import { type HeartbeatHandle, joinHeartbeat, reportSilentDeaths } from "@veyyon/utils/session-heartbeat";
@@ -4139,7 +4130,13 @@ export class AgentSession {
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		const message = options?.synthetic
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
-			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
+			: {
+					role: "user" as const,
+					content: userContent,
+					attribution: promptAttribution,
+					timestamp: Date.now(),
+					...(options?.provenance && { provenance: options.provenance }),
+				};
 		if (options?.telegramTrace) {
 			attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
 		}
@@ -4448,7 +4445,7 @@ export class AgentSession {
 		images: ImageContent[] | undefined,
 		videos: VideoContent[] | undefined,
 		mode: "steer" | "followUp",
-		options?: { telegramTrace?: TelegramDeliveryTraceData },
+		options?: SteerOptions,
 	): Promise<void> {
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
@@ -4469,6 +4466,7 @@ export class AgentSession {
 				content,
 				attribution: "user",
 				timestamp: Date.now(),
+				...(options?.provenance && { provenance: options.provenance }),
 			};
 			if (options?.telegramTrace) {
 				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
@@ -4482,6 +4480,7 @@ export class AgentSession {
 				steering: true,
 				attribution: "user",
 				timestamp: Date.now(),
+				...(options?.provenance && { provenance: options.provenance }),
 			};
 			if (options?.telegramTrace) {
 				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());

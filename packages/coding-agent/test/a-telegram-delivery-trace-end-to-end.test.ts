@@ -126,6 +126,26 @@ async function createInteractiveMode(session: AgentSession, cwd: string): Promis
 	return mode;
 }
 
+function observeUserMessages(session: AgentSession) {
+	const messages: unknown[] = [];
+	cleanup.push(
+		session.subscribe(event => {
+			if (event.type === "message_start" && event.message.role === "user") messages.push(event.message);
+		}),
+	);
+	return messages;
+}
+
+async function journalUserMessages(store: SessionManager) {
+	await store.flush();
+	return (await fs.readFile(store.getSessionFile()!, "utf8"))
+		.trimEnd()
+		.split("\n")
+		.map(line => JSON.parse(line))
+		.filter(row => row.type === "message" && row.message.role === "user")
+		.map(row => row.message);
+}
+
 describe("telegram delivery tracing end-to-end", () => {
 	it("traces all 5 delivery stages with fake provider and no prompt text leaked", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "trace-test-root-"));
@@ -174,6 +194,7 @@ describe("telegram delivery tracing end-to-end", () => {
 		});
 		cleanup.push(() => session.dispose());
 
+		const live = observeUserMessages(session);
 		const mode = await createInteractiveMode(session, tempDir);
 
 		const serverClose = await startTerminalControl(mode);
@@ -234,6 +255,9 @@ describe("telegram delivery tracing end-to-end", () => {
 			state: "delivered",
 			outcome: "started",
 		});
+		const provenance = { version: 1, origin: "terminal", messageId: "msg-trace-1", targetSessionId: owner.sessionId };
+		expect(live).toEqual([expect.objectContaining({ provenance })]);
+		expect(await journalUserMessages(store)).toEqual([expect.objectContaining({ provenance })]);
 
 		// Verify logged stages and exact order
 		const stages = loggedTraces.map(t => t.context.stage);
@@ -380,6 +404,7 @@ describe("telegram delivery tracing end-to-end", () => {
 		});
 		cleanup.push(() => session.dispose());
 
+		const live = observeUserMessages(session);
 		const mode = await createInteractiveMode(session, tempDir);
 
 		const serverClose = await startTerminalControl(mode);
@@ -440,6 +465,8 @@ describe("telegram delivery tracing end-to-end", () => {
 			result: { accepted: true, messageId: "msg-followup-1" },
 		});
 
+		await client.next(f => client.isDeliveryEvent(f, "msg-steer-1"));
+		await client.next(f => client.isDeliveryEvent(f, "msg-followup-1"));
 		// Release the tool execution now
 		signalFinishTool();
 
@@ -467,6 +494,16 @@ describe("telegram delivery tracing end-to-end", () => {
 			state: "delivered",
 			outcome: "queued",
 		});
+		const expected = [
+			expect.not.objectContaining({ provenance: expect.anything() }),
+			...["msg-steer-1", "msg-followup-1"].map(messageId =>
+				expect.objectContaining({
+					provenance: { version: 1, origin: "terminal", messageId, targetSessionId: owner.sessionId },
+				}),
+			),
+		];
+		expect(live).toEqual(expected);
+		expect(await journalUserMessages(store)).toEqual(expected);
 
 		// Exact lifecycle order checks
 		const steerRecords = loggedTraces.filter(t => t.context.traceId === "-100222333:7001:101");

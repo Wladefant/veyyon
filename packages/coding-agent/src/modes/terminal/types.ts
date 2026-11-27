@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CompactionOutcome } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ImageContent, Message, Usage, UsageReport } from "@veyyon/ai";
+import type { AssistantMessage, ImageContent, Message, TerminalInputProvenance, Usage, UsageReport } from "@veyyon/ai";
 import type { HostNotifier } from "@veyyon/host";
 import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { HistoryStorage } from "@veyyon/kernel/session/history-storage";
@@ -79,6 +79,7 @@ export type SubmittedUserInput = {
 	 *  background/continuation submits omit it and default to "followUp". */
 	streamingBehavior?: "steer" | "followUp";
 	telegramTrace?: TelegramDeliveryTraceData;
+	provenance?: TerminalInputProvenance;
 	cancelled: boolean;
 	started: boolean;
 };
@@ -356,6 +357,7 @@ export interface InteractiveModeContext {
 		display?: boolean;
 		streamingBehavior?: "steer" | "followUp";
 		telegramTrace?: TelegramDeliveryTraceData;
+		provenance?: TerminalInputProvenance;
 	}): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;

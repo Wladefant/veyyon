@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { TerminalInputProvenance } from "@veyyon/ai";
 import {
 	applyOwnerOnlyWindowsAcl,
 	atomicWriteFileWith,
@@ -15,6 +16,7 @@ import {
 	type TelegramDeliveryTraceData,
 } from "@veyyon/utils";
 import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
+import { operatorAnswerQuestionId } from "../session/operator-answer-inbox";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
@@ -42,6 +44,7 @@ export interface TerminalOwner {
 
 export interface TerminalDeliveryOptions {
 	telegramTrace?: TelegramDeliveryTraceData;
+	provenance?: TerminalInputProvenance;
 }
 
 export interface TerminalControlTarget {
@@ -798,13 +801,32 @@ export async function serveTerminalControl(
 										throw new Error("Invalid delivery");
 									}
 								}
-								const deliveryOptions: TerminalDeliveryOptions | undefined = telegramTrace
-									? { telegramTrace }
-									: undefined;
+								const scheduler = request.origin === "scheduler";
 								const messageId = typeof request.messageId === "string" ? request.messageId : "";
-								if ((request.ack === true && !messageId) || messageId.length > 128) {
+								if (
+									((request.ack === true || scheduler) && !messageId) ||
+									messageId.length > 128 ||
+									(scheduler &&
+										(/[^A-Za-z0-9._:-]/.test(messageId) ||
+											telegramTrace ||
+											operatorAnswerQuestionId(request.text) ||
+											DURABLE_DELIVERY_ID.test(messageId)))
+								) {
 									throw new Error("Invalid delivery");
 								}
+								const deliveryOptions: TerminalDeliveryOptions | undefined = messageId
+									? {
+											telegramTrace,
+											provenance: {
+												version: 1,
+												origin: scheduler ? "scheduler" : "terminal",
+												messageId,
+												targetSessionId: publishedSessionId,
+											},
+										}
+									: telegramTrace
+										? { telegramTrace }
+										: undefined;
 								if (!messageId) {
 									result = await runDelivery(request.sessionId, request.text, request.mode, deliveryOptions);
 									break;
@@ -1006,7 +1028,11 @@ export async function serveTerminalControl(
 		nextToken,
 		expectedToken,
 		onAttempt,
-	}: { nextToken?: string; expectedToken?: string; onAttempt?: (sessionId: string) => void } = {}): Promise<void> => {
+	}: {
+		nextToken?: string;
+		expectedToken?: string;
+		onAttempt?: (sessionId: string) => void;
+	} = {}): Promise<void> => {
 		const run = publication.then(async () => {
 			if (closed) throw new Error("Terminal control is closed");
 			if (expectedToken !== undefined && expectedToken !== token) {

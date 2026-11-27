@@ -188,6 +188,27 @@
       "risk": "high",
       "components": ["coding-agent", "terminal-control"]
     },
+    "terminal-input-provenance": {
+      "name": "Terminal input provenance",
+      "description": "Keep the admitted delivery ID on live user messages and journal rows without inferring origin from pasted text.",
+      "entry_files": [
+        "contracts/model/src/message.ts",
+        "packages/coding-agent/src/launch/terminal-control.ts",
+        "packages/coding-agent/src/launch/terminal-control-session.ts",
+        "packages/coding-agent/src/main.ts",
+        "packages/coding-agent/src/modes/terminal/interactive-mode.ts",
+        "packages/coding-agent/src/session/agent-session.ts",
+        "packages/coding-agent/src/session/turn-persistence.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/a-terminal-control-acks-a-delivery-before-the-terminal-does-the-work.test.ts",
+        "packages/coding-agent/test/a-telegram-delivery-trace-end-to-end.test.ts",
+        "packages/coding-agent/test/turn-persistence.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/2823",
+      "risk": "medium",
+      "components": ["coding-agent", "terminal-control", "session"]
+    },
     "session-stderr-retention": {
       "name": "Supervised child stderr retention",
       "description": "Bound new stderr captures across child generations without mutating live segments or recent incident evidence.",

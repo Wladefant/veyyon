@@ -33,6 +33,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
  *   per execution; toolName guards against synthetic reuse).
  * - `user` / `developer` — timestamp + attribution (attribution distinguishes
  *   user-typed vs hook-injected at the same wall-clock millisecond).
+ *   Terminal user messages also include the accepted delivery identity.
  * - `fileMention` — timestamp.
  *
  * Returns `undefined` for message roles that are not persisted through this
@@ -53,6 +54,11 @@ export function sessionMessagePersistenceKey(message: AgentMessage): string | un
 		case "toolResult":
 			return `toolResult:${message.timestamp}:${message.toolCallId}:${message.toolName}`;
 		case "user":
+			if (message.provenance) {
+				const { version, origin, targetSessionId, messageId } = message.provenance;
+				return `user:terminal:${JSON.stringify([message.timestamp, message.attribution, version, origin, targetSessionId, messageId])}`;
+			}
+			return `user:${message.timestamp}:${message.attribution ?? ""}`;
 		case "developer":
 			return `${message.role}:${message.timestamp}:${message.attribution ?? ""}`;
 		case "fileMention":

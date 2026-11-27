@@ -198,17 +198,17 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<Termi
 			if (answer !== undefined) return answer;
 			if (mode.session.isStreaming) {
 				if (behavior === "followUp") {
-					await mode.session.followUp(text, undefined, undefined, { telegramTrace: options?.telegramTrace });
+					await mode.session.followUp(text, undefined, options);
 					return "queued";
 				}
-				await mode.session.steer(text, undefined, undefined, { telegramTrace: options?.telegramTrace });
+				await mode.session.steer(text, options);
 				return "steered";
 			}
 			const submit = mode.onInputCallback;
 			if (!submit) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
 			// A promise resolver accepts only one input. Reserve it synchronously before acknowledging.
 			mode.onInputCallback = undefined;
-			submit(mode.startPendingSubmission({ text, telegramTrace: options?.telegramTrace }));
+			submit(mode.startPendingSubmission({ text, ...options }));
 			return "started";
 		},
 		async abort() {
