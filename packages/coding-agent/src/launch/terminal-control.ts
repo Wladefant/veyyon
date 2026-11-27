@@ -319,15 +319,18 @@ export async function serveTerminalControl(
 		if (closed || refreshing || publishedSessionId === target.identity().sessionId) return;
 		refreshing = true;
 		for (const socket of sockets) socket.destroy();
-		return publish().then(
+		let attemptedSessionId: string | undefined;
+		return publish({ onAttempt: sessionId => (attemptedSessionId = sessionId) }).then(
 			() => {
 				refreshing = false;
 				return reconcile();
 			},
 			() => {
-				// Keep listening. Requests for the old session still fail the identity check.
-				// A later refresh can retry without keeping a clientless timer alive.
+				// Keep listening. Publish a newer session, but do not retry the failed one here.
 				refreshing = false;
+				if (!closed && attemptedSessionId !== undefined && attemptedSessionId !== target.identity().sessionId) {
+					return reconcile();
+				}
 			},
 		);
 	};
@@ -861,7 +864,10 @@ export async function serveTerminalControl(
 								result = await target.abort();
 								break;
 							case "rotate":
-								await publish(crypto.randomBytes(32).toString("hex"), request.token);
+								await publish({
+									nextToken: crypto.randomBytes(32).toString("hex"),
+									expectedToken: request.token,
+								});
 								for (const peer of sockets) {
 									if (peer !== socket) peer.destroy();
 								}
@@ -996,13 +1002,18 @@ export async function serveTerminalControl(
 				},
 			);
 		});
-	const publish = (nextToken?: string, expectedToken?: string): Promise<void> => {
+	const publish = ({
+		nextToken,
+		expectedToken,
+		onAttempt,
+	}: { nextToken?: string; expectedToken?: string; onAttempt?: (sessionId: string) => void } = {}): Promise<void> => {
 		const run = publication.then(async () => {
 			if (closed) throw new Error("Terminal control is closed");
 			if (expectedToken !== undefined && expectedToken !== token) {
 				throw new Error("Terminal credential changed; rediscover its owner");
 			}
 			const identity = target.identity();
+			onAttempt?.(identity.sessionId);
 			const credential = nextToken ?? token;
 			const generation =
 				nextToken !== undefined || identity.sessionId !== publishedSessionId
