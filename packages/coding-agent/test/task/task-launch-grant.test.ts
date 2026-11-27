@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
+import { createMockModel } from "@veyyon/ai/providers/mock";
+import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -13,6 +15,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { withJournalLock } from "@veyyon/kernel/session/session-storage";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
 import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
@@ -109,6 +112,103 @@ describe("task launch grants", () => {
 		await root.flush();
 		expect(await receipts(rootFile)).toEqual(persisted);
 	});
+
+	it("passes the task-spawned builder's receipt identity to a subprocess from Python eval", async () => {
+		const agentDir = await fs.promises.mkdtemp(`${rootFile}.fixture-`);
+		const auth = await isolatedAuthStorage(agentDir);
+		auth.setRuntimeApiKey("openai", "test-key");
+		const builder = {
+			name: "build-sol-medium",
+			description: "Offline builder fixture",
+			source: "bundled" as const,
+			systemPrompt: "Run the identity probe, then yield.",
+			tools: ["eval", "yield"],
+		};
+		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [builder], projectAgentsDir: null });
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "eval-identity",
+							name: "eval",
+							arguments: {
+								language: "py",
+								code: [
+									"import subprocess, sys",
+									"probe = 'import os, json; print(json.dumps([os.getenv(k) for k in (\"VEYYON_AGENT_ID\", \"VEYYON_SESSION_FILE\")]))'",
+									"print(subprocess.check_output([sys.executable, '-c', probe], text=True).strip())",
+								].join("\n"),
+							},
+						},
+					],
+					stopReason: "toolUse",
+				},
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "yield-identity",
+							name: "yield",
+							arguments: { result: { data: { ok: true } } },
+						},
+					],
+					stopReason: "toolUse",
+				},
+			],
+		});
+		const create = sdk.createAgentSession;
+		const { session: parent } = await create({
+			cwd: agentDir,
+			agentDir,
+			sessionManager: root,
+			authStorage: auth,
+			settings: Settings.isolated({
+				"agent.batch": true,
+				"async.enabled": false,
+				"tools.approvalMode": "yolo",
+			}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			toolNames: ["task"],
+			disableExtensionDiscovery: true,
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+		});
+		const children: typeof parent[] = [];
+		try {
+			vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
+				const created = await create(options);
+				children.push(created.session);
+				created.session.agent.streamFn = mock.stream;
+				return created;
+			});
+			const result = await parent.getToolByName("task")!.execute("builder", {
+				context: "Read the identity handed to a subprocess. Do not contact GitHub.",
+				tasks: [{ ...lane, agent: builder.name, grants }],
+			});
+			expect(result.details).toMatchObject({ results: [expect.objectContaining({ exitCode: 0 })] });
+			const [receipt] = await receipts(rootFile);
+			expect(receipt).toMatchObject({ agentId: lane.name, grants });
+			const reply = mock.calls[1]?.context.messages.find(
+				message => message.role === "toolResult" && message.toolCallId === "eval-identity",
+			);
+			const output = reply?.content.find(block => block.type === "text");
+			expect(output?.text).toContain(
+				`[${JSON.stringify(receipt.agentId)}, ${JSON.stringify(receipt.sessionFile)}]`,
+			);
+		} finally {
+			for (const child of children) await child.dispose();
+			await parent.dispose();
+			auth.close();
+			await fs.promises.rm(agentDir, { recursive: true, force: true });
+		}
+	}, 30_000);
 
 	it("appends durable grant receipts without rewriting the existing root journal while its lock is held", async () => {
 		root.appendCustomEntry("large-parent", { payload: "x".repeat(1024 * 1024) });
