@@ -12,14 +12,18 @@ import {
 	type ShellOptions,
 	type ShellRunResult,
 } from "@veyyon/natives";
-import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
-import { ProducerOutputGuard } from "../secrets/producer-output";
+import { hasOversizedLine, ProducerOutputGuard } from "../secrets/producer-output";
 import { sessionCpuLimit } from "../session/cpu-limit";
-import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
 import {
-	type OutputArtifactError,
+	DEFAULT_MAX_BYTES,
+	LIVE_OUTPUT_INTERVAL_MS,
+	OutputSink,
+	type OutputSummary,
+} from "../session/streaming-output";
+import {
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
 	resolveOutputSinkWindow,
@@ -84,8 +88,7 @@ export interface BashExecutorOptions {
 	) => Promise<string | undefined>;
 }
 
-export interface BashResult {
-	output: string;
+export interface BashResult extends OutputSummary {
 	exitCode: number | undefined;
 	/**
 	 * The signal that killed the command, when it died from one.
@@ -99,14 +102,6 @@ export interface BashResult {
 	cancelled: boolean;
 	outputIncomplete?: boolean;
 	timedOut?: boolean;
-	truncated: boolean;
-	totalLines: number;
-	totalBytes: number;
-	outputLines: number;
-	outputBytes: number;
-	artifactId?: string;
-	artifactElidedBytes?: number;
-	artifactError?: OutputArtifactError;
 	workingDir?: string;
 }
 
@@ -528,6 +523,9 @@ async function spliceMinimizedOutput(
 	redactOutput?: (text: string) => string,
 ): Promise<void> {
 	if (!minimized || minimized.text === minimized.originalText) return;
+	// Wide records use the guarded stream for both capture and omission notices.
+	// Re-saving the minimizer snapshot could advertise a record the guard withheld.
+	if (hasOversizedLine(minimized.originalText)) return;
 	sink.replace(minimized.text);
 	if (!onMinimizedSave) return;
 	const artifactId = await onMinimizedSave(new ProducerOutputGuard(redactOutput).sanitize(minimized.originalText), {
@@ -618,7 +616,8 @@ async function runBash(
 	// Output sink for truncation and artifact handling. sink.push() is synchronous: buffer management,
 	// counters and onChunk all run inline, and artifact file writes run asynchronously inside the sink.
 	const sink = new OutputSink({
-		outputGuard: new ProducerOutputGuard(options?.redactOutput),
+		outputGuard: ProducerOutputGuard.forShellCapture(options?.redactOutput),
+		spillWideRecords: true,
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,

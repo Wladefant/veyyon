@@ -8,7 +8,7 @@ export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from 
 
 import { formatBytes } from "@veyyon/utils/format";
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
-import { ProducerOutputGuard } from "../secrets/producer-output";
+import { hasOversizedLine, ProducerOutputGuard } from "../secrets/producer-output";
 import { currentProducerSecretOwner } from "../secrets/producer-owner";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 
@@ -83,6 +83,8 @@ export interface OutputSummary {
 	columnMax?: number;
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
+	/** The guarded capture saw a line above the normal producer record limit. */
+	wideRecord?: boolean;
 	/**
 	 * Bytes elided from the middle of the on-disk artifact when the artifact
 	 * cap was exceeded. Present only when artifact truncation occurred.
@@ -101,6 +103,8 @@ export interface OutputSinkOptions {
 	outputGuard?: ProducerOutputGuard;
 	artifactPath?: string;
 	artifactId?: string;
+	/** Spill approved wide lines even when the inline window could hold them. */
+	spillWideRecords?: boolean;
 	/** Tail buffer budget (bytes). Default DEFAULT_MAX_BYTES. */
 	spillThreshold?: number;
 	/**
@@ -904,6 +908,8 @@ export class OutputSink {
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
 	readonly #outputGuard?: ProducerOutputGuard;
+	readonly #spillWideRecords: boolean;
+	#wideRecord = false;
 
 	// Optional artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink
 	// owns a head budget + a rolling tail buffer; once the head is closed,
@@ -928,6 +934,7 @@ export class OutputSink {
 			artifactPath,
 			artifactId,
 			spillThreshold = DEFAULT_MAX_BYTES,
+			spillWideRecords = false,
 			headBytes = 0,
 			maxColumns = 0,
 			onChunk,
@@ -940,6 +947,7 @@ export class OutputSink {
 		this.#outputGuard =
 			options?.outputGuard ?? (producerOwner ? new ProducerOutputGuard(producerOwner.redact) : undefined);
 		this.#artifactId = artifactId;
+		this.#spillWideRecords = spillWideRecords;
 		this.#spillThreshold = spillThreshold;
 		this.#headLimit = Math.max(0, headBytes);
 		this.#maxColumns = Math.max(0, maxColumns);
@@ -985,6 +993,8 @@ export class OutputSink {
 		this.#partialEscape = partial;
 		if (head.length === 0) return;
 		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
+		const wideRecord = this.#spillWideRecords && hasOversizedLine(chunk);
+		this.#wideRecord ||= wideRecord;
 		const inline =
 			options?.inline === undefined ? undefined : (this.#outputGuard?.sanitize(options.inline) ?? options.inline);
 		const substituted = inline !== undefined;
@@ -1027,7 +1037,7 @@ export class OutputSink {
 		// prior chunk already opened the artifact.
 		if (
 			this.#artifactPath &&
-			(this.#file != null || substituted || cappedThisChunk || this.#willOverflow(cappedBytes))
+			(this.#file != null || wideRecord || substituted || cappedThisChunk || this.#willOverflow(cappedBytes))
 		) {
 			this.#writeToFile(chunk);
 		}
@@ -1627,6 +1637,7 @@ export class OutputSink {
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
 			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,
 			artifactId: hasArtifactError ? undefined : this.#file?.artifactId,
+			...(this.#wideRecord ? { wideRecord: true } : {}),
 			artifactElidedBytes: artifactElidedBytes && artifactElidedBytes > 0 ? artifactElidedBytes : undefined,
 			artifactError: this.#artifactError,
 		};
