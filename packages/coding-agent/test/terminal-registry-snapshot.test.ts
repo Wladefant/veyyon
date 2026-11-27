@@ -107,7 +107,13 @@ async function interactive() {
 			};
 		},
 	};
-	register({ id: "snapshot-root", kind: "main", displayName: "Main", session: session as unknown as AgentSession });
+	register({
+		id: "snapshot-root",
+		kind: "main",
+		displayName: "Main",
+		scope: manager.getSessionId(),
+		session: session as unknown as AgentSession,
+	});
 	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
 	const control = await startTerminalControl({ sessionManager: manager, session } as never);
 	cleanup.push(control);

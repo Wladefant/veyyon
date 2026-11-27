@@ -1365,6 +1365,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.editor.hasEarlyActions()) await this.#selectors().catch(() => undefined);
 		this.#inputController.drainEarlySubmissions();
 		this.#closeTerminalControl = await startTerminalControl(this);
+		// Early input can attach a new session while the first owner record is being written.
+		void this.#closeTerminalControl.refreshIdentity();
 	}
 
 	/** Themes already warned about an unhonored `always`, so the log is not repeated. */
