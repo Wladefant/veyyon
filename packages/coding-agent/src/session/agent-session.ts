@@ -286,6 +286,7 @@ import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
 import { isTerminalYieldToolResult, YieldTracker } from "./runtime/yield-tracker";
 import { SessionSpendLedger } from "./session-spend";
+import { withdrawTerminalSteering } from "./terminal-input";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
 import type { VibeModeState } from "./vibe-runtime";
 
@@ -4592,7 +4593,10 @@ export class AgentSession {
 		steering: RestoredQueuedMessage[];
 		followUp: RestoredQueuedMessage[];
 	} {
-		return this.#queue.clear(options);
+		const restored = this.#queue.clear(options);
+		withdrawTerminalSteering(this.sessionManager, restored.steering);
+		withdrawTerminalSteering(this.sessionManager, restored.followUp);
+		return restored;
 	}
 
 	/** Number of pending displayable messages; see {@link QueuedMessages.count}. Feeds
@@ -4610,7 +4614,9 @@ export class AgentSession {
 	 * dequeue keybinding to restore messages to the editor one at a time.
 	 */
 	popLastQueuedMessage(): RestoredQueuedMessage | undefined {
-		return this.#queue.popLast();
+		const message = this.#queue.popLast();
+		if (message) withdrawTerminalSteering(this.sessionManager, [message]);
+		return message;
 	}
 
 	get skillsSettings(): SkillsSettings | undefined {

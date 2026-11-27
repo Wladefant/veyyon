@@ -8,9 +8,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import * as utils from "@veyyon/utils";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/launch/terminal-control-session";
+import { withdrawTerminalSteering } from "../src/session/terminal-input";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -294,6 +296,61 @@ test("a request without ack keeps the original reply, and a bad message id is re
 	});
 	expect((await rpc(owner, "deliver", { text: "x", mode: "auto", ack: true })).response.ok).toBe(false);
 	expect((await rpc(owner, "deliver", { text: "x", mode: "auto", ack: true, messageId: "" })).response.ok).toBe(false);
+});
+
+test("replays accepted unconsumed Telegram steering in order after reopening its journal", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-steer-recovery-"));
+	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
+	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
+	let manager = SessionManager.create(root, root);
+	cleanup.push(() => manager.close());
+	const steered: string[] = [];
+	let refuseSteer = true;
+	const mode = {
+		get sessionManager() {
+			return manager;
+		},
+		session: {
+			isStreaming: true,
+			steer: async (text: string) => {
+				if (refuseSteer && text.startsWith("steer 2\n")) throw new Error("Queue unavailable");
+				steered.push(text);
+			},
+		},
+		isShuttingDown: false,
+		isInitialized: true,
+	};
+	const start = async () => {
+		const close = await startTerminalControl(mode as never);
+		cleanup.push(close);
+		return { close, owner: await readOwner(root) };
+	};
+	const deliveries = ["a", "b", "c", "d"].map((letter, i) => {
+		const messageId = `telegram-${letter.repeat(64)}`;
+		return { messageId, text: `steer ${i + 1}\n[telegram-delivery id=${messageId}]` };
+	});
+	const first = await start();
+	for (const delivery of deliveries) {
+		const result = (await rpc(first.owner, "deliver", { ...delivery, mode: "steer" })).response;
+		expect(result).toMatchObject({ ok: true, result: delivery === deliveries[1] ? "queued" : "steered" });
+	}
+	expect(steered).toEqual([deliveries[0].text, deliveries[2].text, deliveries[3].text]);
+	manager.appendMessage({ role: "user", content: deliveries[0].text, timestamp: Date.now() });
+	withdrawTerminalSteering(manager, [deliveries[3]]);
+	await manager.ensureOnDisk();
+	const file = manager.getSessionFile()!;
+	await manager.close();
+	first.close();
+	steered.length = 0;
+	refuseSteer = false;
+	manager = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
+	const reopened = await start();
+	expect(steered).toEqual(deliveries.slice(1, 3).map(delivery => delivery.text));
+	const retry = await rpc(reopened.owner, "deliver", { ...deliveries[1], mode: "steer" });
+	expect(retry.response).toMatchObject({ ok: true, result: "duplicate" });
+	const withdrawnRetry = await rpc(reopened.owner, "deliver", { ...deliveries[3], mode: "steer" });
+	expect(withdrawnRetry.response).toMatchObject({ ok: true, result: "duplicate" });
+	expect(steered).toHaveLength(2);
 });
 
 test("history converts only new entries on a leaf change, and the frame stays bounded", async () => {
