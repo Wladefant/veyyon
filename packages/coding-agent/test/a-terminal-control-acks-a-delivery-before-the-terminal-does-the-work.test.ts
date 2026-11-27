@@ -11,8 +11,8 @@ import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/s
 import * as utils from "@veyyon/utils";
 import {
 	serveTerminalControl,
-	TerminalNotReadyError,
 	type TerminalControlTarget,
+	TerminalNotReadyError,
 	type TerminalOwner,
 } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/launch/terminal-control-session";
