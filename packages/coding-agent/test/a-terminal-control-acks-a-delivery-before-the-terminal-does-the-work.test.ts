@@ -305,6 +305,7 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 	let manager = SessionManager.create(root, root);
 	cleanup.push(() => manager.close());
 	const steered: string[] = [];
+	let refuseSteer = true;
 	const mode = {
 		get sessionManager() {
 			return manager;
@@ -312,6 +313,7 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 		session: {
 			isStreaming: true,
 			steer: async (text: string) => {
+				if (refuseSteer && text.startsWith("steer 2\n")) throw new Error("Queue unavailable");
 				steered.push(text);
 			},
 		},
@@ -330,9 +332,9 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 	const first = await start();
 	for (const delivery of deliveries) {
 		const result = (await rpc(first.owner, "deliver", { ...delivery, mode: "steer" })).response;
-		expect(result).toMatchObject({ ok: true, result: "steered" });
+		expect(result).toMatchObject({ ok: true, result: delivery === deliveries[1] ? "queued" : "steered" });
 	}
-	expect(steered).toEqual(deliveries.map(delivery => delivery.text));
+	expect(steered).toEqual([deliveries[0].text, deliveries[2].text, deliveries[3].text]);
 	manager.appendMessage({ role: "user", content: deliveries[0].text, timestamp: Date.now() });
 	withdrawTerminalSteering(manager, [deliveries[3]]);
 	await manager.ensureOnDisk();
@@ -340,6 +342,7 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 	await manager.close();
 	first.close();
 	steered.length = 0;
+	refuseSteer = false;
 	manager = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
 	const reopened = await start();
 	expect(steered).toEqual(deliveries.slice(1, 3).map(delivery => delivery.text));

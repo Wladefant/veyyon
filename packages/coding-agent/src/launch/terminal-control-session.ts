@@ -198,11 +198,11 @@ function createSteeringInbox(mode: InteractiveMode) {
 			text: string,
 			behavior: PendingSteering["mode"],
 			options?: TerminalDeliveryOptions,
-		): Promise<boolean> {
+		): Promise<"recorded" | "duplicate" | "bypass"> {
 			if (mode.sessionManager.getSessionId() !== sessionId || mode.isShuttingDown || !mode.isInitialized)
 				throw new TerminalNotReadyError("Terminal is not ready to accept steering");
 			// Answers have their own journal. Do not replay terminal commands as model input.
-			if (operatorAnswerQuestionId(text) || /^[!/]/.test(text.trimStart())) return false;
+			if (operatorAnswerQuestionId(text) || /^[!/]/.test(text.trimStart())) return "bypass";
 			const owner = mode.sessionManager;
 			if (owner !== journal) {
 				journal = owner;
@@ -210,7 +210,7 @@ function createSteeringInbox(mode: InteractiveMode) {
 				verified = false;
 			}
 			if (!verified && !refresh()) throw new TerminalNotReadyError("Cannot verify terminal steering custody");
-			if (replayed.has(messageId) || withdrawn.has(messageId)) return true;
+			if (replayed.has(messageId) || withdrawn.has(messageId)) return "duplicate";
 			const previous = pending.get(messageId);
 			if (previous && (previous.text !== text || previous.mode !== behavior)) {
 				throw new Error("Terminal delivery ID already has a different pending input");
@@ -234,9 +234,7 @@ function createSteeringInbox(mode: InteractiveMode) {
 			} catch {
 				throw new TerminalNotReadyError("Terminal could not persist steering");
 			}
-			if (mode.sessionManager !== owner || owner.getSessionId() !== sessionId)
-				throw new Error("Terminal changed sessions while persisting steering");
-			return false;
+			return "recorded";
 		},
 		checkStall() {
 			if (mode.sessionManager !== journal || !pending.size || !refresh()) return;

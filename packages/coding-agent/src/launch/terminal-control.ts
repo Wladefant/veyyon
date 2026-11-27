@@ -54,7 +54,7 @@ export interface TerminalControlTarget {
 		text: string,
 		mode: "auto" | "steer" | "followUp",
 		options?: TerminalDeliveryOptions,
-	): Promise<boolean>;
+	): Promise<"recorded" | "duplicate" | "bypass">;
 	abort(): Promise<boolean>;
 	isIdle?(): boolean;
 	reserveExit?(): void;
@@ -531,22 +531,27 @@ export async function serveTerminalControl(
 			if (closed || sessionId !== target.identity().sessionId) {
 				throw new TerminalSessionChangedError("Terminal session detached or changed; message not delivered");
 			}
-			const duplicate =
+			const custody =
 				acceptance && durableId
 					? await target.recordSteering?.(sessionId, durableId, text, mode, deliveryOptions)
-					: false;
+					: undefined;
 			acceptance?.resolve();
-			if (duplicate) return "duplicate";
+			if (custody === "duplicate") return "duplicate";
 			if (trace && acceptance) logTelegramDeliveryTrace(trace, { stage: "session_acceptance", sessionId });
 			for (let attempt = 0; ; attempt++) {
 				// The session may have changed since the message was accepted. Never deliver it to another one.
 				if (closed || sessionId !== target.identity().sessionId) {
+					if (custody === "recorded") return "queued";
 					throw new TerminalSessionChangedError("Terminal session detached or changed; message not delivered");
 				}
 				try {
 					return await target.deliver(text, mode, deliveryOptions);
 				} catch (error) {
-					if (!(error instanceof TerminalNotReadyError) || attempt >= NOT_READY_RETRIES) throw error;
+					if (!(error instanceof TerminalNotReadyError) || attempt >= NOT_READY_RETRIES) {
+						// The journal still owns accepted input. Report queued, not a rejection that invites a new ID.
+						if (custody === "recorded") return "queued";
+						throw error;
+					}
 					await Bun.sleep(NOT_READY_RETRY_MS);
 				}
 			}

@@ -13,7 +13,7 @@
 import { statSync } from "node:fs";
 import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { clamp, errorMessage, logger } from "@veyyon/utils";
+import { clamp, errorMessage, isRecord, logger } from "@veyyon/utils";
 import type { AgentSession } from "../session/agent-session";
 import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
 import { TOOL } from "../tools/core/builtin-names";
@@ -595,14 +595,22 @@ export class AgentLifecycleManager {
 				const branch = child.getBranch();
 				for (let i = branch.length - 1; i >= 0; i--) {
 					const entry = branch[i];
-					if (entry.type === "custom" && entry.customType === "irc:continuation-phase") break;
+					if (
+						(entry.type === "custom" && entry.customType === "irc:continuation-phase") ||
+						(entry.type === "custom_message" &&
+							(entry.customType === "irc:incoming" || entry.customType === "task:continuation"))
+					) {
+						break;
+					}
 					if (entry.type !== "message") continue;
 					if (entry.message.role === "user") break;
 					if (entry.message.role !== "toolResult" || entry.message.toolName !== TOOL.yield) continue;
 					const materialized = readColdEntry(entry) ?? entry;
 					if (materialized.type !== "message" || materialized.message.role !== "toolResult") continue;
 					const { toolName, isError, details } = materialized.message;
-					if (isTerminalYieldToolResult({ toolName, isError, result: { details } })) return "completed";
+					if (isTerminalYieldToolResult({ toolName, isError, result: { details } })) {
+						return isRecord(details) && details.status === "aborted" ? "cancelled" : "completed";
+					}
 				}
 			}
 			if (

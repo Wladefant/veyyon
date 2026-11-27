@@ -901,6 +901,26 @@ describe("AgentLifecycleManager", () => {
 			expect(parentSession.customMessages()).toEqual([]);
 			expect(child.terminalOutcome).toBe("completed");
 			expect(registry.get("AcceptedChild")).toBeUndefined();
+
+			// A peer wake is new work, even if it did not write a parent continuation phase.
+			const resumed = await SessionManager.open(sessionFile, undefined, undefined, { suppressBreadcrumb: true });
+			try {
+				resumed.appendCustomMessageEntry("irc:incoming", "New peer work", false, { relation: "peer" }, "agent");
+				await resumed.flush();
+			} finally {
+				await resumed.close();
+			}
+			const peerWake = registry.register({
+				id: "AcceptedChild",
+				displayName: "task",
+				kind: "sub",
+				parentId: "AcceptedParent",
+				session: null,
+				sessionFile,
+				status: "parked",
+			});
+			await lifecycle.prune("AcceptedChild");
+			expect(peerWake.terminalOutcome).toBe("stalled");
 		} finally {
 			await transcript.close();
 			temp.removeSync();
