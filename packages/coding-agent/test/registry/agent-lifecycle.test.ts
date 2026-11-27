@@ -859,6 +859,53 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get("Unfinished")).toBeUndefined();
 	});
 
+	it("reconciles a pruned child against its durable accepted result before reporting it stalled", async () => {
+		const temp = TempDir.createSync("pruned-accepted-result-");
+		const transcript = SessionManager.create(temp.path(), temp.path());
+		try {
+			transcript.appendMessage({ role: "user", content: "do the work", timestamp: 1 });
+			transcript.appendMessage({
+				role: "toolResult",
+				toolCallId: "yield-1",
+				toolName: "yield",
+				content: [{ type: "text", text: "Result submitted." }],
+				details: { status: "success", data: { ok: true } },
+				isError: false,
+				timestamp: 2,
+			});
+			await transcript.flush();
+			const sessionFile = transcript.getSessionFile();
+			if (!sessionFile) throw new Error("Missing child transcript");
+			await transcript.close();
+
+			const parentSession = makeSessionStub();
+			registry.register({
+				id: "AcceptedParent",
+				displayName: "parent",
+				kind: "main",
+				session: parentSession.session,
+				sessionFile: "/tmp/AcceptedParent.jsonl",
+			});
+			const child = registry.register({
+				id: "AcceptedChild",
+				displayName: "task",
+				kind: "sub",
+				parentId: "AcceptedParent",
+				session: null,
+				sessionFile,
+				status: "parked",
+			});
+			await lifecycle.prune("AcceptedChild");
+
+			expect(parentSession.customMessages()).toEqual([]);
+			expect(child.terminalOutcome).toBe("completed");
+			expect(registry.get("AcceptedChild")).toBeUndefined();
+		} finally {
+			await transcript.close();
+			temp.removeSync();
+		}
+	});
+
 	it("clears the prior terminal outcome only when a new assignment starts", () => {
 		const ref = registry.register({
 			id: "Reused",
