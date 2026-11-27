@@ -188,6 +188,26 @@
       "risk": "high",
       "components": ["coding-agent", "terminal-control"]
     },
+    "terminal-steering-recovery": {
+      "name": "Terminal steering recovery",
+      "description": "Restore accepted tagged Telegram input under the same terminal owner and reconcile parked child results before pruning.",
+      "entry_files": [
+        "packages/coding-agent/src/launch/terminal-control.ts",
+        "packages/coding-agent/src/launch/terminal-control-session.ts",
+        "packages/coding-agent/src/session/terminal-input.ts",
+        "packages/coding-agent/src/registry/agent-lifecycle.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/a-terminal-control-acks-a-delivery-before-the-terminal-does-the-work.test.ts",
+        "packages/coding-agent/test/a-telegram-delivery-trace-end-to-end.test.ts",
+        "packages/coding-agent/test/agent-session-steer-idle-drain.test.ts",
+        "packages/coding-agent/test/registry/agent-lifecycle.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/3061",
+      "risk": "high",
+      "components": ["coding-agent", "terminal-control", "agent-registry"],
+      "docs": ["docs/internal/session.md"]
+    },
     "session-stderr-retention": {
       "name": "Supervised child stderr retention",
       "description": "Bound new stderr captures across child generations without mutating live segments or recent incident evidence.",

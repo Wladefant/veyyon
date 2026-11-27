@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Restore unconsumed Telegram steering when its terminal session reopens, and check the child's saved result before reporting a parked assignment stalled ([Refs Wladefant/superboard#3061](https://github.com/Wladefant/superboard/issues/3061)).
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
 - Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
 - Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).

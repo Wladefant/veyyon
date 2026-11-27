@@ -1,6 +1,6 @@
 import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { type SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, logTelegramDeliveryTrace, parseTelegramTrace, type TelegramDeliveryTraceData } from "@veyyon/utils";
 import type { InteractiveMode } from "../modes/terminal/interactive-mode";
 import type { SecretIntakeResult } from "../secrets/intake-broker";
@@ -12,9 +12,13 @@ import {
 import { parseSecretSubmission } from "../secrets/intake-wire";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../session/operator-answer-inbox";
 import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
-import { TOOL } from "../tools/core/builtin-names";
 import {
 	durableTerminalDeliveryId,
+	PENDING_TERMINAL_STEERING,
+	WITHDRAWN_TERMINAL_STEERING,
+} from "../session/terminal-input";
+import { TOOL } from "../tools/core/builtin-names";
+import {
 	serveTerminalControl,
 	type TerminalControlHandle,
 	type TerminalDeliveryOptions,
@@ -88,7 +92,6 @@ type TerminalTranscriptText = {
 	turn?: TerminalTurnProvenance;
 };
 
-const STEERING_ENTRY = "terminal:pending-steering";
 const STEERING_ALERT_MS = 60_000;
 
 interface PendingSteering {
@@ -101,11 +104,18 @@ interface PendingSteering {
 	telegramTrace?: TelegramDeliveryTraceData;
 }
 
-function readPendingSteering(journal: SessionManager): Map<string, PendingSteering> {
+function readPendingSteering(journal: SessionManager) {
 	const pending = new Map<string, PendingSteering>();
+	const withdrawn = new Set<string>();
 	const sessionId = journal.getSessionId();
 	for (const entry of journal.getEntries()) {
-		if (entry.type === "custom" && entry.customType === STEERING_ENTRY) {
+		if (entry.type === "custom" && entry.customType === WITHDRAWN_TERMINAL_STEERING) {
+			const record = entry.data as { sessionId?: string; messageId?: string } | null;
+			if (record?.sessionId === sessionId && typeof record.messageId === "string") {
+				withdrawn.add(record.messageId);
+				pending.delete(record.messageId);
+			}
+		} else if (entry.type === "custom" && entry.customType === PENDING_TERMINAL_STEERING) {
 			const record = entry.data as Partial<PendingSteering> | null;
 			if (
 				record?.version === 1 &&
@@ -117,7 +127,9 @@ function readPendingSteering(journal: SessionManager): Map<string, PendingSteeri
 				typeof record.acceptedAt === "number" &&
 				Number.isFinite(record.acceptedAt)
 			) {
-				if (!pending.has(record.messageId)) pending.set(record.messageId, record as PendingSteering);
+				if (!pending.has(record.messageId) && !withdrawn.has(record.messageId)) {
+					pending.set(record.messageId, record as PendingSteering);
+				}
 			}
 		} else if (pending.size && entry.type === "message" && entry.message.role === "user") {
 			const readable = readColdEntry(entry) ?? entry;
@@ -129,25 +141,40 @@ function readPendingSteering(journal: SessionManager): Map<string, PendingSteeri
 			if (id) pending.delete(id);
 		}
 	}
-	return pending;
+	return { pending, withdrawn };
 }
 
 function createSteeringInbox(mode: InteractiveMode) {
 	let journal = mode.sessionManager;
-	let pending = readPendingSteering(journal);
+	let pending = new Map<string, PendingSteering>();
+	let withdrawn = new Set<string>();
+	let verified = false;
 	const replayed = new Set<string>();
 	let alertedId: string | undefined;
+	const refresh = () => {
+		try {
+			({ pending, withdrawn } = readPendingSteering(journal));
+			verified = true;
+		} catch {
+			verified = false;
+			logger.warn("Cannot read terminal steering custody; leaving input in the journal", {
+				sessionId: journal.getSessionId(),
+			});
+		}
+		return verified;
+	};
 	return {
 		async recover() {
-			if (!pending.size) return;
+			if (!refresh() || !pending.size) return;
 			try {
 				await journal.assertReplayJournalCurrent();
 			} catch {
+				verified = false;
 				logger.warn("Cannot verify the terminal steering journal; pending input was not replayed");
 				return;
 			}
 			const owner = journal;
-			pending = readPendingSteering(owner);
+			if (!refresh()) return;
 			for (const record of pending.values()) {
 				if (mode.sessionManager !== owner || mode.isShuttingDown) return;
 				const options = { telegramTrace: parseTelegramTrace(record.telegramTrace) };
@@ -179,11 +206,16 @@ function createSteeringInbox(mode: InteractiveMode) {
 			const owner = mode.sessionManager;
 			if (owner !== journal) {
 				journal = owner;
-				pending = readPendingSteering(owner);
 				replayed.clear();
+				verified = false;
 			}
-			if (replayed.has(messageId)) return true;
-			if (!pending.has(messageId)) {
+			if (!verified && !refresh()) throw new TerminalNotReadyError("Cannot verify terminal steering custody");
+			if (replayed.has(messageId) || withdrawn.has(messageId)) return true;
+			const previous = pending.get(messageId);
+			if (previous && (previous.text !== text || previous.mode !== behavior)) {
+				throw new Error("Terminal delivery ID already has a different pending input");
+			}
+			if (!previous) {
 				const record: PendingSteering = {
 					version: 1,
 					sessionId,
@@ -193,18 +225,21 @@ function createSteeringInbox(mode: InteractiveMode) {
 					acceptedAt: Date.now(),
 					telegramTrace: options?.telegramTrace,
 				};
-				owner.appendCustomEntry(STEERING_ENTRY, record);
+				owner.appendCustomEntry(PENDING_TERMINAL_STEERING, record);
 				pending.set(messageId, record);
 			}
-			await owner.ensureOnDisk();
-			await owner.sync();
+			try {
+				await owner.ensureOnDisk();
+				await owner.sync();
+			} catch {
+				throw new TerminalNotReadyError("Terminal could not persist steering");
+			}
 			if (mode.sessionManager !== owner || owner.getSessionId() !== sessionId)
 				throw new Error("Terminal changed sessions while persisting steering");
 			return false;
 		},
 		checkStall() {
-			if (mode.sessionManager !== journal || !pending.size) return;
-			pending = readPendingSteering(journal);
+			if (mode.sessionManager !== journal || !pending.size || !refresh()) return;
 			const oldest = pending.values().next().value;
 			if (!oldest || oldest.messageId === alertedId || Date.now() - oldest.acceptedAt < STEERING_ALERT_MS) return;
 			alertedId = oldest.messageId;

@@ -12,6 +12,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import * as utils from "@veyyon/utils";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/launch/terminal-control-session";
+import { withdrawTerminalSteering } from "../src/session/terminal-input";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -322,7 +323,7 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 		cleanup.push(close);
 		return { close, owner: await readOwner(root) };
 	};
-	const deliveries = ["a", "b", "c"].map((letter, i) => {
+	const deliveries = ["a", "b", "c", "d"].map((letter, i) => {
 		const messageId = `telegram-${letter.repeat(64)}`;
 		return { messageId, text: `steer ${i + 1}\n[telegram-delivery id=${messageId}]` };
 	});
@@ -333,6 +334,7 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 	}
 	expect(steered).toEqual(deliveries.map(delivery => delivery.text));
 	manager.appendMessage({ role: "user", content: deliveries[0].text, timestamp: Date.now() });
+	withdrawTerminalSteering(manager, [deliveries[3]]);
 	await manager.ensureOnDisk();
 	const file = manager.getSessionFile()!;
 	await manager.close();
@@ -340,9 +342,11 @@ test("replays accepted unconsumed Telegram steering in order after reopening its
 	steered.length = 0;
 	manager = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
 	const reopened = await start();
-	expect(steered).toEqual(deliveries.slice(1).map(delivery => delivery.text));
+	expect(steered).toEqual(deliveries.slice(1, 3).map(delivery => delivery.text));
 	const retry = await rpc(reopened.owner, "deliver", { ...deliveries[1], mode: "steer" });
 	expect(retry.response).toMatchObject({ ok: true, result: "duplicate" });
+	const withdrawnRetry = await rpc(reopened.owner, "deliver", { ...deliveries[3], mode: "steer" });
+	expect(withdrawnRetry.response).toMatchObject({ ok: true, result: "duplicate" });
 	expect(steered).toHaveLength(2);
 });
 

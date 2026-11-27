@@ -58,6 +58,25 @@ Automatic handoff runs only after a safely completed turn, before the next reque
 
 The summary model must fit the current context, an 8,000-token reserve for added instructions, and its full output limit, including reasoning. Automatic handoff skips models without a known output limit. The request explicitly uses that same model output limit. The successor keeps the persisted child initialization contract for later revival. It keeps existing jobs and descendants, refreshes provider routing, and rebases the current context estimate without stopping the active tool loop.
 
+## Terminal steering custody
+
+The authenticated terminal owner records ordinary Telegram deliveries with a
+stable delivery tag in its session journal before acknowledging them. Acceptance
+does not mean a turn took the input. A matching user entry confirms admission;
+the Telegram trace separately records the provider call.
+
+On reopen, the terminal queues the unresolved records in journal order under
+the original owner. It skips inputs with a matching user entry or a recorded
+withdrawal. Taking a delivery back into the editor withdraws the original
+delivery. Recovery does not repeat an admitted user entry or resume ambiguous
+provider or tool effects. Untagged input and operator answers keep their
+existing paths. A live terminal warns about the oldest queued delivery after
+one minute and reports its current wait reason.
+
+Before a parked child is reported stalled, the registry checks its saved
+branch for a terminal yield in the current assignment or continuation. Pruning
+removes the live registration, not the transcript.
+
 ## Implementation Files
 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories

@@ -15,6 +15,7 @@ import {
 	type TelegramDeliveryTraceData,
 } from "@veyyon/utils";
 import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-wire";
+import { durableTerminalDeliveryId } from "../session/terminal-input";
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
@@ -107,7 +108,6 @@ const MAX_REMEMBERED_DELIVERIES = 256;
 /** Deliveries accepted and not yet settled. Beyond this the terminal answers `busy`: each holds its text. */
 const MAX_PENDING_DELIVERIES = 64;
 const DURABLE_DELIVERY_ID = /^telegram-[a-f0-9]{64}$/;
-const DURABLE_DELIVERY_TAG = /^\[telegram-delivery id=(telegram-[a-f0-9]{64})\]$/;
 const NOT_READY_RETRIES = 20;
 const NOT_READY_RETRY_MS = 100;
 /** A history replay waits while the socket holds more than this unsent, so one slow reader never reaches the 1 MiB send limit. */
@@ -137,10 +137,6 @@ interface DeliveryRecord {
 	watchers: Set<TerminalSocket>;
 	promise: Promise<string>;
 	accepted?: Promise<void>;
-}
-
-export function durableTerminalDeliveryId(text: string): string | undefined {
-	return DURABLE_DELIVERY_TAG.exec(text.slice(text.lastIndexOf("\n") + 1))?.[1];
 }
 
 /** The daemon writes this tag on the final line of each durable input. Use the same journal receipt rule. */

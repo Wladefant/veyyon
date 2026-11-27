@@ -10,13 +10,20 @@
  * `parked` ↔ `idle`.
  */
 
+import { statSync } from "node:fs";
 import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { clamp, errorMessage, logger } from "@veyyon/utils";
 import type { AgentSession } from "../session/agent-session";
 import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
 import { TOOL } from "../tools/core/builtin-names";
-import { type AgentRef, AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "./agent-registry";
+import {
+	type AgentRef,
+	AgentRegistry,
+	type AgentTerminalOutcome,
+	MAIN_AGENT_ID,
+	type RegistryEvent,
+} from "./agent-registry";
 
 export type AgentReviver = () => Promise<AgentSession>;
 
@@ -545,7 +552,7 @@ export class AgentLifecycleManager {
 			const reason = "Parent session no longer exists.";
 			if (!ref.terminalOutcome) {
 				this.#stalling.add(ref.id);
-				let outcome: "completed" | "stalled" | undefined;
+				let outcome: AgentTerminalOutcome | undefined;
 				try {
 					outcome = await this.#reconcilePruneOutcome(ref, reason);
 				} finally {
@@ -571,15 +578,21 @@ export class AgentLifecycleManager {
 		}
 	}
 
-	/** Check the current branch, not an old yield from a previous assignment. */
-	async #reconcilePruneOutcome(ref: AgentRef, reason: string): Promise<"completed" | "stalled" | undefined> {
-		if (ref.sessionFile) {
-			let transcript: SessionManager | undefined;
-			try {
-				transcript = await SessionManager.open(ref.sessionFile, undefined, undefined, {
-					suppressBreadcrumb: true,
-				});
-				const branch = transcript.getBranch();
+	/** Resolve the current child phase before writing a stalled notice. */
+	async #reconcilePruneOutcome(ref: AgentRef, reason: string): Promise<AgentTerminalOutcome | undefined> {
+		const parentSession = ref.parentId ? this.#registry.get(ref.parentId)?.session : undefined;
+		let manager = parentSession?.sessionManager;
+		let child: SessionManager | undefined;
+		try {
+			if (this.#disposed) return undefined;
+			const file = ref.sessionFile;
+			const hasTranscript = file && statSync(file, { throwIfNoEntry: false })?.isFile();
+			if (file && (hasTranscript || !manager)) {
+				child = await SessionManager.open(file, undefined, undefined, { suppressBreadcrumb: true });
+				manager ??= child;
+			}
+			if (hasTranscript && child) {
+				const branch = child.getBranch();
 				for (let i = branch.length - 1; i >= 0; i--) {
 					const entry = branch[i];
 					if (entry.type === "custom" && entry.customType === "irc:continuation-phase") break;
@@ -591,32 +604,18 @@ export class AgentLifecycleManager {
 					const { toolName, isError, details } = materialized.message;
 					if (isTerminalYieldToolResult({ toolName, isError, result: { details } })) return "completed";
 				}
-			} catch (error) {
-				logger.warn("AgentLifecycleManager: child result could not be verified; keeping agent registered", {
-					id: ref.id,
-					error: errorMessage(error),
-				});
+			}
+			if (
+				!manager ||
+				this.#disposed ||
+				this.#registry.get(ref.id) !== ref ||
+				ref.status !== "parked" ||
+				this.#parking.has(ref.id) ||
+				this.#revivals.has(ref.id)
+			) {
 				return undefined;
-			} finally {
-				await transcript?.close();
 			}
-		}
-		if (this.#disposed || this.#registry.get(ref.id) !== ref || ref.status !== "parked") return undefined;
-		if (ref.terminalOutcome) return undefined;
-		return (await this.#reportStalled(ref, reason)) ? "stalled" : undefined;
-	}
-
-	async #reportStalled(ref: AgentRef, reason: string): Promise<boolean> {
-		const parentSession = ref.parentId ? this.#registry.get(ref.parentId)?.session : undefined;
-		let manager = parentSession?.sessionManager;
-		let ownedManager = false;
-		try {
-			if (!manager) {
-				if (!ref.sessionFile || this.#disposed) return false;
-				manager = await SessionManager.open(ref.sessionFile, undefined, undefined, { suppressBreadcrumb: true });
-				ownedManager = true;
-			}
-			if (this.#disposed) return false;
+			if (ref.terminalOutcome) return ref.terminalOutcome;
 			const content = `Agent "${ref.id}" stalled: ${reason}`;
 			manager.appendCustomMessageEntry(
 				"agent-terminal-outcome",
@@ -626,19 +625,19 @@ export class AgentLifecycleManager {
 				"agent",
 			);
 			await manager.flush();
-			return true;
+			return "stalled";
 		} catch (error) {
-			logger.warn("AgentLifecycleManager: stalled outcome could not be persisted; keeping agent registered", {
+			logger.warn("AgentLifecycleManager: child outcome could not be verified or recorded; keeping agent registered", {
 				id: ref.id,
 				error: errorMessage(error),
 			});
-			return false;
+			return undefined;
 		} finally {
-			if (ownedManager) {
+			if (child) {
 				try {
-					await manager?.close();
+					await child.close();
 				} catch (error) {
-					logger.warn("AgentLifecycleManager: stalled outcome session close failed", {
+					logger.warn("AgentLifecycleManager: child outcome session close failed", {
 						id: ref.id,
 						error: errorMessage(error),
 					});
@@ -758,7 +757,7 @@ export class AgentLifecycleManager {
 		if (!ref.terminalOutcome) {
 			const reason = "Assignment was pruned before reporting a terminal outcome.";
 			this.#stalling.add(id);
-			let outcome: "completed" | "stalled" | undefined;
+			let outcome: AgentTerminalOutcome | undefined;
 			try {
 				outcome = await this.#reconcilePruneOutcome(ref, reason);
 			} finally {
