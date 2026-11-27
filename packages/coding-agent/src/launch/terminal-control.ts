@@ -324,7 +324,11 @@ export async function serveTerminalControl(
 				refreshing = false;
 				return reconcile();
 			},
-			() => close(),
+			() => {
+				// Keep listening. Requests for the old session still fail the identity check.
+				// A later refresh can retry without keeping a clientless timer alive.
+				refreshing = false;
+			},
 		);
 	};
 	const armRefresh = (): void => {
