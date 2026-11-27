@@ -408,6 +408,40 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
 	});
 
+	test("a fresh Gemini quota summary makes a sibling under an old predicted hold eligible again", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const modelId = "gemini-3.8-flash";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const report = (accountId: string, usedFraction: number) =>
+			createAntigravityReport({
+				accountId,
+				projectId: `proj-${accountId}`,
+				windows: [{ counter: "google", usedFraction, resetInMs: 8 * HOUR_MS }],
+			});
+		usageByAccount.set("acct-a", report("acct-a", 1));
+		usageByAccount.set("acct-b", report("acct-b", 0));
+		expect(await authStorage.getApiKey(provider, "before-reset", { modelId })).toBe("api-acct-b");
+
+		now += HOUR_MS;
+		const healthy = report("acct-a", 0);
+		healthy.metadata = { ...healthy.metadata, authoritativeCounters: ["google"] };
+		usageByAccount.set("acct-a", healthy);
+		usageByAccount.set("acct-b", report("acct-b", 1));
+		const peer = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: p => (p === provider ? usageProvider : undefined),
+			rankingStrategyResolver: p => (p === provider ? antigravityRankingStrategy : undefined),
+		});
+		await peer.reload();
+		expect(await peer.getApiKey(provider, "after-reset", { modelId })).toBe("api-acct-a");
+	});
+
 	test("expired confirmation does not promote a later peer prediction", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
 		const storageX = authStorage;
