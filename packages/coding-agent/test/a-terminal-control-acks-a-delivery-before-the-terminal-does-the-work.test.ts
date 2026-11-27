@@ -666,13 +666,13 @@ test("a saturated route recovers in order on reconnect and reads back each durab
 	const queued: string[] = [];
 	const owner = await serve(async text => {
 		await gate.promise;
-		queued.push(text);
+		if (text.startsWith("input ")) queued.push(text);
 		return "queued";
 	});
 	const other = await serve(async () => "started", () => "other");
 	const inputs = Array.from({ length: 68 }, (_, index) => {
 		const messageId = `telegram-${index.toString(16).padStart(64, "0")}`;
-		return { messageId, text: `input ${index}\n[telegram-delivery id=${messageId}]`, mode: "auto", ack: true };
+		return { messageId, text: `input ${index} reçu\n[telegram-delivery id=${messageId}]`, mode: "auto", ack: true };
 	});
 	const deliver = async (input: (typeof inputs)[number]) => (await rpc(owner, "deliver", input)).response;
 	const status = async (messageId: string) => (await rpc(owner, "deliveryStatus", { messageId })).response.result;
@@ -688,6 +688,7 @@ test("a saturated route recovers in order on reconnect and reads back each durab
 		for (const input of inputs.slice(0, 64)) {
 			expect(await deliver(input)).toMatchObject({ ok: true, result: { state: "pending" } });
 		}
+		expect((await rpc(owner, "deliveryCapacity")).response.result).toEqual({ limit: 64, available: 0 });
 		expect(await status(inputs[0].messageId)).toEqual({ state: "pending" });
 		for (const input of inputs.slice(64)) {
 			expect(await deliver(input)).toMatchObject({ ok: false, error: expect.stringContaining("busy") });
@@ -699,6 +700,17 @@ test("a saturated route recovers in order on reconnect and reads back each durab
 		expect(await status(inputs[0].messageId)).toEqual({ state: "delivered", outcome: "queued" });
 		for (const input of inputs.slice(64)) expect((await deliver(input)).ok).toBe(true);
 		await settleRoute(inputs[67]);
+		expect((await rpc(owner, "deliveryCapacity")).response.result).toEqual({ limit: 64, available: 64 });
+
+		// Unconsumed durable IDs must survive eviction from the terminal's 256 recent RPCs.
+		const churn = connect(owner);
+		for (let index = 0; index < 256; index++) {
+			const id = `churn-${index}`;
+			churn.send({ id, op: "deliver", text: "untracked fixture input", mode: "auto", messageId: id });
+			expect(await churn.next(frame => frame.id === id)).toMatchObject({ ok: true, result: "queued" });
+		}
+		expect(await status(inputs[0].messageId)).toEqual({ state: "delivered", outcome: "queued" });
+		expect(await deliver(inputs[0])).toMatchObject({ ok: true, result: { state: "delivered", outcome: "queued" } });
 		expect(queued).toEqual(inputs.map(input => input.text));
 
 		// The trailing record does not count until its newline is on disk.

@@ -98,7 +98,7 @@ async function terminalRequest(
 	socket.on("connect", () => {
 		const frame = JSON.stringify({
 			version: 1,
-			id: `ping-${crypto.randomUUID()}`,
+			id: `request-${crypto.randomUUID()}`,
 			token: owner.token,
 			sessionId: owner.sessionId,
 			...request,
@@ -465,10 +465,13 @@ describe("terminal-control CLI and owner discovery client", () => {
 		const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
 		const messageId = `telegram-${"a".repeat(64)}`;
 		const text = `original\n[telegram-delivery id=${messageId}]`;
-		const journal = `${JSON.stringify({
-			type: "message",
-			message: { role: "user", content: [{ type: "text", text }] },
-		})}\n`;
+		const syntheticId = `telegram-${"b".repeat(64)}`;
+		const journal = [
+			{ role: "user", synthetic: true, content: `synthetic\n[telegram-delivery id=${syntheticId}]` },
+			{ role: "user", content: [{ type: "text", text }] },
+		]
+			.map(message => `${JSON.stringify({ type: "message", message })}\n`)
+			.join("");
 		await fs.writeFile(sessionFile, journal);
 		let attempts = 0;
 		const close = await serveTerminalControl(
@@ -488,6 +491,14 @@ describe("terminal-control CLI and owner discovery client", () => {
 		const owner = await discoverTerminalOwner(sessionId, tempDir);
 		const request = { op: "deliveryStatus", messageId };
 		expect(await terminalRequest({ ...owner, sessionId: "other-session" }, request)).toMatchObject({ ok: false });
+		expect(await terminalRequest(owner, { op: "deliver", messageId, text, mode: "auto" })).toMatchObject({
+			ok: true,
+			result: "duplicate",
+		});
+		expect(await terminalRequest(owner, { op: "deliveryStatus", messageId: syntheticId })).toMatchObject({
+			ok: true,
+			result: { state: "unknown" },
+		});
 		expect(await terminalRequest(owner, request)).toMatchObject({
 			ok: true,
 			result: { state: "delivered", consumed: true },
@@ -495,10 +506,6 @@ describe("terminal-control CLI and owner discovery client", () => {
 		expect(await terminalRequest(owner, { op: "deliver", messageId, text, mode: "auto", ack: true })).toMatchObject({
 			ok: true,
 			result: { accepted: true, state: "delivered", consumed: true },
-		});
-		expect(await terminalRequest(owner, { op: "deliver", messageId, text, mode: "auto" })).toMatchObject({
-			ok: true,
-			result: "duplicate",
 		});
 		expect(attempts).toBe(0);
 		expect(await fs.readFile(sessionFile, "utf8")).toBe(journal);
