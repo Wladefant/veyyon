@@ -3,6 +3,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEexist, isEnoent, postmortem, toError } from "@veyyon/utils";
+import type { Subprocess } from "bun";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { brokerHoldsLease } from "./broker-lease";
@@ -238,16 +239,17 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			}
 			this.#retiringPid = undefined;
 		}
+		let lastError: Error;
 		try {
 			this.#bindSocket(await openSocket(this.#endpoint, 250));
 			return;
-		} catch {
+		} catch (error) {
 			if (this.#closed) throw new Error("Daemon broker client is closed");
+			lastError = toError(error);
 			// No live broker. Multiple clients may race to spawn; the broker's PID
 			// lease selects one winner before any candidate touches the socket.
 		}
-		this.#spawnBroker();
-		let lastError: Error | undefined;
+		const child = this.#spawnBroker();
 		while (Date.now() < deadline) {
 			if (this.#closed) throw new Error("Daemon broker client is closed");
 			try {
@@ -255,14 +257,25 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				return;
 			} catch (error) {
 				if (this.#closed) throw new Error("Daemon broker client is closed");
-				lastError = error instanceof Error ? error : new Error(String(error));
+				lastError = toError(error);
 				await Bun.sleep(CONNECT_RETRY_MS);
 			}
 		}
-		throw new Error(`Failed to start daemon broker: ${lastError?.message ?? "socket unavailable"}`);
+		// A candidate can exit because another caller won the lease. Keep trying
+		// until the deadline, and do not infer why the elected broker was unreachable.
+		const exit = child.signalCode ?? child.exitCode;
+		const phase =
+			exit === null
+				? "startup timeout"
+				: `candidate exited before connection (${typeof exit === "number" ? `code ${exit}` : `signal ${exit}`})`;
+		const transport = isEnoent(lastError) ? "endpoint unavailable; " : "";
+		throw new Error(
+			`Failed to start daemon broker: ${phase}; ${transport}broker startup cause unknown; ${lastError.message}`,
+			{ cause: lastError },
+		);
 	}
 
-	#spawnBroker(): void {
+	#spawnBroker(): Subprocess<"ignore", "ignore", "ignore"> {
 		const spawn = resolveWorkerSpawnCmd(DAEMON_BROKER_WORKER_ARG);
 		const overlay: Record<string, string> = {
 			[DAEMON_PROJECT_DIR_ENV]: this.projectDir,
@@ -282,6 +295,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		});
 		this.#adoptSpawnedPid?.(child.pid);
 		child.unref();
+		return child;
 	}
 
 	#bindSocket(socket: net.Socket): void {
