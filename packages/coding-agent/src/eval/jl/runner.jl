@@ -583,6 +583,7 @@ function apply_request_runtime(cwd, env_pairs)
     end
     
     managed_env_keys = [
+        "VEYYON_AGENT_ID",
         "VEYYON_SESSION_FILE",
         "VEYYON_ARTIFACTS_DIR",
         "VEYYON_TOOL_BRIDGE_URL",

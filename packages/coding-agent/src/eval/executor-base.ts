@@ -12,6 +12,7 @@ import {
 	toError,
 } from "@veyyon/utils";
 import { Settings } from "../config/settings";
+import { resolveLiveToolCaller } from "../internal-urls/history-caller";
 import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
@@ -411,6 +412,7 @@ export function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, ker
 // ---------------------------------------------------------------------------
 
 export const MANAGED_KERNEL_ENV_KEYS = [
+	"VEYYON_AGENT_ID",
 	"VEYYON_SESSION_FILE",
 	"VEYYON_ARTIFACTS_DIR",
 	"VEYYON_TOOL_BRIDGE_URL",
@@ -421,6 +423,7 @@ export const MANAGED_KERNEL_ENV_KEYS = [
 ] as const;
 
 interface ManagedKernelEnvOptions {
+	toolSession?: ToolSession;
 	sessionFile?: string;
 	artifactsDir?: string;
 	/** The eval session's stable id; the `kv` store keys its file by it, bridge or no bridge. */
@@ -431,9 +434,18 @@ interface ManagedKernelEnvOptions {
 	localRoots?: Record<string, string>;
 }
 
-export function buildManagedKernelEnvPatch(options: ManagedKernelEnvOptions): Record<string, string | null> {
+export function buildManagedKernelEnvPatch(
+	options: ManagedKernelEnvOptions,
+): Record<(typeof MANAGED_KERNEL_ENV_KEYS)[number], string | null> {
 	const localRoots = options.localRoots;
+	const caller = options.toolSession && resolveLiveToolCaller(options.toolSession);
+	const sessionFile = options.sessionFile;
+	const agentId =
+		caller && sessionFile && caller.actor.session?.sessionManager.getSessionFile() === sessionFile
+			? caller.agentId
+			: null;
 	return {
+		VEYYON_AGENT_ID: agentId,
 		VEYYON_SESSION_FILE: options.sessionFile ?? null,
 		VEYYON_ARTIFACTS_DIR: options.artifactsDir ?? null,
 		VEYYON_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
@@ -1198,7 +1210,7 @@ export function createKernelExecutionDriver<
 			}
 			return await kernelClass.start({
 				cwd,
-				env: buildManagedKernelEnv(options),
+				env: { VEYYON_AGENT_ID: "", ...buildManagedKernelEnv(options) },
 				signal: options.signal,
 				deadlineMs: options.deadlineMs,
 				interpreter: options.interpreter,
@@ -1210,10 +1222,14 @@ export function createKernelExecutionDriver<
 		checkKernelAvailability,
 		resolveInterpreterPath,
 		resolveDefaultRuntimeScope,
-		buildKernelEnvPatch = opts => ({
-			...buildManagedKernelEnvPatch({ ...opts, evalSessionId: opts.sessionId }),
-			...(opts.env ?? {}),
-		}),
+		buildKernelEnvPatch = opts => {
+			const managed = buildManagedKernelEnvPatch({ ...opts, evalSessionId: opts.sessionId });
+			const env = { ...managed, ...opts.env };
+			// Only the runtime can supply an ID, and only for its matching transcript.
+			env.VEYYON_AGENT_ID =
+				env.VEYYON_SESSION_FILE === managed.VEYYON_SESSION_FILE ? managed.VEYYON_AGENT_ID : null;
+			return env;
+		},
 		formatKernelTimeoutAnnotation: formatKernelTimeout = formatKernelTimeoutAnnotation,
 		formatTimeoutAnnotation: formatTimeout = formatTimeoutAnnotation,
 		createCancelledResult = (timedOut, timeoutMs) =>

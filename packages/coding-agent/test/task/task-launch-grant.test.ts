@@ -5,6 +5,7 @@ import { createMockModel } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { executePython } from "@veyyon/coding-agent/eval/py/executor";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, mainAgentIdFor } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdk from "@veyyon/coding-agent/sdk";
@@ -214,6 +215,22 @@ describe("task launch grants", () => {
 			await fs.promises.rm(agentDir, { recursive: true, force: true });
 		}
 	}, 30_000);
+
+	it("does not pass an unbound caller ID into an eval subprocess", async () => {
+		const result = await executePython(
+			"import os; print(os.getenv('VEYYON_AGENT_ID', 'missing'))",
+			{
+				cwd: process.cwd(),
+				kernelMode: "per-call",
+				sessionFile: rootFile,
+				agentId: lane.name,
+				env: { VEYYON_AGENT_ID: lane.name },
+				toolSession: makeToolSession({ getAgentId: () => lane.name, getSessionFile: () => rootFile }),
+			},
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("missing");
+	});
 
 	it("appends durable grant receipts without rewriting the existing root journal while its lock is held", async () => {
 		root.appendCustomEntry("large-parent", { payload: "x".repeat(1024 * 1024) });
