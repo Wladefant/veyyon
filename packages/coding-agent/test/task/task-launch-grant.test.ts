@@ -166,6 +166,8 @@ describe("task launch grants", () => {
 			authStorage: auth,
 			settings: Settings.isolated({
 				"agent.batch": true,
+				"agent.agents": { [builder.name]: { enabled: true } },
+				"eval.py": true,
 				"async.enabled": false,
 				"tools.approvalMode": "yolo",
 			}),
@@ -192,6 +194,7 @@ describe("task launch grants", () => {
 				context: "Read the identity handed to a subprocess. Do not contact GitHub.",
 				tasks: [{ ...lane, agent: builder.name, grants }],
 			});
+			if (result.isError) throw new Error(firstToolResultText(result));
 			expect(result.details).toMatchObject({ results: [expect.objectContaining({ exitCode: 0 })] });
 			const [receipt] = await receipts(rootFile);
 			expect(receipt).toMatchObject({ agentId: lane.name, grants });
