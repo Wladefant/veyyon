@@ -198,10 +198,12 @@ describe("task launch grants", () => {
 			expect(result.details).toMatchObject({ results: [expect.objectContaining({ exitCode: 0 })] });
 			const [receipt] = await receipts(rootFile);
 			expect(receipt).toMatchObject({ agentId: lane.name, grants });
-			const reply = mock.calls[1]?.context.messages.find(
-				message => message.role === "toolResult" && message.toolCallId === "eval-identity",
+			const reply = children[0]?.messages.find(
+				message => message.role === "toolResult" && message.toolName === "eval",
 			);
-			const output = reply?.content.find(block => block.type === "text");
+			if (!reply) throw new Error("The builder did not run the eval probe");
+			expect(reply.isError).not.toBe(true);
+			const output = reply.content.find(block => block.type === "text");
 			expect(output?.text).toContain(
 				`[${JSON.stringify(receipt.agentId)}, ${JSON.stringify(receipt.sessionFile)}]`,
 			);
