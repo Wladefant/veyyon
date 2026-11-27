@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Expose a bounded live agent roster through the session owner's authenticated terminal control endpoint ([Refs Wladefant/superboard#3039](https://github.com/Wladefant/superboard/issues/3039)).
+
 ### Fixed
 
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
