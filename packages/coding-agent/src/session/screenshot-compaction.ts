@@ -270,11 +270,14 @@ export class ScreenshotCompactor {
 		if (existing) return existing;
 
 		const task = (async (): Promise<string | null> => {
+			const hostCompleteImpl = this.#host.completeImpl;
 			const summary = await describeImageWithModel(image, model, {
 				modelRegistry: this.#host.modelRegistry,
 				telemetryConfig: this.#host.telemetryConfig?.(),
 				sessionId,
-				completeImpl: this.#host.completeImpl,
+				completeImpl: hostCompleteImpl
+					? (targetModel, context, options) => hostCompleteImpl(targetModel, context, options ?? {})
+					: undefined,
 				prepareOptions: this.#host.prepareOptions,
 				oneshotKind: "screenshot_compaction",
 				maxTokens: SCREENSHOT_SUMMARY_MAX_TOKENS,

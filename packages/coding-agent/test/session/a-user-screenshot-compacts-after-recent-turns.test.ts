@@ -35,6 +35,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+import { canonicalizeImageContent, resizeImage } from "@veyyon/coding-agent/utils/image-resize";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { requireBundledModel } from "../../../agent/test/helpers";
@@ -145,6 +146,15 @@ describe("automatic user screenshot compaction", () => {
 			return makeStream(`reply-${mainRequests.length}`);
 		};
 
+		const blueVariants = new Set<string>([BLUE_1X1_PNG.data]);
+		const blueCanonical = await canonicalizeImageContent(BLUE_1X1_PNG);
+		blueVariants.add(blueCanonical.data);
+		const blueResized = await resizeImage(BLUE_1X1_PNG);
+		blueVariants.add(blueResized.data);
+		blueVariants.add(
+			(await canonicalizeImageContent({ type: "image", data: blueResized.data, mimeType: blueResized.mimeType })).data,
+		);
+
 		const sideStreamFn: StreamFn = (requestModel, context) => {
 			const recorded = { model: requestModel, context };
 			sideRequests.push(recorded);
@@ -152,13 +162,14 @@ describe("automatic user screenshot compaction", () => {
 			const img = context.messages
 				.flatMap(m => (Array.isArray(m.content) ? m.content : []))
 				.find((part): part is ImageContent => part.type === "image");
-			const tag = img?.data === BLUE_1X1_PNG.data ? "Blue 1x1 pixel panel." : "Red 1x1 pixel dialog.";
+			const tag = img && blueVariants.has(img.data) ? "Blue 1x1 pixel panel." : "Red 1x1 pixel dialog.";
 			return makeStream(tag);
 		};
 
 		let transformHook: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
+		const initialMessages = options.sessionManager ? options.sessionManager.buildSessionContext().messages : [];
 		const agent = new Agent({
-			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: initialMessages },
 			streamFn: mainStreamFn,
 		});
 		const installTransform = agent.setTransformProviderContext.bind(agent);
@@ -185,14 +196,25 @@ describe("automatic user screenshot compaction", () => {
 			},
 		);
 
-		return { session, sessionManager, settings, authStorage, modelRegistry, mainRequests, sideRequests, transformHook };
+		return {
+			session,
+			sessionManager,
+			settings,
+			authStorage,
+			modelRegistry,
+			mainRequests,
+			sideRequests,
+			transformHook,
+			blueVariants,
+		};
 	}
 
 	it("keeps recent screenshots intact and compacts older user screenshots after default N=3 later user turns", async () => {
 		const { session, sessionManager, mainRequests, sideRequests } = await createHarness();
 
 		await session.prompt("check this bug", { images: [RED_1X1_PNG] });
-		expect(imageBlocks(mainRequests[0]!.context.messages.find(m => m.role === "user")!)).toHaveLength(1);
+		const attachedTurn0 = imageBlocks(mainRequests[0]!.context.messages.find(m => m.role === "user")!);
+		expect(attachedTurn0).toHaveLength(1);
 		expect(sideRequests).toHaveLength(0);
 
 		await session.prompt("follow-up 1");
@@ -216,7 +238,7 @@ describe("automatic user screenshot compaction", () => {
 		// Original transcript & live agent messages remain completely untouched.
 		const firstLiveUser = session.messages.find(m => m.role === "user")!;
 		expect(imageBlocks(firstLiveUser)).toHaveLength(1);
-		expect(imageBlocks(firstLiveUser)[0]!.data).toBe(RED_1X1_PNG.data);
+		expect(imageBlocks(firstLiveUser)[0]!.data).toBe(attachedTurn0[0]!.data);
 
 		const branchCustomTypes = sessionManager
 			.getBranch()
@@ -236,12 +258,14 @@ describe("automatic user screenshot compaction", () => {
 		const oneTurn = await createHarness({ settings: { "images.compactAfterTurns": 1 } });
 		await oneTurn.session.prompt("shot one", { images: [RED_1X1_PNG] });
 		await oneTurn.session.prompt("shot two", { images: [BLUE_1X1_PNG] });
+		const attachedSecondTurn = imageBlocks(oneTurn.session.messages.filter(m => m.role === "user")[1]!);
+		expect(attachedSecondTurn).toHaveLength(1);
 
 		const users = oneTurn.mainRequests.at(-1)!.context.messages.filter(m => m.role === "user");
 		expect(imageBlocks(users[0]!)).toEqual([]);
 		expect(textBlocks(users[0]!).some(t => t.includes("Red 1x1 pixel dialog."))).toBe(true);
 		expect(imageBlocks(users[1]!)).toHaveLength(1);
-		expect(imageBlocks(users[1]!)[0]!.data).toBe(BLUE_1X1_PNG.data);
+		expect(imageBlocks(users[1]!)[0]!.data).toBe(attachedSecondTurn[0]!.data);
 
 		// N=0 disables screenshot compaction completely.
 		const disabled = await createHarness({ settings: { "images.compactAfterTurns": 0 } });
@@ -276,9 +300,9 @@ describe("automatic user screenshot compaction", () => {
 		expect(imageBlocks(firstOutbound)).toEqual([]);
 		expect(textBlocks(firstOutbound).filter(t => t.includes("Red 1x1 pixel dialog."))).toHaveLength(2);
 
+		await first.sessionManager.flush();
 		const sessionFile = first.sessionManager.getSessionFile()!;
 		await first.session.dispose();
-
 		// Reopen persisted session on disk and run another turn -> zero new side summary calls.
 		const reopenedManager = await SessionManager.open(sessionFile);
 		const second = await createHarness({
@@ -469,13 +493,26 @@ describe("automatic user screenshot compaction", () => {
 		).toHaveLength(1);
 
 		// 4. Partial multi-image failure: RED succeeds & compacts, BLUE fails & keeps pixels.
+		const partialBlueVariants = new Set<string>([BLUE_1X1_PNG.data]);
+		partialBlueVariants.add((await canonicalizeImageContent(BLUE_1X1_PNG)).data);
+		const partialBlueResized = await resizeImage(BLUE_1X1_PNG);
+		partialBlueVariants.add(partialBlueResized.data);
+		partialBlueVariants.add(
+			(
+				await canonicalizeImageContent({
+					type: "image",
+					data: partialBlueResized.data,
+					mimeType: partialBlueResized.mimeType,
+				})
+			).data,
+		);
 		const partial = await createHarness({
 			settings: { "images.compactAfterTurns": 1 },
 			sideHandler: ({ context }) => {
 				const img = context.messages
 					.flatMap(m => (Array.isArray(m.content) ? m.content : []))
 					.find((part): part is ImageContent => part.type === "image");
-				if (img?.data === BLUE_1X1_PNG.data) return makeStream("", "error");
+				if (img && partialBlueVariants.has(img.data)) return makeStream("", "error");
 				return makeStream("Red succeeded.");
 			},
 		});
@@ -485,7 +522,7 @@ describe("automatic user screenshot compaction", () => {
 		expect(textBlocks(partialFirst)[0]).toBe("two shots");
 		expect(textBlocks(partialFirst).some(t => t.includes("Red succeeded."))).toBe(true);
 		expect(imageBlocks(partialFirst)).toHaveLength(1);
-		expect(imageBlocks(partialFirst)[0]!.data).toBe(BLUE_1X1_PNG.data);
+		expect(partialBlueVariants.has(imageBlocks(partialFirst)[0]!.data)).toBe(true);
 	});
 
 	it("coalesces concurrent vision summaries for the same image hash and preserves compacted message identity across turns", async () => {
