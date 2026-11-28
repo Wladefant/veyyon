@@ -163,6 +163,30 @@ describe("a read of a semicolon-delimited list", () => {
 		expect(text).toContain("two-first-line");
 	});
 
+	it.each(["local URI", "absolute path"] as const)("reads a mixed list with the %s first", async first => {
+		const artifactsDir = path.join(tmpDir, "parent-artifacts");
+		const localRoot = path.join(artifactsDir, "local");
+		const absolutePath = path.join(tmpDir, "workspace.txt");
+		await fs.mkdir(localRoot, { recursive: true });
+		await fs.writeFile(path.join(localRoot, "handoff.txt"), "parent handoff body\n");
+		await fs.writeFile(absolutePath, "workspace file body\n");
+
+		const child = new ReadTool({
+			...session(),
+			localProtocolOptions: {
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "parent-session",
+			},
+		});
+		const localUri = "local://handoff.txt";
+		const targets = first === "local URI" ? [localUri, absolutePath] : [absolutePath, localUri];
+		const result = await child.execute("call", { path: targets.join("; ") });
+
+		expect(toolResultText(result)).toContain("parent handoff body");
+		expect(toolResultText(result)).toContain("workspace file body");
+		expect(result.details?.displayReadTargets).toEqual(targets);
+	});
+
 	it("splits a list under every scheme the router registers, and only when the caller asks", async () => {
 		const schemes = InternalUrlRouter.instance().schemes();
 		expect(schemes.length).toBeGreaterThan(0);
@@ -212,17 +236,12 @@ describe("a read of a semicolon-delimited list", () => {
 			path: "local://read-multi-a.txt; local://read-multi-b.txt:1-3",
 		});
 		const text = toolResultText(result);
-		expect(text).toContain(
-			"Note: interpreted as 2 paths: local://read-multi-a.txt, local://read-multi-b.txt:1-3",
-		);
+		expect(text).toContain("Note: interpreted as 2 paths: local://read-multi-a.txt, local://read-multi-b.txt:1-3");
 		expect(text).toContain("alpha-1");
 		expect(text).toContain("beta-1");
 		expect(text).toContain("beta-3");
 		expect(text).not.toContain("beta-10");
-		expect(result.details?.displayReadTargets).toEqual([
-			"local://read-multi-a.txt",
-			"local://read-multi-b.txt:1-3",
-		]);
+		expect(result.details?.displayReadTargets).toEqual(["local://read-multi-a.txt", "local://read-multi-b.txt:1-3"]);
 
 		const bothSelectors = await new ReadTool(localSession).execute("call", {
 			path: "local://read-multi-a.txt:raw:2-2; local://read-multi-b.txt:raw:4-5",
@@ -240,8 +259,8 @@ describe("a read of a semicolon-delimited list", () => {
 		expect(toolResultText(literalSemicolon)).toContain("local-semicolon-filename");
 		expect(literalSemicolon.details?.displayReadTargets).toBeUndefined();
 
-		await expect(
-			new ReadTool(localSession).execute("call", { path: "local://missing.txt" }),
-		).rejects.toThrow(/Local file not found: local:\/\/missing\.txt/);
+		await expect(new ReadTool(localSession).execute("call", { path: "local://missing.txt" })).rejects.toThrow(
+			/Local file not found: local:\/\/missing\.txt/,
+		);
 	});
 });
