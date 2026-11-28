@@ -297,13 +297,13 @@ describe("the empty-stop cycle", () => {
 		expect(h.agent.state.messages.filter(message => message.role === "assistant")).toEqual([]);
 	});
 
-	it("ends a prompt that accepts a terminal empty stop, pruning the stop and the custom prompt behind it", async () => {
+	it.each(["stop", "toolUse"] as const)("prunes an accepted empty %s and its capture prompt", async reason => {
 		const h = harness();
 		const user: AgentMessage = { role: "user", content: [{ type: "text", text: "start" }], timestamp: clock++ };
 		const userId = h.store.appendMessage(user);
 		const capture = createCustomMessage("capture", "Record what you learned.", false, undefined, "t");
 		const captureId = h.store.appendCustomMessageEntry("capture", "Record what you learned.", false);
-		const stop = assistant([]);
+		const stop = assistant([], reason);
 		const stopId = h.store.appendMessage(stop);
 		h.agent.replaceMessages([user, capture, stop]);
 		h.retries.acceptTerminalEmptyStop = true;
@@ -361,18 +361,6 @@ describe("the empty-stop cycle", () => {
 		await h.retries.onEmptyStop(first);
 
 		expect(await CYCLES.empty.trigger(h)).toBe(true);
-	});
-
-	it("retries an empty tool-use stop even when the prompt accepts a terminal empty stop", async () => {
-		const h = harness();
-		h.retries.acceptTerminalEmptyStop = true;
-		const stop = assistant([], "toolUse");
-		h.agent.appendMessage(stop);
-
-		expect(await h.retries.onEmptyStop(stop)).toBe(true);
-
-		expect(h.endedWaits).toEqual([]);
-		expect(h.retries.acceptTerminalEmptyStop).toBe(true);
 	});
 });
 

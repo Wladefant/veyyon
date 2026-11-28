@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Do not retry an optional Auto-Learn capture when the provider reports tool use without a tool call or text ([Refs #1026](https://github.com/Wladefant/veyyon/issues/1026)).
 - Tell spawned lanes that a verified direct parent can amend its own assignment without overriding operator instructions or safety rules ([Refs #1020](https://github.com/Wladefant/veyyon/issues/1020)).
 - Sanitize eval tool status, including shell commands and nested summaries, before sending live updates or retaining results ([Refs #939](https://github.com/Wladefant/veyyon/issues/939)).
 - Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).

@@ -83,7 +83,7 @@ export class StopRetries {
 	 * remove an unrelated developer message that quotes them.
 	 */
 	#reminders: AgentMessage[] = [];
-	/** Set for a prompt whose empty `stop` ends it instead of retrying; the first such stop clears it. */
+	/** Set for a prompt whose empty reply ends it instead of retrying. */
 	acceptTerminalEmptyStop = false;
 
 	constructor(host: StopRetriesHost) {
@@ -105,7 +105,7 @@ export class StopRetries {
 			return false;
 		}
 		const host = this.#host;
-		if (this.acceptTerminalEmptyStop && message.stopReason === "stop") {
+		if (this.acceptTerminalEmptyStop) {
 			this.acceptTerminalEmptyStop = false;
 			this.#discardAcceptedTerminalEmptyStop(message);
 			this.#emptyStops = 0;

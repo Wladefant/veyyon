@@ -460,13 +460,16 @@ describe("AgentSession empty stop guard", () => {
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
 	});
 
-	it("accepts an auto-learn capture turn that ends with an empty terminal stop", async () => {
+	it.each([
+		["stop", emptyStop()],
+		["toolUse", orphanedToolUseStop()],
+	] as const)("accepts an auto-learn capture turn that ends with an empty %s", async (reason, captureStop) => {
 		const { session, mock, tempDir } = await createHarness(
 			[
 				recordCall("learn-alpha", "call-record-learn-alpha"),
 				recordCall("learn-beta", "call-record-learn-beta"),
 				{ content: ["normal turn complete"], stopReason: "stop" },
-				emptyStop(),
+				captureStop,
 			],
 			{
 				"autolearn.enabled": true,
@@ -488,13 +491,13 @@ describe("AgentSession empty stop guard", () => {
 		expect(assistantText(session.agent.state.messages)).toContain("normal turn complete");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
 		expect(retryEndEvents.filter(event => event.success === false)).toEqual([]);
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
+		expect(zeroContentStops(session.agent.state.messages, reason)).toHaveLength(0);
 
 		const branchMessagesAfterCapture = session.sessionManager
 			.getBranch()
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
-		expect(emptyAssistantStops(branchMessagesAfterCapture)).toHaveLength(0);
+		expect(zeroContentStops(branchMessagesAfterCapture, reason)).toHaveLength(0);
 		expect(
 			session.sessionManager
 				.getBranch()
@@ -509,7 +512,7 @@ describe("AgentSession empty stop guard", () => {
 			.getBranch()
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
-		expect(emptyAssistantStops(reloadedBranchMessages)).toHaveLength(0);
+		expect(zeroContentStops(reloadedBranchMessages, reason)).toHaveLength(0);
 		expect(
 			reloadedSession
 				.getBranch()
@@ -538,13 +541,13 @@ describe("AgentSession empty stop guard", () => {
 		if (!nextPromptCall) throw new Error("Expected next real prompt to call the model");
 		expect(nextPromptCall.context.messages.some(message => messageHasText(message, autoLearnNudgeText))).toBe(false);
 		expect(assistantText(session.agent.state.messages)).toContain("next real turn complete");
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
+		expect(zeroContentStops(session.agent.state.messages, reason)).toHaveLength(0);
 
 		const branchMessagesAfterNextPrompt = session.sessionManager
 			.getBranch()
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
-		expect(emptyAssistantStops(branchMessagesAfterNextPrompt)).toHaveLength(0);
+		expect(zeroContentStops(branchMessagesAfterNextPrompt, reason)).toHaveLength(0);
 		expect(
 			session.sessionManager
 				.getBranch()
