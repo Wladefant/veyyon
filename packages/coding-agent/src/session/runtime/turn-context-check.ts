@@ -27,6 +27,7 @@ import {
 import { getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { errorMessage, logger } from "@veyyon/utils";
+import { resolveModelCompactionSettings } from "../../config/compaction-strategy";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { GoalModeState } from "../../goals/state";
@@ -231,7 +232,7 @@ export class TurnContextCheck {
 		}
 		return await this.#maintainContextAfterTurn(
 			assistantMessage,
-			contextWindow,
+			model,
 			sameModel === true,
 			predatesCompaction,
 			autoContinue,
@@ -248,7 +249,7 @@ export class TurnContextCheck {
 		if (!model) return;
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = resolveModelCompactionSettings(this.#session.settings.getGroup("compaction"), model);
 		// The local-estimate floor is applied in getContextBreakdown, so this is the exact number the
 		// footline gauge shows.
 		const contextTokens =
@@ -304,7 +305,7 @@ export class TurnContextCheck {
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
 
-		const compactionSettings = session.settings.getGroup("compaction");
+		const compactionSettings = resolveModelCompactionSettings(session.settings.getGroup("compaction"), model);
 		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
 			return;
 		}
@@ -536,17 +537,18 @@ export class TurnContextCheck {
 	 */
 	async #maintainContextAfterTurn(
 		assistantMessage: AssistantMessage,
-		contextWindow: number,
+		model: Model | undefined,
 		sameModel: boolean,
 		predatesCompaction: boolean,
 		autoContinue: boolean,
 	): Promise<CompactionCheckResult> {
+		const contextWindow = model?.contextWindow ?? 0;
 		// Stale-result pass runs every turn, before any threshold gating: it is
 		// cheap (bails when no candidate) and independent of the compaction
 		// setting.
 		const supersedeResult = await this.#host.pruneStale();
 
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = resolveModelCompactionSettings(this.#session.settings.getGroup("compaction"), model);
 		if (!compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 
 		// Skip if this was an error (non-overflow errors don't have usage data)

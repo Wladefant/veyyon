@@ -483,15 +483,16 @@ export class StatusPresentationProducer implements StatusDataSource {
 	}
 
 	getContextBreakdown(session: AgentSession, autoCompactEnabled: boolean): StatusContextBreakdown {
+		const model = session.model ?? session.state?.model;
 		const modelContextWindow = session.model?.contextWindow ?? session.state?.model?.contextWindow ?? 0;
 		const compactionSettings = autoCompactEnabled ? session.settings?.getGroup?.("compaction") : undefined;
 		if (restsWithReadingHeld(session)) {
-			const gauge = measureContextGauge(null, modelContextWindow, compactionSettings);
+			const gauge = measureContextGauge(null, modelContextWindow, compactionSettings, model);
 			gauge.contextPercent = recordedRestingGauge(session.state?.model ?? session.model ?? null);
 			return gauge;
 		}
 		const { usedTokens, contextWindow } = this.#contextUsage(session, modelContextWindow);
-		return measureContextGauge(usedTokens, contextWindow, compactionSettings);
+		return measureContextGauge(usedTokens, contextWindow, compactionSettings, model);
 	}
 
 	getTokensPerSecond(session: AgentSession): number | null {

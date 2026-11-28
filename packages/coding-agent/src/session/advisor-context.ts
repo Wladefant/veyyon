@@ -32,7 +32,7 @@ import { createCodexCompactionContext } from "@veyyon/kernel/session/agent-sessi
 import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { errorMessage, logger } from "@veyyon/utils";
-import { toAgentCompactionSettings } from "../config/compaction-strategy";
+import { resolveModelCompactionSettings, toAgentCompactionSettings } from "../config/compaction-strategy";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { shouldDisableReasoning, toReasoningEffort } from "../thinking";
@@ -130,7 +130,7 @@ export async function maintainAdvisorContext(
 		contextTokens += estimateTokens(message);
 	}
 
-	if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+	if (!shouldCompact(contextTokens, contextWindow, resolveModelCompactionSettings(compactionSettings, advisorModel))) {
 		return false;
 	}
 
@@ -140,7 +140,11 @@ export async function maintainAdvisorContext(
 		const newModel = agent.state.model;
 		const newWindow = newModel.contextWindow ?? 0;
 		if (newWindow > 0) {
-			const stillNeedsCompaction = shouldCompact(contextTokens, newWindow, compactionSettings);
+			const stillNeedsCompaction = shouldCompact(
+				contextTokens,
+				newWindow,
+				resolveModelCompactionSettings(compactionSettings, newModel),
+			);
 			if (!stillNeedsCompaction) return false;
 		}
 	}
@@ -183,7 +187,7 @@ export async function maintainAdvisorContext(
 	const sessionId = providerSessionId();
 	const preparation = prepareCompaction(
 		pathEntries,
-		toAgentCompactionSettings(compactionSettings),
+		toAgentCompactionSettings(resolveModelCompactionSettings(compactionSettings, agent.state.model)),
 		env.primaryContextBudget(),
 	);
 	if (!preparation) {

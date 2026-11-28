@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Resolve a model-specific compaction threshold before the profile threshold.
+
 ### Fixed
 
 - Let the retry ladder move past a Codex fallback when credential lookup stalls ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).

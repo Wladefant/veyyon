@@ -85,6 +85,20 @@ veyyon config set startup.showSplash true
 
 This only controls the startup splash animation. It does not rerun setup or change setup state, and `startup.quiet: true` still suppresses all startup chrome including the splash.
 
+### Per-model compaction thresholds
+
+Set `compaction.thresholdByModel` in `config.yml` to override the threshold for specific models. Use the exact `provider/model-id` as the key.
+
+```yaml
+compaction:
+  threshold: "85%"
+  thresholdByModel:
+    anthropic/claude-sonnet-4-5: "70%"
+    openai/gpt-5: 64000
+```
+
+An override accepts `auto`, a percentage, or a token count. Models without an entry keep the base `compaction.threshold`.
+
 ### Subcommands
 
 | Command | Effect |

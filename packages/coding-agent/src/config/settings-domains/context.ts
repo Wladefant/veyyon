@@ -184,6 +184,9 @@ export const CONTEXT_SETTINGS = {
 		},
 	},
 
+	// Exact provider/model-id keys; values use the same units as compaction.threshold.
+	"compaction.thresholdByModel": { type: "record", default: {} as Record<string, string | number> },
+
 	// Retired: superseded by `compaction.threshold` (an absolute amount is now
 	// written there as a bare token count). Kept valid so an existing config keeps
 	// compacting at the same point, read ONLY by withLegacyCompactionThreshold.

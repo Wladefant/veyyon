@@ -107,6 +107,7 @@ function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestL
 		usage?.tokens ?? null,
 		usage?.contextWindow ?? session.model?.contextWindow ?? 0,
 		session.autoCompactionEnabled ? settings.getGroup("compaction") : undefined,
+		session.model,
 	);
 	return {
 		model: session.state.model,

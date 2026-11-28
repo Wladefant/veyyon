@@ -1,7 +1,7 @@
 /**
- * E2E tests for AgentSession compaction behavior.
+ * Unit and end-to-end tests for AgentSession compaction behavior.
  *
- * These tests use real LLM calls (no mocking) to verify:
+ * The end-to-end tests use real LLM calls to verify:
  * - Manual compaction works correctly
  * - Session persistence during compaction
  * - Compaction entry is saved to session file
@@ -12,8 +12,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { shouldCompact } from "@veyyon/agent-core/compaction/threshold";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { resolveContextLimit, resolveModelCompactionSettings } from "@veyyon/coding-agent/config/compaction-strategy";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -22,6 +24,37 @@ import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { e2eApiKey } from "./helpers/e2e-session";
+
+describe("per-model compaction thresholds", () => {
+	const window = 100_000;
+	const model = { provider: "anthropic", id: "claude-sonnet-4-5" };
+	const settings = Settings.isolated({
+		"compaction.threshold": "70%",
+		"compaction.thresholdByModel": { "anthropic/claude-sonnet-4-5": "40%" },
+	});
+
+	it("uses the active model's override for the trigger and context limit", () => {
+		const compaction = settings.getGroup("compaction");
+		expect(shouldCompact(50_000, window, resolveModelCompactionSettings(compaction, model))).toBe(true);
+		expect(resolveContextLimit(window, compaction, model)).toEqual({ tokens: 40_000, kind: "compaction" });
+	});
+
+	it("preserves the base threshold when the active model has no override", () => {
+		const compaction = settings.getGroup("compaction");
+		const otherModel = { ...model, provider: "openrouter" };
+		expect(shouldCompact(50_000, window, resolveModelCompactionSettings(compaction, otherModel))).toBe(false);
+		expect(resolveContextLimit(window, compaction, otherModel)).toEqual({ tokens: 70_000, kind: "compaction" });
+	});
+
+	it("uses auto when the model explicitly overrides a fixed base threshold", () => {
+		const compaction = Settings.isolated({
+			"compaction.threshold": "30%",
+			"compaction.thresholdByModel": { "anthropic/claude-sonnet-4-5": "auto" },
+			"compaction.reserveTokens": 20_000,
+		}).getGroup("compaction");
+		expect(resolveContextLimit(window, compaction, model)).toEqual({ tokens: 80_000, kind: "compaction" });
+	});
+});
 
 describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", () => {
 	let session: AgentSession;

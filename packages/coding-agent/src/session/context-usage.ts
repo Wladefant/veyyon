@@ -240,7 +240,7 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	let autoCompactBufferTokens = 0;
 	if (contextWindow > 0) {
 		const compactionSettings = session.settings.getGroup("compaction") as CompactionSettings;
-		const limit = resolveContextLimit(contextWindow, compactionSettings);
+		const limit = resolveContextLimit(contextWindow, compactionSettings, model);
 		autoCompactBufferTokens = limit.kind === "compaction" ? Math.max(0, contextWindow - limit.tokens) : 0;
 	}
 	autoCompactBufferTokens = Math.min(autoCompactBufferTokens, Math.max(0, contextWindow - usedTokens));

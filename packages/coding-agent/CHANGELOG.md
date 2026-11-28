@@ -4,6 +4,7 @@
 
 ### Added
 
+- Set different auto-compaction thresholds by model with `compaction.thresholdByModel` ([#1088](https://github.com/Wladefant/veyyon/issues/1088)).
 - Expose a bounded live agent roster through the session owner's authenticated terminal control endpoint ([Refs Wladefant/superboard#3039](https://github.com/Wladefant/superboard/issues/3039)).
 
 ### Fixed
