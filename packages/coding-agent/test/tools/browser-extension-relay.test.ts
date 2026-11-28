@@ -1242,16 +1242,16 @@ describe("secrets stay out of logs", () => {
 				const sessionId = String(
 					cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId,
 				);
-				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
+				// Fire the stalled command's timer immediately instead of waiting 30 s.
 				const method = `Runtime.${token}`;
 				const { release } = ext.delayNext(method);
 				timers = spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number) =>
-					realSetTimeout(handler, ms === 15_000 ? 0 : ms)) as typeof setTimeout);
+					realSetTimeout(handler, ms === 30_000 ? 0 : ms)) as typeof setTimeout);
 				const reply = await cdp.send(method, {}, sessionId).finally(() => {
 					timers?.mockRestore();
 					release();
 				});
-				expect(reply.error?.message).toContain("did not answer chrome.debugger.sendCommand within 15 s");
+				expect(reply.error?.message).toContain("did not answer chrome.debugger.sendCommand within 30 s");
 				const joined = lines.join("\n");
 				expect(joined).toContain("extension RPC timed out");
 				expect(joined).not.toContain(token);

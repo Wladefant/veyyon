@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
 - Include source file, line, and column in legacy Pi export prepass errors when Bun provides them ([Refs #985](https://github.com/Wladefant/veyyon/issues/985)).
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
 - Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
