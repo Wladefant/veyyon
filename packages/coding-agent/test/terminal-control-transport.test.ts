@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -10,7 +10,6 @@ import {
 	createPosixSocketServer,
 	createTerminalControlTransport,
 	createWindowsPipeTransport,
-	type TerminalControlServer,
 	type TerminalSocket,
 } from "../src/launch/terminal-control-transport";
 
@@ -236,15 +235,11 @@ describe("terminal-control-transport", () => {
 		const fakeChild = createFakeChild();
 		const mockSpawn = (() => fakeChild) as unknown as typeof spawn;
 
-		const serverPromise = createWindowsPipeTransport(
-			"\\\\.\\pipe\\veyyon-crash-test",
-			() => {},
-			{
-				spawnProcess: mockSpawn,
-				systemRoot: "C:\\Windows",
-				readinessTimeoutMs: 5000,
-			},
-		);
+		const serverPromise = createWindowsPipeTransport("\\\\.\\pipe\\veyyon-crash-test", () => {}, {
+			spawnProcess: mockSpawn,
+			systemRoot: "C:\\Windows",
+			readinessTimeoutMs: 5000,
+		});
 
 		fakeChild.stderr.write("Access denied creating named pipe security descriptor\n");
 		fakeChild.emit("exit", 1, null);
@@ -256,15 +251,11 @@ describe("terminal-control-transport", () => {
 		const fakeChild = createFakeChild();
 		const mockSpawn = (() => fakeChild) as unknown as typeof spawn;
 
-		const serverPromise = createWindowsPipeTransport(
-			"\\\\.\\pipe\\veyyon-timeout-test",
-			() => {},
-			{
-				spawnProcess: mockSpawn,
-				systemRoot: "C:\\Windows",
-				readinessTimeoutMs: 50,
-			},
-		);
+		const serverPromise = createWindowsPipeTransport("\\\\.\\pipe\\veyyon-timeout-test", () => {}, {
+			spawnProcess: mockSpawn,
+			systemRoot: "C:\\Windows",
+			readinessTimeoutMs: 50,
+		});
 
 		await expect(serverPromise).rejects.toThrow("timed out waiting for readiness");
 		expect(fakeChild.killCalls).toBeGreaterThan(0);
@@ -288,16 +279,12 @@ describe("terminal-control-transport", () => {
 			return fakeChild;
 		}) as unknown as typeof spawn;
 
-		const serverPromise = createTerminalControlTransport(
-			"\\\\.\\pipe\\veyyon-isolated-token",
-			() => {},
-			{
-				spawnProcess: mockSpawn,
-				systemRoot: "C:\\Windows",
-				readinessTimeoutMs: 1000,
-				forceWindows: true,
-			},
-		);
+		const serverPromise = createTerminalControlTransport("\\\\.\\pipe\\veyyon-isolated-token", () => {}, {
+			spawnProcess: mockSpawn,
+			systemRoot: "C:\\Windows",
+			readinessTimeoutMs: 1000,
+			forceWindows: true,
+		});
 
 		fakeChild.stdout.write("READY veyyon-isolated-token\n");
 		const server = await serverPromise;
@@ -314,15 +301,11 @@ describe("terminal-control-transport", () => {
 		const fakeChild = createFakeChild();
 		const mockSpawn = (() => fakeChild) as unknown as typeof spawn;
 
-		const serverPromise = createWindowsPipeTransport(
-			"\\\\.\\pipe\\veyyon-onclose-test",
-			() => {},
-			{
-				spawnProcess: mockSpawn,
-				systemRoot: "C:\\Windows",
-				readinessTimeoutMs: 5000,
-			},
-		);
+		const serverPromise = createWindowsPipeTransport("\\\\.\\pipe\\veyyon-onclose-test", () => {}, {
+			spawnProcess: mockSpawn,
+			systemRoot: "C:\\Windows",
+			readinessTimeoutMs: 5000,
+		});
 
 		fakeChild.stdout.write("READY veyyon-onclose-test\n");
 		const server = await serverPromise;
@@ -380,21 +363,24 @@ describe("terminal-control-transport", () => {
 
 		// WHY: issue 580. The socket is the control channel, so it must be owner-only. This checks a real
 		// socket's mode and owner, not the source text, because chmod or the owner check can regress unnoticed.
-		it.skipIf(process.getuid === undefined)("creates the POSIX control socket with mode 0600 owned by the current uid (requires process.getuid)", async () => {
-			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-transport-test-"));
-			cleanupActions.push(() => fs.rm(tempDir, { recursive: true, force: true }));
-			const socketPath = path.join(tempDir, "control.sock");
+		it.skipIf(process.getuid === undefined)(
+			"creates the POSIX control socket with mode 0600 owned by the current uid (requires process.getuid)",
+			async () => {
+				const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-transport-test-"));
+				cleanupActions.push(() => fs.rm(tempDir, { recursive: true, force: true }));
+				const socketPath = path.join(tempDir, "control.sock");
 
-			const server = await createPosixSocketServer(socketPath, () => {});
-			cleanupActions.push(() => server.close());
+				const server = await createPosixSocketServer(socketPath, () => {});
+				cleanupActions.push(() => server.close());
 
-			const stat = await fs.lstat(socketPath);
-			expect(stat.isSocket()).toBe(true);
-			expect(stat.mode & 0o777).toBe(0o600);
-			const uid = process.getuid?.();
-			if (uid === undefined) return;
-			expect(stat.uid).toBe(uid);
-		});
+				const stat = await fs.lstat(socketPath);
+				expect(stat.isSocket()).toBe(true);
+				expect(stat.mode & 0o777).toBe(0o600);
+				const uid = process.getuid?.();
+				if (uid === undefined) return;
+				expect(stat.uid).toBe(uid);
+			},
+		);
 	}
 
 	if (process.platform === "win32") {
@@ -466,21 +452,10 @@ $client.Dispose()
 } | ConvertTo-Json -Compress
 `.trim();
 
-			const powershell = path.win32.join(
-				process.env.SystemRoot ?? "C:\\Windows",
-				"System32",
-				"WindowsPowerShell",
-				"v1.0",
-				"powershell.exe",
-			);
+			const system32 = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32");
 			type ProcessResult = { stdout: string; stderr: string; exitCode: number };
-			const runBoundedProcess = (
-				command: string,
-				args: string[],
-				label: string,
-			): Promise<ProcessResult> => {
+			const waitForProcess = (proc: ChildProcessWithoutNullStreams, label: string): Promise<ProcessResult> => {
 				const result = Promise.withResolvers<ProcessResult>();
-				const proc = spawn(command, args, { windowsHide: true });
 				let stdout = "";
 				let stderr = "";
 				let settled = false;
@@ -517,16 +492,21 @@ $client.Dispose()
 				return result.promise;
 			};
 			const cp = await withClientBound(
-				runBoundedProcess(
-					powershell,
-					["-NoProfile", "-NonInteractive", "-Command", psCommand],
+				waitForProcess(
+					spawn(
+						path.win32.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"),
+						["-NoProfile", "-NonInteractive", "-Command", psCommand],
+						{ windowsHide: true },
+					),
 					"Pipe ACL query",
 				),
 				"Pipe ACL query",
 			);
-			const whoami = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe");
 			const identity = await withClientBound(
-				runBoundedProcess(whoami, ["/user", "/fo", "csv", "/nh"], "Current-user SID query"),
+				waitForProcess(
+					spawn(path.win32.join(system32, "whoami.exe"), ["/user", "/fo", "csv", "/nh"], { windowsHide: true }),
+					"Current-user SID query",
+				),
 				"Current-user SID query",
 			);
 

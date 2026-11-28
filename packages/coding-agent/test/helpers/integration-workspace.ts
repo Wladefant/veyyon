@@ -24,15 +24,22 @@
  *  - The workspace is a real temp dir; assert file CONTENT, not just that a tool
  *    was called.
  */
-import * as fs from "node:fs";
+import "../../../utils/test/helpers/real-data-tripwire";
 import * as path from "node:path";
-import { Agent, type AgentEvent } from "@veyyon/agent-core";
-import { createMockModel, type MockModel, type MockResponseSource } from "@veyyon/ai/providers/mock";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { BUILTIN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools/index";
-import { TempDir } from "@veyyon/utils";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./settings-test-state";
+import type { AgentEvent, Agent as AgentInstance } from "@veyyon/agent-core";
+import type { MockModel, MockResponseSource } from "@veyyon/ai/providers/mock";
+import type { ToolSession } from "@veyyon/coding-agent/tools/index";
+import type { SettingsTestState } from "./settings-test-state";
 import { makeToolSession } from "./tool-session";
+
+// Link the filesystem and production imports after the tripwire runs.
+const fs = await import("node:fs");
+const { Agent } = await import("@veyyon/agent-core");
+const { createMockModel } = await import("@veyyon/ai/providers/mock");
+const { Settings } = await import("@veyyon/coding-agent/config/settings");
+const { BUILTIN_TOOLS } = await import("@veyyon/coding-agent/tools/index");
+const { TempDir } = await import("@veyyon/utils");
+const { beginSettingsTest, restoreSettingsTestState } = await import("./settings-test-state");
 
 /** Tools a file-oriented integration test almost always wants. */
 export const DEFAULT_INTEGRATION_TOOLS = ["read", "write", "edit"] as const;
@@ -61,7 +68,7 @@ export interface RecordedToolCall {
 export interface IntegrationWorkspace {
 	/** Absolute path to the real workspace directory the tools operate on. */
 	readonly cwd: string;
-	readonly agent: Agent;
+	readonly agent: AgentInstance;
 	readonly model: MockModel;
 	/** Every agent event emitted during the run, in order. */
 	readonly events: AgentEvent[];

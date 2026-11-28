@@ -1,10 +1,11 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { schemaDefinesProperty } from "@veyyon/agent-core/tool-normalization";
-import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { errorMessage, isRecord } from "@veyyon/utils";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { INTENT_FIELD } from "@veyyon/wire";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard, sanitizeProducerJson } from "../../secrets/producer-output";
 import type { ToolSession } from "../../tools";
 import { TOOL_EXECUTION_ENTRIES } from "../../tools/core/execution-registry";
 import { ToolError } from "../../tools/core/tool-errors";
@@ -19,6 +20,36 @@ export type { JsStatusEvent } from "./shared/types";
 
 interface ToolBridgeOptions extends EvalBridgeOptions {
 	entry?: "eval.tool-bridge" | "cli.worker";
+}
+
+/** Sanitize status data before handing it to a live or retained sink. */
+export function sanitizeEvalStatus(
+	event: JsStatusEvent,
+	redact?: (text: string) => string,
+	source: "bridge" | "worker" = "bridge",
+): JsStatusEvent {
+	const { op, ...fields } = event;
+	const guard = new ProducerOutputGuard(redact);
+	// Each event publishes immediately. Withhold even a single assignment,
+	// since it could start an inventory that we cannot retract.
+	const sanitize = (text: string): string =>
+		/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/m.test(sanitizeText(text))
+			? BLOCKED_OUTPUT_RECORD
+			: guard.sanitize(text);
+	const safeOp = typeof op !== "string" ? "status" : source === "bridge" ? op : sanitize(op);
+	try {
+		const sanitized = sanitizeProducerJson(fields, { sanitize }, Infinity);
+		return isRecord(sanitized) ? { ...sanitized, op: safeOp } : { op: safeOp, message: sanitized };
+	} catch {
+		return { op: safeOp, message: BLOCKED_OUTPUT_RECORD };
+	}
+}
+
+function boundToolSummary(event: JsStatusEvent): void {
+	for (const key of ["preview", "output", "error"]) {
+		const value = event[key];
+		if (typeof value === "string") event[key] = value.slice(0, 500);
+	}
 }
 
 type ToolValue =
@@ -61,7 +92,11 @@ function normalizeArgs(args: unknown): unknown {
 }
 
 function executionArgsForTool(tool: AgentTool, args: unknown): unknown {
-	if (!isRecord(args) || schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) || !Object.hasOwn(args, INTENT_FIELD)) {
+	if (
+		!isRecord(args) ||
+		schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) ||
+		!Object.hasOwn(args, INTENT_FIELD)
+	) {
 		return args;
 	}
 	const { [INTENT_FIELD]: _intent, ...executionArgs } = args;
@@ -127,13 +162,13 @@ function summarizeToolResult(
 	const details = (
 		result.details && typeof result.details === "object" ? (result.details as Record<string, unknown>) : {}
 	) as Record<string, unknown>;
-	const safePreview = redactUsageText(text, []).slice(0, 500);
+	// The status publisher scans this full text before limiting the preview.
 	const withError = (event: JsStatusEvent): JsStatusEvent =>
-		hasError ? { ...event, hasError: true, error: safePreview } : event;
+		hasError ? { ...event, hasError: true, error: text } : event;
 
 	switch (name) {
 		case "read":
-			return withError({ op: "read", path: record.path, chars: text.length, preview: safePreview });
+			return withError({ op: "read", path: record.path, chars: text.length, preview: text });
 		case "write":
 			return withError({
 				op: "write",
@@ -155,7 +190,7 @@ function summarizeToolResult(
 				op: "run",
 				cmd: record.command,
 				code: typeof details.exitCode === "number" ? details.exitCode : undefined,
-				output: safePreview,
+				output: text,
 			});
 		default:
 			return withError({ op: name, chars: text.length });
@@ -163,8 +198,20 @@ function summarizeToolResult(
 }
 
 export async function callSessionTool(name: string, args: unknown, options: ToolBridgeOptions): Promise<ToolValue> {
+	const { emitStatus: publish, session } = options;
+	const emitStatus = publish
+		? (event: JsStatusEvent, summary = false) => {
+				const safe = sanitizeEvalStatus(event, session.obfuscateProviderText);
+				if (summary) boundToolSummary(safe);
+				if (safe.op === "agent" && typeof safe.taskPreview === "string") {
+					safe.taskPreview = safe.taskPreview.split("\n", 1)[0]?.slice(0, 120) || undefined;
+				}
+				publish(safe);
+			}
+		: undefined;
+	const bridgeOptions = { ...options, emitStatus };
 	if (name === EVAL_COMPLETION_BRIDGE_NAME) {
-		return await runEvalCompletion(args, options);
+		return await runEvalCompletion(args, bridgeOptions);
 	}
 	if (name === EVAL_AGENT_BRIDGE_NAME) {
 		// Loaded on demand. `agent-bridge` runs a real spawned agent and pulls the MCP manager, task
@@ -172,13 +219,13 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		// pay for any of that. This branch already awaited, so deferring costs nothing, and a
 		// failure to load throws here exactly as a missing symbol would have.
 		const { runEvalAgent } = await import("../agent-bridge");
-		return await runEvalAgent(args, options);
+		return await runEvalAgent(args, bridgeOptions);
 	}
 	if (name === EVAL_BUDGET_BRIDGE_NAME) {
-		return await runEvalBudget(args, options);
+		return await runEvalBudget(args, bridgeOptions);
 	}
 	if (name === EVAL_CONCURRENCY_BRIDGE_NAME) {
-		return runEvalConcurrency(args, options);
+		return runEvalConcurrency(args, bridgeOptions);
 	}
 	// Worker IPC bridge entry point: worker threads / subprocesses (e.g. JS_EVAL_WORKER, JS_EVAL_PROCESS)
 	// execute tools via IPC calls to callSessionTool. Enforce the refusal fence at entry in case the
@@ -209,7 +256,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		);
 		const text = textBlocks.map(block => block.text).join("");
 		const hasError = toolResultHasError(result);
-		options.emitStatus?.(summarizeToolResult(name, statusArgs, result, text, hasError));
+		emitStatus?.(summarizeToolResult(name, statusArgs, result, text, hasError), true);
 		if (result.details === undefined && imageBlocks.length === 0 && !hasError) {
 			return text;
 		}
@@ -228,10 +275,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		}
 		return value;
 	} catch (error) {
-		options.emitStatus?.({
-			op: name,
-			error: redactUsageText(errorMessage(error), []),
-		});
+		emitStatus?.({ op: name, error: errorMessage(error) });
 		throw error;
 	}
 }

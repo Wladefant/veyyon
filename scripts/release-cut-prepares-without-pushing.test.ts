@@ -25,8 +25,20 @@
  * one bug away from deleting the wrong one.
  */
 import { describe, expect, test } from "bun:test";
+import { releasePreflightTask } from "./release";
 import { preparationLeftovers, resolveReleaseVersion, rollbackReport, statusPaths } from "./release-cut";
 import { nextSteps } from "./release-ship";
+
+describe("release preflight", () => {
+	test("defers Rust checks to CI on a local Windows release", () => {
+		expect(releasePreflightTask("win32", false)).toBe("check:ts");
+	});
+
+	test("keeps the full check on Linux and in CI", () => {
+		expect(releasePreflightTask("linux", false)).toBe("check");
+		expect(releasePreflightTask("win32", true)).toBe("check");
+	});
+});
 
 describe("statusPaths", () => {
 	test("stages both sides of a rename so the delete is not left behind", () => {

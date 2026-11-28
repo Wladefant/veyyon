@@ -6,6 +6,7 @@ const pythonPath = Bun.env.PYTHON ?? "python3";
 async function runPrelude(
 	code: string,
 	env: Record<string, string> = {},
+	timeout?: number,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const prelude = PYTHON_PRELUDE.replace(
 		"from __future__ import annotations",
@@ -16,6 +17,7 @@ async function runPrelude(
 		stdout: "pipe",
 		stderr: "pipe",
 		env: { ...process.env, ...env },
+		timeout,
 	});
 	const [stdout, stderr, exitCode] = await Promise.all([
 		new Response(proc.stdout).text(),
@@ -87,6 +89,60 @@ describe("python prelude", () => {
 		} finally {
 			server.stop(true);
 		}
+	});
+
+	it("times out a stalled delegated read before the cell deadline", async () => {
+		const stalled = Promise.withResolvers<Response>();
+		let requested = false;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			idleTimeout: 0,
+			fetch() {
+				requested = true;
+				return stalled.promise;
+			},
+		});
+
+		try {
+			const result = await runPrelude(
+				[
+					"try:",
+					'    read("artifact://21")',
+					"except TimeoutError as error:",
+					"    print(error)",
+					'print("Python is still running")',
+				].join("\n"),
+				{
+					VEYYON_TOOL_BRIDGE_URL: server.url.toString(),
+					VEYYON_TOOL_BRIDGE_TOKEN: "test-token",
+					VEYYON_TOOL_BRIDGE_SESSION: "test-session",
+				},
+				20_000,
+			);
+			expect(requested).toBe(true);
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toMatch(/^bridge call 'read' timed out.*\nPython is still running\n$/);
+		} finally {
+			server.stop(true);
+			stalled.resolve(new Response());
+		}
+	}, 25_000);
+
+	it("reads local URI JSON directly without a tool bridge", async () => {
+		const result = await runPrelude(
+			`
+from tempfile import TemporaryDirectory
+
+with TemporaryDirectory() as root:
+    os.environ["VEYYON_EVAL_LOCAL_ROOTS"] = json.dumps({"local": root})
+    Path(root, "sample.json").write_text('{"ok": true}', encoding="utf-8")
+    print(json.loads(read("local://sample.json"))["ok"])
+`,
+			{ VEYYON_TOOL_BRIDGE_URL: "" },
+		);
+		expect(result).toEqual({ stdout: "True\n", stderr: "", exitCode: 0 });
 	});
 
 	it("exposes isolation artifacts on the agent() handle node", () => {

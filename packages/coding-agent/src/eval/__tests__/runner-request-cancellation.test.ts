@@ -1,5 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { TempDir } from "@veyyon/utils";
+import { $which } from "@veyyon/utils/which";
 
 interface RunnerFrame {
 	type?: string;
@@ -25,20 +27,28 @@ interface RunnerClient {
 	close(): Promise<void>;
 }
 
-const pythonPath = Bun.env.PYTHON ?? "python3";
+const pythonPath = $which("python3") ?? $which("python");
 const runnerPath = path.resolve(import.meta.dir, "../py/runner.py");
-const repoRoot = path.resolve(import.meta.dir, "../../../../..");
+let tempDir: TempDir;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const lines = (...source: string[]) => source.join(String.fromCharCode(10));
 
+beforeEach(() => {
+	tempDir = TempDir.createSync("@veyyon-python-cancellation-");
+});
+
+afterEach(() => {
+	tempDir.removeSync();
+});
+
 function spawnRunner(): RunnerClient {
-	const proc = Bun.spawn([pythonPath, "-u", runnerPath], {
-		cwd: repoRoot,
+	if (!pythonPath) throw new Error("Python 3 is required to test the eval runner");
+	const proc = Bun.spawn([pythonPath, "-I", "-B", "-X", "utf8", "-u", runnerPath], {
+		cwd: tempDir.path(),
 		stdin: "pipe",
 		stdout: "pipe",
 		stderr: "pipe",
-		env: { ...process.env, PYTHONUNBUFFERED: "1", PYTHONIOENCODING: "utf-8" },
 	});
 	const stderr = new Response(proc.stderr).text();
 	const reader = proc.stdout.getReader();

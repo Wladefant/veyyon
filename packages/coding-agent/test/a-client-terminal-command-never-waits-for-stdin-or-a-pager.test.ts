@@ -22,7 +22,6 @@ import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import type {
 	ClientBridge,
@@ -30,7 +29,7 @@ import type {
 	ClientBridgeTerminalHandle,
 } from "@veyyon/kernel/session/client-bridge";
 import { removeWithRetries } from "@veyyon/utils";
-import type { ShellConfig } from "@veyyon/utils/procmgr";
+import { getShellConfig, type ShellConfig } from "@veyyon/utils/procmgr";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
 
@@ -85,7 +84,12 @@ beforeAll(async () => {
 	await fs.writeFile(launcher, PAGER_LAUNCHER);
 	await fs.writeFile(redirectInput, "redirect-payload");
 	fixtures = { dir, consumer, launcher, redirectInput };
-	shellConfig = (await Settings.init()).getShellConfig();
+	shellConfig = {
+		shell: process.platform === "win32" ? getShellConfig().shell : "/bin/bash",
+		args: process.platform === "win32" ? ["-l", "-c"] : ["--noprofile", "--norc", "-c"],
+		env: {},
+		prefix: undefined,
+	};
 });
 
 afterAll(async () => {
@@ -98,7 +102,7 @@ interface ClientTerminalFixture {
 }
 
 /**
- * A terminal bridge that spawns what `terminal/create` asks for, the way an ACP client does.
+ * A terminal bridge that runs the test shell with the arguments from `terminal/create`.
  * Its stdin is an open pipe it never closes. Its base environment carries hostile pagers, and
  * the request's env entries overlay that base, as a client applies them.
  */
@@ -109,15 +113,29 @@ function makeClientTerminal(): ClientTerminalFixture {
 	const bridge: ClientBridge = {
 		capabilities: { terminal: true },
 		async createTerminal(params): Promise<ClientBridgeTerminalHandle> {
-			const env: NodeJS.ProcessEnv = { ...process.env, PAGER: HOSTILE_PAGER, GH_PAGER: HOSTILE_PAGER };
+			expect(params.command).toBe(shellConfig.shell);
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				HOME: fixtures.dir,
+				USERPROFILE: fixtures.dir,
+				PAGER: HOSTILE_PAGER,
+				GH_PAGER: HOSTILE_PAGER,
+			};
 			for (const entry of params.env ?? []) env[entry.name] = entry.value;
+			delete env.BASH_ENV;
 
-			const child = spawn(params.command, params.args ?? [], {
-				cwd: params.cwd,
-				env,
-				stdio: ["pipe", "pipe", "pipe"],
-				windowsHide: true,
-			});
+			const child = spawn(
+				process.platform === "win32"
+					? path.win32.join(path.win32.dirname(shellConfig.shell), "bash.exe")
+					: "/bin/bash",
+				params.args ?? [],
+				{
+					cwd: params.cwd,
+					env,
+					stdio: ["pipe", "pipe", "pipe"],
+					windowsHide: true,
+				},
+			);
 			live.add(child);
 			const { stdin, stdout, stderr } = child;
 			if (!stdout || !stderr) throw new Error("terminal child did not expose stdout and stderr");

@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-28
+
+### Added
+
+- Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
+
 ### Fixed
 
 - Preserve a draft session when reloading its planned transcript path before the first write ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
@@ -12,10 +18,6 @@
 - Let sibling native transcripts open while another transcript's owner record is still syncing ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 - Use the shared session filename rule when publishing a staged journal ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Keep compacted tool results on disk when their codec has no migration to run ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
-
-### Added
-
-- Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
 
 ## [1.12.1] - 2026-11-20
 

@@ -4,13 +4,73 @@
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-28
+
 ### Added
 
+- Set different auto-compaction thresholds by model with `compaction.thresholdByModel` ([#1088](https://github.com/Wladefant/veyyon/issues/1088)).
+- Expose a bounded live agent roster through the session owner's authenticated terminal control endpoint ([Refs Wladefant/superboard#3039](https://github.com/Wladefant/superboard/issues/3039)).
+- Resolve a model-specific compaction threshold before the profile threshold.
 - Preserve structured subagent launch grants in the issuing root journal without copying them to forks or branches.
+- Allow async file locks to prepare the owner record before entering a caller's publication guard ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 
 ### Fixed
 
+- Sanitize eval tool status, including shell commands and nested summaries, before sending live updates or retaining results ([Refs #939](https://github.com/Wladefant/veyyon/issues/939)).
+- Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
+- Include source file, line, and column in legacy Pi export prepass errors when Bun provides them ([Refs #985](https://github.com/Wladefant/veyyon/issues/985)).
+- Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
+- Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
+- Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).
+- Report terminal queue capacity while delivery is blocked. Keep durable Telegram input IDs separate from confirmed journal entries ([Refs Wladefant/superboard#3473](https://github.com/Wladefant/superboard/issues/3473)).
+- Show detached child startup phases in `job list` and `irc list`, even before the child registers. Measure transcript open and launch-grant publication separately ([Refs Wladefant/superboard#3081](https://github.com/Wladefant/superboard/issues/3081)).
+- Report when a detached child cannot receive IRC yet, with its job ID and confirmation that no message was buffered ([Refs Wladefant/superboard#3110](https://github.com/Wladefant/superboard/issues/3110)).
+- Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).
+- Settle failed turns when the scheduler skips their automatic retry continuation ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
+- Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Stop MCP HTTP responses from starting a JSON body read after cancellation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Reject invalid browser app routes before launch, cache IRC schemas across launches, and repair tool and trust regression coverage ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep the default and allowed agent types in the shorter task prompt ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Return promptly when a Python eval cell does not acknowledge cancellation. Report that the cell may still be running without stopping the kernel ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore idle queue delivery, bounded `/btw` promotion, terminal error records, raw SSE capture access, and TTSR rules from approved plugins. Let print mode exit past untimed bash jobs and log failed extension aborts in spawned agents ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep MCP authentication refresh within the request deadline ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
+- Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Stage Windows WriteTool edits and archive rewrites with the existing file's DACL. Write archive bytes through the staging handle instead of reopening the temp path ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
+- Fence synchronized sessions after an invalid initial lease, and wait for queued message writes before deduplicating results ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Match CLI help and completion to command metadata, including the terminal-control summary. Separate MCP event wiring from startup and account for more session subprocesses in the CPU budget ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Track refusal fence installation sites after the session split ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore the raw SSE debug viewer and tell agents to use verified IRC names ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Retry assistant drafts interrupted by a socket reset when their text can be retracted, without replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
+- Keep Windows release preparation running by leaving Rust checks to release CI ([Refs #728](https://github.com/Wladefant/veyyon/issues/728)).
+- Raise `TimeoutError` when a delegated Python eval `read()` stalls on the tool bridge. Keep `local://` reads on disk ([Refs #1086](https://github.com/Wladefant/veyyon/issues/1086)).
+- Keep saved output links tied to the sender's artifact store when agents share them over local IRC ([Refs #1080](https://github.com/Wladefant/veyyon/issues/1080)).
+- Let the retry ladder move past a Codex fallback when credential lookup stalls ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
+- Exclude restated session blocks from the retained-history budget so manual compaction leaves genuinely small conversations alone ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Require a per-attempt token for loopback OAuth launch shortcuts to protect the pending authorization URL ([#1149](https://github.com/Wladefant/veyyon/issues/1149)).
+- Recheck old Antigravity quota predictions against the same window in a fresh summary. Keep confirmed rate-limit holds in force ([Superboard #2679](https://github.com/Wladefant/superboard/issues/2679)).
+- Keep Gemini 4 tool history valid on Cloud Code Assist after a model switch or compaction ([#1284](https://github.com/Wladefant/veyyon/issues/1284)).
+- Cap new HTTP 400 and 413 request dumps at 256 files or 64 MiB per profile. Keep recent dumps for seven days and leave legacy files untouched ([Superboard #3367](https://github.com/Wladefant/superboard/issues/3367)).
+- Time out stalled Codex request setup without cutting off active thinking or tool responses ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
+- Defer ArkType schema creation until the first OpenAI transcription response needs validation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Retry empty provider responses without treating them as account plan denials ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- With load balancing on, a saved Codex account leads when eligible and yields to another enabled login when blocked.
+- Preserve a draft session when reloading its planned transcript path before the first write ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Drain queued appends before locking a rewrite, then scan a fixed journal snapshot and replay later appends without rereading the full file ([#1225](https://github.com/Wladefant/veyyon/issues/1225)).
+- Publish queued sibling launch grants in one durable root journal replacement instead of copying the transcript for each child ([#1232](https://github.com/Wladefant/veyyon/issues/1232)).
+- Let sibling native transcripts open while another transcript's owner record is still syncing ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Use the shared session filename rule when publishing a staged journal ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep compacted tool results on disk when their codec has no migration to run ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- A Windows shell timeout stops descendants even if an intermediate process has exited ([#1182](https://github.com/Wladefant/veyyon/issues/1182)).
+- Show `secret_request` status and metadata without printing raw tool output or secret handles ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Apply the destination's Windows DACL when creating an opt-in atomic write stage and refuse to overwrite a file that appears during a create ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
+- Keep Windows NTFS replacement to one rename, and reject new alternate streams or changed attributes before publication ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
 
 ## [1.12.3] - 2026-11-21
 

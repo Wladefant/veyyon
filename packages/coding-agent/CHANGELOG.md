@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-28
+
 ### Added
 
 - Set different auto-compaction thresholds by model with `compaction.thresholdByModel` ([#1088](https://github.com/Wladefant/veyyon/issues/1088)).
@@ -9,6 +11,9 @@
 
 ### Fixed
 
+- Sanitize eval tool status, including shell commands and nested summaries, before sending live updates or retaining results ([Refs #939](https://github.com/Wladefant/veyyon/issues/939)).
+- Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
+- Include source file, line, and column in legacy Pi export prepass errors when Bun provides them ([Refs #985](https://github.com/Wladefant/veyyon/issues/985)).
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
 - Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
 - Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).
@@ -39,6 +44,9 @@
 - Restore the raw SSE debug viewer and tell agents to use verified IRC names ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Retry assistant drafts interrupted by a socket reset when their text can be retracted, without replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
+- Keep Windows release preparation running by leaving Rust checks to release CI ([Refs #728](https://github.com/Wladefant/veyyon/issues/728)).
+- Raise `TimeoutError` when a delegated Python eval `read()` stalls on the tool bridge. Keep `local://` reads on disk ([Refs #1086](https://github.com/Wladefant/veyyon/issues/1086)).
+- Keep saved output links tied to the sender's artifact store when agents share them over local IRC ([Refs #1080](https://github.com/Wladefant/veyyon/issues/1080)).
 
 ## [1.12.3] - 2026-11-21
 

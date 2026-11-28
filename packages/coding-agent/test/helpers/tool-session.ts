@@ -20,10 +20,15 @@
  * is a build error at the call site, and a new required member on `ToolSession`
  * is a single failure here rather than 46 silent stubs that no longer match.
  */
+import "../../../utils/test/helpers/real-data-tripwire";
 import * as path from "node:path";
-import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import type { SettingPath, Settings as SettingsStore } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
-import { getAgentDir } from "@veyyon/utils";
+
+// Bun snapshots builtin namespaces while linking static imports. Load the
+// production graph only after the tripwire has redirected node:os and patched node:fs.
+const { Settings } = await import("@veyyon/coding-agent/config/settings");
+const { getAgentDir } = await import("@veyyon/utils");
 
 /**
  * A stand-in for `Settings` that answers the few keys a test names.
@@ -33,7 +38,7 @@ import { getAgentDir } from "@veyyon/utils";
  * the store cannot serve. A test that needs the whole store, including its
  * handling of a stored value of the wrong kind, passes `Settings.isolated(...)`.
  */
-export type SettingsStub = { get(path: string): unknown } & Partial<Omit<Settings, "get">>;
+export type SettingsStub = { get(path: string): unknown } & Partial<Omit<SettingsStore, "get">>;
 
 /** Overrides accepted by {@link makeToolSession}. Fully checked except `settings`. */
 export type ToolSessionOverrides = Omit<Partial<ToolSession>, "settings"> & { settings?: SettingsStub };
@@ -61,7 +66,7 @@ export function makeToolSession(overrides: ToolSessionOverrides = {}): ToolSessi
 		return value === undefined ? declaredDefaults().get(path as SettingPath) : value;
 	};
 	resolved.getAgentDir ??= () => getAgentDir();
-	return { ...inertSession(), settings: resolved as Settings, ...rest };
+	return { ...inertSession(), settings: resolved as SettingsStore, ...rest };
 }
 
 /** {@link makeToolSession} rooted at `cwd`, reading a fresh isolated settings store. */
@@ -94,10 +99,10 @@ function inertSession(): Omit<ToolSession, "settings"> {
 	};
 }
 
-let defaults: Settings | undefined;
+let defaults: SettingsStore | undefined;
 
 /** One empty store, read for the declared default of every key a stub leaves unanswered. */
-function declaredDefaults(): Settings {
+function declaredDefaults(): SettingsStore {
 	defaults ??= Settings.isolated();
 	return defaults;
 }
