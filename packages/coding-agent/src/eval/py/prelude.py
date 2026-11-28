@@ -419,7 +419,8 @@ if "__veyyon_prelude_loaded__" not in globals():
         return f"{start}-{start + limit - 1}"
 
     def _read_tool_text(path: str) -> str:
-        result = _bridge_call("read", {"path": path})
+        # Let a stalled read fail before the default 30-second cell deadline.
+        result = _bridge_call("read", {"path": path}, timeout=10)
         if isinstance(result, dict) and "text" in result:
             return result["text"]
         return result
@@ -720,7 +721,7 @@ if "__veyyon_prelude_loaded__" not in globals():
             raise RuntimeError("tool bridge is unavailable in this kernel")
         return (base.rstrip("/"), token, session)
 
-    def _bridge_call(name: str, args: dict):
+    def _bridge_call(name: str, args: dict, *, timeout: float | None = None):
         """POST one request to the host tool bridge and return its `value`."""
         import urllib.request, urllib.error
 
@@ -744,10 +745,23 @@ if "__veyyon_prelude_loaded__" not in globals():
             },
         )
         try:
-            with urllib.request.urlopen(req) as resp:
+            try:
+                resp = (
+                    urllib.request.urlopen(req)
+                    if timeout is None
+                    else urllib.request.urlopen(req, timeout=timeout)
+                )
+            except urllib.error.HTTPError as exc:
+                resp = exc
+            with resp:
                 body = resp.read()
-        except urllib.error.HTTPError as exc:
-            body = exc.read()
+        except (TimeoutError, urllib.error.URLError) as exc:
+            if timeout is None or (
+                isinstance(exc, urllib.error.URLError)
+                and not isinstance(exc.reason, TimeoutError)
+            ):
+                raise
+            raise TimeoutError(f"bridge call {name!r} timed out") from exc
         try:
             data = json.loads(body)
         except json.JSONDecodeError:
