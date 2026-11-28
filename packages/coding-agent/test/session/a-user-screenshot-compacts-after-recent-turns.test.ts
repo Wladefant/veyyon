@@ -487,4 +487,41 @@ describe("automatic user screenshot compaction", () => {
 		expect(imageBlocks(partialFirst)).toHaveLength(1);
 		expect(imageBlocks(partialFirst)[0]!.data).toBe(BLUE_1X1_PNG.data);
 	});
+
+	it("coalesces concurrent vision summaries for the same image hash and preserves compacted message identity across turns", async () => {
+		const { sideRequests, transformHook } = await createHarness({
+			settings: { "images.compactAfterTurns": 1 },
+		});
+		const sharedUserMsg: UserMessage = {
+			role: "user",
+			content: [{ type: "text", text: "concurrent shot" }, RED_1X1_PNG],
+			attribution: "user",
+			timestamp: 1,
+		};
+		const messages: Message[] = [
+			sharedUserMsg,
+			{ role: "user", content: [{ type: "text", text: "later" }], attribution: "user", timestamp: 2 },
+		];
+		const [firstOut, secondOut] = await Promise.all([
+			transformHook!({ systemPrompt: ["Test"], messages, tools: [] }, visionModel()),
+			transformHook!({ systemPrompt: ["Test"], messages, tools: [] }, visionModel()),
+		]);
+		expect(sideRequests).toHaveLength(1);
+		expect(imageBlocks(firstOut.messages[0]!)).toEqual([]);
+		expect(imageBlocks(secondOut.messages[0]!)).toEqual([]);
+
+		const thirdOut = await transformHook!(
+			{
+				systemPrompt: ["Test"],
+				messages: [
+					...messages,
+					{ role: "user", content: [{ type: "text", text: "even later" }], attribution: "user", timestamp: 3 },
+				],
+				tools: [],
+			},
+			visionModel(),
+		);
+		expect(sideRequests).toHaveLength(1);
+		expect(thirdOut.messages[0]).toBe(firstOut.messages[0]);
+	});
 });

@@ -375,6 +375,29 @@ export const APPEARANCE_SETTINGS = {
 		},
 	},
 
+	"images.compactAfterTurns": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "model",
+			group: "Vision",
+			label: "Compact Old Screenshots After",
+			description:
+				"Replace older user-attached screenshots in outbound requests with a cached vision summary once this many later user turns follow (original transcript stays intact). Set to 0 to disable.",
+			min: 0,
+			max: 100,
+			options: [
+				{ value: "0", label: "Off", description: "Keep all user-attached screenshots in requests" },
+				{ value: "2", label: "2 turns", description: "Compact screenshots after 2 later user turns" },
+				{ value: "3", label: "3 turns (default)", description: "Compact screenshots after 3 later user turns" },
+				{ value: "4", label: "4 turns", description: "Compact screenshots after 4 later user turns" },
+				{ value: "6", label: "6 turns", description: "Compact screenshots after 6 later user turns" },
+				{ value: "10", label: "10 turns", description: "Compact screenshots after 10 later user turns" },
+				{ value: "20", label: "20 turns", description: "Compact screenshots after 20 later user turns" },
+			],
+		},
+	},
+
 	"tui.maxInlineImageColumns": {
 		type: "number",
 		default: 100,

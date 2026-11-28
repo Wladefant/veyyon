@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Compact older eligible user-attached screenshots in outbound requests into durably cached vision summaries after `images.compactAfterTurns` later user turns while preserving recent screenshots and original transcripts ([Refs #1326](https://github.com/Wladefant/veyyon/issues/1326)).
+
 ## [1.12.4] - 2026-11-28
 
 ### Added
