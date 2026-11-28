@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Record child native transcript open and launch-grant persistence timings separately while keeping `sessionOpenMs` inclusive, and report the concrete setup phase when the startup watchdog expires before the first turn. A pending skill read no longer delays that report or starts a turn after the watchdog fires ([Refs #1232](https://github.com/Wladefant/veyyon/issues/1232)).
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
 - Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
 - Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).

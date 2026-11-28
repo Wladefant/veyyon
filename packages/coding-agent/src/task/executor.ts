@@ -947,6 +947,7 @@ interface DriveOutcome {
 	/** The most precise reason available for {@link DriveOutcome.turnAborted}. */
 	turnAbortReason?: string;
 	startupFailed?: boolean;
+	startupStallPhase?: SetupPhase;
 }
 
 const MAX_YIELD_RETRIES = 3;
@@ -1363,7 +1364,10 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		turnAborted: done.turnAborted,
 		turnAbortReason: done.turnAbortReason,
 		callerAborted: Boolean(signal?.aborted),
-		resolveAbortReason: () => monitor.resolveAbortReasonText(),
+		resolveAbortReason: () =>
+			done.startupStallPhase
+				? `${monitor.resolveAbortReasonText()} during setup (${done.startupStallPhase})`
+				: monitor.resolveAbortReasonText(),
 		resolveSignalAbortReason: () => monitor.resolveSignalAbortReason(),
 	});
 	const terminalOutcome: AgentTerminalOutcome = done.startupFailed
@@ -1931,6 +1935,14 @@ function throwIfRunAborted(abortSignal: AbortSignal): void {
 	if (abortSignal.aborted) throw new ToolAbortError();
 }
 
+type SetupPhase =
+	| "resolve-model"
+	| "open-transcript"
+	| "record-launch-grant"
+	| "create-session"
+	| "start-session"
+	| "autoload-skills";
+
 /**
  * `performance.now()` marks of a run's launch. A mark stays undefined when setup threw before
  * reaching it, which itself localizes the cost.
@@ -1938,7 +1950,10 @@ function throwIfRunAborted(abortSignal: AbortSignal): void {
 interface LaunchMarks {
 	perfStart: number;
 	resolvedAt?: number;
+	/** Native transcript file opened (`SessionManager.open` returned), before launch-grant persistence. */
 	transcriptOpenedAt?: number;
+	/** Launch grant persisted via `beforeChildStart` (when configured). */
+	grantRecordedAt?: number;
 	sessionOpenedAt?: number;
 	sessionCreatedAt?: number;
 	readyAt?: number;
@@ -1966,6 +1981,7 @@ interface ChildSessionContext {
 	ircEnabled: boolean;
 	awaitAbortable: AbortableAwaiter;
 	marks: LaunchMarks;
+	setupPhase?: SetupPhase;
 }
 
 /** The model a child runs on and the effort it runs at. */
@@ -2225,12 +2241,14 @@ interface OpenedChildSession {
 /** Open the child's durable session on its resolved model and register it with the monitor and the agent registry. */
 async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSession> {
 	const { options, monitor, marks } = ctx;
-	options.onStartupPhase?.("resolve-model");
+	ctx.setupPhase = "resolve-model";
+	options.onStartupPhase?.(ctx.setupPhase);
 	const runModel = await resolveRunModel(ctx);
 	monitor.abortSignal.throwIfAborted();
 	marks.resolvedAt = performance.now();
 	const buildSessionOptions = childSessionOptionsBuilder(ctx, runModel);
-	options.onStartupPhase?.("open-transcript");
+	ctx.setupPhase = "open-transcript";
+	options.onStartupPhase?.(ctx.setupPhase);
 	const opening = openNativeTranscript(
 		ctx.sessionFile,
 		ctx.effectiveCwd,
@@ -2238,13 +2256,16 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 			monitor.abortSignal.throwIfAborted();
 			marks.transcriptOpenedAt = performance.now();
 			if (options.beforeChildStart) {
-				options.onStartupPhase?.("record-launch-grant");
+				ctx.setupPhase = "record-launch-grant";
+				options.onStartupPhase?.(ctx.setupPhase);
 				await options.beforeChildStart(sessionManager.getSessionId(), sessionManager.getSessionFile()!);
+				marks.grantRecordedAt = performance.now();
 				monitor.abortSignal.throwIfAborted();
 			}
 			if (options.parentArtifactManager) sessionManager.adoptArtifactManager(options.parentArtifactManager);
 			marks.sessionOpenedAt = performance.now();
-			options.onStartupPhase?.("create-session");
+			ctx.setupPhase = "create-session";
+			options.onStartupPhase?.(ctx.setupPhase);
 			const { session } = await createSubagentSession(
 				options.parentSessionId,
 				buildSessionOptions(sessionManager, ctx.settings),
@@ -2418,11 +2439,13 @@ async function startChildSession(
  * the spawner cannot match the declared names: it forwards them as a `deferred` plan and they are
  * judged present or missing against the tree the child was pointed at.
  */
-async function autoloadChildSkills(session: AgentSession, ctx: ChildSessionContext): Promise<void> {
+async function autoloadChildSkills(ctx: ChildSessionContext, session: AgentSession): Promise<void> {
 	const { options, monitor, awaitAbortable } = ctx;
+	const abortSignal = monitor.abortSignal;
 	for (const skill of settleAutoloadSkills(options.autoloadSkills, session.skills, options.agent.name)) {
+		throwIfRunAborted(abortSignal);
 		const { message } = await awaitAbortable(buildSkillPromptMessage(skill, "", "autoload"));
-		monitor.abortSignal.throwIfAborted();
+		throwIfRunAborted(abortSignal);
 		await awaitAbortable(
 			session.sendCustomMessage(
 				{
@@ -2441,14 +2464,24 @@ async function autoloadChildSkills(session: AgentSession, ctx: ChildSessionConte
  * Complete the turn facts for a run whose setup may have been cancelled before `driveSessionToYield`
  * ever ran: they are completed here rather than assumed. No verdict is formed; see `resolveRunVerdict`.
  */
-function withSetupAbort(outcome: DriveOutcome, monitor: AgentRunMonitor): DriveOutcome {
+function withSetupAbort(
+	outcome: DriveOutcome,
+	monitor: AgentRunMonitor,
+	setupPhase: SetupPhase | undefined,
+): DriveOutcome {
 	if (!monitor.abortSignal.aborted) return outcome;
 	if (!monitor.isAbortedRun()) return { ...outcome, turnCutShort: true };
+	const startupStallPhase = setupPhase !== undefined && monitor.abortKind() === "stalled" ? setupPhase : undefined;
 	return {
 		...outcome,
 		turnCutShort: true,
 		turnAborted: true,
-		turnAbortReason: outcome.turnAbortReason ?? monitor.resolveAbortReasonText(),
+		startupStallPhase,
+		turnAbortReason:
+			outcome.turnAbortReason ??
+			(startupStallPhase
+				? `${monitor.resolveAbortReasonText()} during setup (${startupStallPhase})`
+				: monitor.resolveAbortReasonText()),
 	};
 }
 
@@ -2528,6 +2561,8 @@ function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: Lau
 		queueMs: elapsedMs(invokedAt, acquiredAt),
 		preRunMs: elapsedMs(acquiredAt, startTime),
 		resolveMs: elapsedMs(marks.perfStart, marks.resolvedAt),
+		transcriptOpenMs: elapsedMs(marks.resolvedAt, marks.transcriptOpenedAt),
+		launchGrantMs: elapsedMs(marks.transcriptOpenedAt, marks.grantRecordedAt),
 		sessionOpenMs: elapsedMs(marks.resolvedAt, marks.sessionOpenedAt),
 		transcriptOpenMs: elapsedMs(marks.resolvedAt, marks.transcriptOpenedAt),
 		launchGrantMs: options.beforeChildStart ? elapsedMs(marks.transcriptOpenedAt, marks.sessionOpenedAt) : undefined,
@@ -2561,14 +2596,17 @@ async function driveChildRun(
 	try {
 		const opened = await openChildSession(ctx);
 		reviveSession = opened.reviveSession;
-		options.onStartupPhase?.("start-session");
+		ctx.setupPhase = "start-session";
+		options.onStartupPhase?.(ctx.setupPhase);
 		await startChildSession(ctx, opened.session, sessionAbortController.signal);
 		unsubscribe = monitor.attach(opened.session);
 		throwIfRunAborted(abortSignal);
-		options.onStartupPhase?.("autoload-skills");
-		await autoloadChildSkills(opened.session, ctx);
+		ctx.setupPhase = "autoload-skills";
+		options.onStartupPhase?.(ctx.setupPhase);
+		await autoloadChildSkills(ctx, opened.session);
 		throwIfRunAborted(abortSignal);
 		ctx.marks.readyAt = performance.now();
+		ctx.setupPhase = undefined;
 		driveStarted = true;
 		options.onStartupPhase?.("ready");
 		outcome = await driveSessionToYield(opened.session, monitor, options.task, options.outputSchema);
@@ -2596,7 +2634,7 @@ async function driveChildRun(
 			};
 		}
 	} finally {
-		outcome = withSetupAbort(outcome, monitor);
+		outcome = withSetupAbort(outcome, monitor, driveStarted ? undefined : ctx.setupPhase);
 		sessionAbortController.abort();
 		await releaseRunSession({
 			options,
