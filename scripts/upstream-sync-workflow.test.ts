@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 const workflow = Bun.YAML.parse(await Bun.file(".github/workflows/upstream-sync.yml").text()) as {
+	concurrency?: { group: string; "cancel-in-progress": boolean };
 	jobs: Record<string, { "runs-on": string[]; if: string; steps: { run?: string }[] }>;
 };
 const job = workflow.jobs["check-and-open-sync-pr"];
@@ -13,6 +14,10 @@ test("upstream sync is admitted only on the trusted OVH pool from main", () => {
 	expect(job["runs-on"]).toEqual(["self-hosted", "Linux", "X64", "ovh", "veyyon"]);
 	expect(job.if).toContain("github.ref == 'refs/heads/main'");
 	expect(job.if).toContain("github.repository == 'Wladefant/veyyon'");
+});
+
+test("scheduled and manual upstream sync runs share a non-cancelling workflow lock", () => {
+	expect(workflow.concurrency).toEqual({ group: "upstream-sync", "cancel-in-progress": false });
 });
 
 test.skipIf(process.platform === "win32")("drift pushes only the upstream-tip candidate and opens a draft into unchanged main", async () => {
