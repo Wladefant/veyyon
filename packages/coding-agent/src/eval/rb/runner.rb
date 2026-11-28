@@ -415,6 +415,7 @@ end
 # ---------------------------------------------------------------------------
 
 VEYYON_MANAGED_ENV_KEYS = %w[
+  VEYYON_AGENT_ID
   VEYYON_SESSION_FILE
   VEYYON_ARTIFACTS_DIR
   VEYYON_TOOL_BRIDGE_URL
