@@ -507,7 +507,10 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		const fetchMock: FetchImpl = async input => {
 			const endpoint = endpointFromInput(input);
 			requestedEndpoints.push(endpoint);
-			const response = endpoint === ANTIGRAVITY_SANDBOX_ENDPOINT ? sseResponse([ccaChunk("Recovered.")]) : sseResponse([ccaChunk("")]);
+			const response =
+				endpoint === ANTIGRAVITY_SANDBOX_ENDPOINT
+					? sseResponse([ccaChunk("Recovered.")])
+					: sseResponse([ccaChunk("")]);
 			return withResponseUrl(response, endpoint);
 		};
 
@@ -656,9 +659,8 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 
 		expect(requestedEndpoints).toEqual([ANTIGRAVITY_DAILY_ENDPOINT]);
 		expect(starts).toBe(1);
-		// Under veyyon's terminalless-eof policy (packages/ai/src/utils/terminalless-eof.ts),
-		// a stream carrying visible text that ends cleanly without finishReason settles to "stop".
-		expect(result.stopReason).toBe("stop");
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("without a finish reason");
 		expect(textOf(result)).toBe("partial");
 	});
 });

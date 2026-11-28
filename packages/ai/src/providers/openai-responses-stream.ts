@@ -1114,10 +1114,10 @@ class ResponsesStreamDecoder<TApi extends Api> {
 
 	#checkModel(reported: string | undefined): void {
 		const requested = this.#options?.requestModelId;
-		if (!requested || !reported) return;
+		if (!requested || !reported || reported === requested) return;
 		const isSnapshotOfAlias =
 			reported.startsWith(`${requested}-`) && /^\d{4}-\d{2}-\d{2}$/.test(reported.slice(requested.length + 1));
-		if ((reported !== requested && !isSnapshotOfAlias) || (this.#reportedModel && reported !== this.#reportedModel)) {
+		if (!isSnapshotOfAlias || (this.#reportedModel && reported !== this.#reportedModel)) {
 			throw new AIError.ProviderResponseError("Responses stream reported a mismatched model", {
 				provider: this.#model.provider,
 				kind: "output",

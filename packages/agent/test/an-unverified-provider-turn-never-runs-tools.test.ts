@@ -25,7 +25,12 @@ const modelSpec = {
 };
 const responses = buildModel({ ...modelSpec, id: "gpt-test", api: "openai-responses", provider: "openai" });
 const google = buildModel({ ...modelSpec, id: "gemini-4-hydrogen", api: "google-generative-ai", provider: "google" });
-const cli = buildModel({ ...modelSpec, id: "gemini-4-hydrogen-xhigh", api: "google-gemini-cli", provider: "google-antigravity" });
+const cli = buildModel({
+	...modelSpec,
+	id: "gemini-4-hydrogen-xhigh",
+	api: "google-gemini-cli",
+	provider: "google-antigravity",
+});
 const schemas = z.object({ value: z.string() });
 
 type Ending = "complete" | "eof" | "mismatched model" | "incomplete response" | "incomplete event";
@@ -34,40 +39,59 @@ function responsesFrames(ending: Ending, follow: boolean): unknown[] {
 	const item = { id: "msg_1", type: "message", role: "assistant", content: [] };
 	const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: toolName };
 	return [
+		{ type: "response.created", response: { id: "resp_1", model: `${responses.id}-2026-01-01` } },
 		{ type: "response.output_item.added", output_index: 0, item },
 		{ type: "response.output_text.delta", output_index: 0, item_id: item.id, delta: follow ? followUp : partial },
 		{ type: "response.output_item.done", output_index: 0, item: { ...item, status: "completed" } },
-		...(follow ? [] : [{
-			type: "response.output_item.done",
-			output_index: 1,
-			item: { ...call, status: "completed", arguments: JSON.stringify(args) },
-		}]),
-		...(ending === "eof" ? [] : [{
-			type: "response.completed",
-			...(ending === "incomplete event" ? { incomplete: true } : {}),
-			response: {
-				id: "resp_1",
-				status: "completed",
-				model: ending === "mismatched model" ? "gpt-other" : responses.id,
-				...(ending === "incomplete response" ? { incomplete: true } : {}),
-			},
-		}]),
+		...(follow
+			? []
+			: [
+					{
+						type: "response.output_item.done",
+						output_index: 1,
+						item: { ...call, status: "completed", arguments: JSON.stringify(args) },
+					},
+				]),
+		...(ending === "eof"
+			? []
+			: [
+					{
+						type: "response.completed",
+						...(ending === "incomplete event" ? { incomplete: true } : {}),
+						response: {
+							id: "resp_1",
+							status: "completed",
+							model: ending === "mismatched model" ? "gpt-other" : responses.id,
+							...(ending === "incomplete response" ? { incomplete: true } : {}),
+						},
+					},
+				]),
 	];
 }
 
-function googleFrames(ending: Ending, follow: boolean): unknown[] {
+function googleFrames(ending: Ending, follow: boolean, reported = `${google.id}-001`): unknown[] {
 	return [
 		{
-			modelVersion: google.id,
-			candidates: [{ content: { parts: [
-				{ text: follow ? followUp : partial },
-				...(follow ? [] : [{ functionCall: { name: toolName, args } }]),
-			] } }],
+			modelVersion: reported,
+			candidates: [
+				{
+					content: {
+						parts: [
+							{ text: follow ? followUp : partial },
+							...(follow ? [] : [{ functionCall: { name: toolName, args } }]),
+						],
+					},
+				},
+			],
 		},
-		...(ending === "eof" ? [] : [{
-			modelVersion: ending === "mismatched model" ? "gemini-4-neon" : google.id,
-			candidates: [{ finishReason: "STOP" }],
-		}]),
+		...(ending === "eof"
+			? []
+			: [
+					{
+						modelVersion: ending === "mismatched model" ? "gemini-4-neon" : reported,
+						candidates: [{ finishReason: "STOP" }],
+					},
+				]),
 	];
 }
 
@@ -75,20 +99,24 @@ const providers = {
 	Responses: {
 		model: responses,
 		frames: responsesFrames,
-		stream: (context: Context, options: SimpleStreamOptions) => streamOpenAIResponses(responses, context, { ...options, apiKey: "offline" }),
+		stream: (context: Context, options: SimpleStreamOptions) =>
+			streamOpenAIResponses(responses, context, { ...options, apiKey: "offline" }),
 	},
 	Gemini: {
 		model: google,
 		frames: googleFrames,
-		stream: (context: Context, options: SimpleStreamOptions) => streamGoogle(google, context, { ...options, apiKey: "offline" }),
+		stream: (context: Context, options: SimpleStreamOptions) =>
+			streamGoogle(google, context, { ...options, apiKey: "offline" }),
 	},
 	Antigravity: {
 		model: cli,
-		frames: (ending: Ending, follow: boolean) => googleFrames(ending, follow).map(response => ({ response })),
-		stream: (context: Context, options: SimpleStreamOptions) => streamGoogleGeminiCli(cli, context, {
-			...options,
-			apiKey: JSON.stringify({ token: "offline", projectId: "offline" }),
-		}),
+		frames: (ending: Ending, follow: boolean) =>
+			googleFrames(ending, follow, google.id).map(response => ({ response })),
+		stream: (context: Context, options: SimpleStreamOptions) =>
+			streamGoogleGeminiCli(cli, context, {
+				...options,
+				apiKey: JSON.stringify({ token: "offline", projectId: "offline" }),
+			}),
 	},
 };
 

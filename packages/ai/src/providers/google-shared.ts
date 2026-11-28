@@ -744,18 +744,29 @@ export function throwGoogleIncompleteStream(provider: string, surface: string): 
 	);
 }
 
+function matchesGoogleModelVersion(reported: string, requested: string): boolean {
+	const expected = requested.replace(/^models\//, "");
+	return (
+		reported === expected ||
+		expected.endsWith("-latest") ||
+		(reported.startsWith(`${expected}-`) && /^\d{3}$/.test(reported.slice(expected.length + 1)))
+	);
+}
+
 /** Check reported identities without treating a missing modelVersion as an identity claim. */
 export function observeGoogleModelVersion(
 	reported: string | undefined,
 	previous: string | undefined,
 	requested: string,
 	provider: string,
+	canonical?: string,
 ): string | undefined {
 	if (!reported) return previous;
 	const id = reported.replace(/^models\//, "");
-	const expected = requested.replace(/^models\//, "");
-	const isVersionOfAlias = id.startsWith(`${expected}-`) && /^\d{3}$/.test(id.slice(expected.length + 1));
-	if ((previous && id !== previous) || (id !== expected && !isVersionOfAlias && !expected.endsWith("-latest"))) {
+	if (
+		(previous && id !== previous) ||
+		(!matchesGoogleModelVersion(id, requested) && !(canonical && matchesGoogleModelVersion(id, canonical)))
+	) {
 		throw new AIError.ProviderResponseError("Google stream reported a mismatched model", {
 			provider,
 			kind: "output",

@@ -555,6 +555,7 @@ class CloudCodeAssistResponseDecoder {
 	constructor(
 		readonly model: Model<"google-gemini-cli">,
 		readonly requestModelId: string,
+		readonly canonicalModelId: string | undefined,
 		readonly output: AssistantMessage,
 		stream: AssistantMessageEventStream,
 		readonly toolNames: Set<string>,
@@ -576,15 +577,12 @@ class CloudCodeAssistResponseDecoder {
 		if (!response) return;
 		if (response.responseId) this.responseId = response.responseId;
 		throwIfGooglePromptBlocked(response, this.model.provider);
-		const expected =
-			this.requestModelId === "gemini-4-hydrogen-xhigh" && response.modelVersion !== this.requestModelId
-				? "gemini-4-hydrogen"
-				: this.requestModelId;
 		this.#reportedModel = observeGoogleModelVersion(
 			response.modelVersion,
 			this.#reportedModel,
-			expected,
+			this.requestModelId,
 			this.model.provider,
+			this.canonicalModelId,
 		);
 
 		const candidate = response.candidates?.[0];
@@ -674,6 +672,7 @@ interface CloudCodeAssistPlan {
 	readonly headers: Record<string, string>;
 	readonly bodyJson: string;
 	readonly requestModelId: string;
+	readonly canonicalModelId: string | undefined;
 	readonly providerState: AntigravityProviderSessionState | undefined;
 	/** The signed-in account, named in a validation-required error. */
 	readonly email: string | undefined;
@@ -825,6 +824,12 @@ class GeminiCliStreamRun {
 			headers,
 			bodyJson,
 			requestModelId: requestBody.model,
+			canonicalModelId:
+				isAntigravity && requestBody.model === "gemini-4-hydrogen-xhigh"
+					? "gemini-4-hydrogen"
+					: requestBody.model === model.requestModelId
+						? model.id
+						: undefined,
 			providerState,
 			email: credentials.email,
 			// Direct callers that skip `register-builtins` (which installs the iterator-level
@@ -1003,6 +1008,7 @@ class GeminiCliStreamRun {
 		const decoder = new CloudCodeAssistResponseDecoder(
 			model,
 			plan.requestModelId,
+			plan.canonicalModelId,
 			this.#output,
 			this.stream,
 			plan.toolNames,
@@ -1273,7 +1279,6 @@ export function buildRequest(
 			},
 		};
 	}
-
 
 	if (isAntigravity) {
 		// The real client sends a fixed per-model output cap independent of the

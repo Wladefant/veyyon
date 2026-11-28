@@ -162,6 +162,22 @@
       "risk": "medium",
       "components": ["ai", "Cloud Code Assist"]
     },
+    "offline-provider-stream-guard": {
+      "name": "Offline provider stream guard",
+      "description": "Reject marked-incomplete Responses turns, terminal-less Gemini turns, and mismatched reported model identities before tool dispatch.",
+      "entry_files": [
+        "packages/ai/src/providers/openai-responses-stream.ts",
+        "packages/ai/src/providers/google-shared.ts",
+        "packages/ai/src/providers/google-gemini-cli.ts"
+      ],
+      "tests": [
+        "packages/agent/test/an-unverified-provider-turn-never-runs-tools.test.ts",
+        "packages/ai/test/missing-google-finish-reasons-do-not-admit-native-turns.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/2891",
+      "risk": "high",
+      "components": ["ai", "agent"]
+    },
     "terminal-registry-snapshot": {
       "name": "Terminal registry snapshot",
       "description": "Read a bounded live agent roster from the authenticated terminal owner of one session.",
