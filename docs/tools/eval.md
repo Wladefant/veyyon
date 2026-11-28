@@ -196,6 +196,7 @@ Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding
   - create/connect kernel
   - initialize cwd / env / `sys.path`
   - execute `PYTHON_PRELUDE`
+- Python, Ruby, and Julia kernels pass `VEYYON_AGENT_ID` to cells and their subprocesses only when the live caller and transcript match. Without that match, the kernel clears the ID. A caller ID does not grant GitHub access; the GitHub wrapper still checks the root launch receipt for the requested repository and action.
 - Python cells run in the runner's persistent asyncio event loop, so top-level `await` works; the prompt warns not to use `asyncio.run(...)`
 - The Python prelude defines helpers with the same surface as JS where practical, including `tool.<name>(args)`, `completion(...)`, and `agent(...)` through a per-run loopback bridge
 - `eval.pyWorkspace` defaults to `false`. When enabled, the tool description tells the model to keep large `tool.*` results and reusable repository helpers in Python state and emit compact conclusions. The setting adds guidance, not runtime APIs.

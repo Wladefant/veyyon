@@ -12,7 +12,6 @@ import {
 	toError,
 } from "@veyyon/utils";
 import { Settings } from "../config/settings";
-import { resolveLiveToolCaller } from "../internal-urls/history-caller";
 import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
@@ -24,6 +23,7 @@ import {
 	resolveOutputSinkArtifactMaxBytes,
 	resolveOutputSinkWindow,
 } from "../tools/core/output-meta";
+import { resolveAttestedBashCaller } from "../tools/shell/bash-caller-attestation";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 import {
@@ -438,12 +438,9 @@ export function buildManagedKernelEnvPatch(
 	options: ManagedKernelEnvOptions,
 ): Record<(typeof MANAGED_KERNEL_ENV_KEYS)[number], string | null> {
 	const localRoots = options.localRoots;
-	const caller = options.toolSession && resolveLiveToolCaller(options.toolSession);
-	const sessionFile = options.sessionFile;
-	const agentId =
-		caller && sessionFile && caller.actor.session?.sessionManager.getSessionFile() === sessionFile
-			? caller.agentId
-			: null;
+	const caller =
+		options.sessionFile && options.toolSession ? resolveAttestedBashCaller(options.toolSession) : undefined;
+	const agentId = caller && caller.sessionFile === options.sessionFile ? caller.callerId : null;
 	return {
 		VEYYON_AGENT_ID: agentId,
 		VEYYON_SESSION_FILE: options.sessionFile ?? null,
