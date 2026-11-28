@@ -55,6 +55,8 @@ Third call, reuse the loaded config:
 
 Final result from `EvalTool.execute()` is single-shot, but `onUpdate` streams partial text and `details` while the cell runs.
 
+Eval filters credential data from tool status before it sends live updates or retains results. It scans the full text before shortening previews.
+
 Returned shape:
 
 - `content`: one text block containing the cell's combined output, `(displayed N image(s); no text output)` when only images exist, or `(no output)` when nothing visible was produced; image outputs are appended as additional image content blocks.
