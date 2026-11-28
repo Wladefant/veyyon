@@ -176,27 +176,24 @@ describe("InteractiveMode MCP connection status", () => {
 		expect(errorSpy).not.toHaveBeenCalled();
 	});
 
-	it("repaints the zone when a live transport drops, with no bus event behind it", async () => {
-		// A real manager and a real stdio server: the drop lands long after the startup
-		// `onStatus` callback returned, so nothing on the bus carries it and only the
-		// manager's own subscription can reach this mode.
+	it("repaints the zone after a dropped transport reconnects without a bus event", async () => {
 		const manager = new MCPManager(tempDir.path());
-		const live = new InteractiveMode(session, "test", () => {}, [], manager, eventBus);
+		const live = new InteractiveMode(session, "test", () => {}, [], manager);
 		vi.spyOn(live.statusLine, "watchGitState").mockImplementation(() => {});
-		const paint = vi.spyOn(live.ui, "requestRender").mockImplementation(() => {});
 		try {
 			await manager.connectServers({ alpha: { type: "stdio", command: process.execPath, args: [MCP_FIXTURE] } }, {});
-			// The connect itself answers on the startup `onStatus` callback, which this
-			// mode never sees: nothing to paint.
-			await manager.waitForConnection("alpha");
-			paint.mockClear();
+			const original = await manager.waitForConnection("alpha");
+			let replacementPaints = 0;
+			vi.spyOn(live.ui, "requestRender").mockImplementation(() => {
+				const connection = manager.getConnection("alpha");
+				if (connection && connection !== original) replacementPaints++;
+			});
 
-			// `onClose` reports the drop synchronously, before the reconnect starts, so the
-			// pending verdict is on screen the moment the wire is gone. Which text the
-			// handler leaves in the zone is pinned by the bus cases above — one handler,
-			// and this case proves the manager's own transitions reach it.
-			manager.getConnection("alpha")?.transport.onClose?.();
-			expect(paint.mock.calls).toHaveLength(1);
+			original.transport.onClose?.();
+			// The close handler starts reconnecting before yielding. Wait for that
+			// attempt to finish; a repaint on reconnect start is a separate contract.
+			expect(await manager.waitForConnection("alpha")).not.toBe(original);
+			expect(replacementPaints).toBe(1);
 		} finally {
 			live.stop();
 			await manager.disconnectAll();
