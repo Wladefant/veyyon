@@ -171,13 +171,13 @@ describe("OVH related-test selector", () => {
 		});
 
 		it("selects the consumer of a split fixture path relative to its test file", () => {
-			const selected = parseSelectedTests(runSelector(["packages/pkg-a/test/fixtures/server.ts"], { cwd: fixtureDir }));
-			expect(selected).toEqual(["packages/pkg-a/test/server-consumer.test.ts"]);
+			const output = runSelector(["packages/pkg-a/test/fixtures/server.ts"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual(["packages/pkg-a/test/server-consumer.test.ts"]);
 		});
 
 		it("does not select the consumer for an equally named fixture in another package", () => {
-			const selected = parseSelectedTests(runSelector(["packages/pkg-b/test/fixtures/server.ts"], { cwd: fixtureDir }));
-			expect(selected).toEqual([]);
+			const output = runSelector(["packages/pkg-b/test/fixtures/server.ts"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual([]);
 		});
 
 		it("retains consumer when importing a value re-exported by a barrel from changed module", () => {
