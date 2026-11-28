@@ -59,7 +59,7 @@ import {
 	type TaskToolDetails,
 } from "./types";
 
-export type AbortReason = "signal" | "terminate" | "timeout" | "budget" | "stalled";
+export type AbortReason = "signal" | "terminate" | "timeout" | "budget" | "stalled" | "spawn-queue-timeout";
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
 export const BUDGET_STOP_GRACE_REQUESTS = 5;
@@ -267,6 +267,10 @@ export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> =
 	"waiting-child": 1_800_000,
 };
 
+// The tree can exhaust its permits with parents waiting for descendants. Keep that wait bounded
+// separately from the execution watchdog so it cannot deadlock with no way to recover.
+const SPAWN_QUEUE_DEADLINE_MS = 60 * 60_000;
+
 function timeoutSecondsToMs(value: number | undefined): number | undefined {
 	if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
 	if (value === 0) return 0;
@@ -413,6 +417,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	let watchdogTimer: NodeJS.Timeout | undefined;
 	let stallRecoveries = 0;
 	const activeWatchdogTools = new Map<string, string>();
+	const queuedTaskCalls = new Set<string>();
+	let allToolsQueuedSince: number | undefined;
 	let yieldCallPending = false;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
@@ -483,14 +489,22 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		clearTimeout(watchdogTimer);
 		watchdogTimer = undefined;
 		if (resolved || abortSignal.aborted) return;
-		const limit = resolveWatchdogPhaseLimitMs(watchdogPhase, {
-			model: activeSession?.model,
-			settings: args.settings,
-		});
+		const queuedSince = allToolsQueuedSince;
+		const deadline = queuedSince !== undefined
+			? queuedSince + SPAWN_QUEUE_DEADLINE_MS
+			: lastProgressEventAt +
+				resolveWatchdogPhaseLimitMs(watchdogPhase, {
+					model: activeSession?.model,
+					settings: args.settings,
+				});
 		watchdogTimer = setTimeout(() => {
-			if (resolved || abortSignal.aborted || Date.now() - lastProgressEventAt < limit) return;
-			requestAbort("stalled");
-		}, limit);
+			if (resolved || abortSignal.aborted) return;
+			if (Date.now() < deadline) {
+				armPhaseWatchdog();
+				return;
+			}
+			requestAbort(queuedSince !== undefined ? "spawn-queue-timeout" : "stalled");
+		}, Math.max(0, deadline - Date.now()));
 	};
 	armPhaseWatchdog();
 	const beginSessionInitialization = (): void => {
@@ -599,6 +613,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget})`;
 		}
 		if (abortReason === "stalled") return `Agent stalled after ${stallRecoveries + 1} no-progress interval(s)`;
+		if (abortReason === "spawn-queue-timeout") return "Timed out waiting for an inline spawn slot";
 		return resolveSignalAbortReason();
 	};
 	const PROGRESS_COALESCE_MS = 150;
@@ -1086,8 +1101,30 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	};
 	const processEvent = (event: AgentEvent) => {
 		if (resolved) return;
-		if (event.type === "tool_execution_start") activeWatchdogTools.set(event.toolCallId, event.toolName);
-		else if (event.type === "tool_execution_end") activeWatchdogTools.delete(event.toolCallId);
+		let queueUpdate: boolean | undefined;
+		if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
+			queuedTaskCalls.delete(event.toolCallId);
+			if (event.type === "tool_execution_start") activeWatchdogTools.set(event.toolCallId, event.toolName);
+			else activeWatchdogTools.delete(event.toolCallId);
+		} else if (event.type === "tool_execution_update" && event.toolName === "task") {
+			queueUpdate = inflightTaskDetails(event.partialResult)?.waitingForSpawnSlot;
+			if (queueUpdate === true && activeWatchdogTools.get(event.toolCallId) === "task") {
+				queuedTaskCalls.add(event.toolCallId);
+			} else if (queueUpdate === false) {
+				queuedTaskCalls.delete(event.toolCallId);
+			}
+		}
+		const waitingForSlots = queuedTaskCalls.size > 0 && queuedTaskCalls.size === activeWatchdogTools.size;
+		const queueChanged = waitingForSlots !== (allToolsQueuedSince !== undefined);
+		if (queueChanged) {
+			const now = Date.now();
+			if (waitingForSlots) {
+				allToolsQueuedSince = now;
+			} else if (allToolsQueuedSince !== undefined) {
+				lastProgressEventAt += now - Math.max(allToolsQueuedSince, lastProgressEventAt);
+				allToolsQueuedSince = undefined;
+			}
+		}
 		let hasWaitingChild = false;
 		for (const toolName of activeWatchdogTools.values()) {
 			if (toolName === "task") {
@@ -1100,7 +1137,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		const previousOutput = recentOutputTail;
 		const previousTaskDetails = progress.inflightTaskDetails;
 		watchdogPhase = phase;
-		const flush = applyAgentEvent(event);
+		const flush = queueUpdate === undefined && applyAgentEvent(event);
 		const assistantEvent = event.type === "message_update" ? event.assistantMessageEvent : undefined;
 		const progressEvent =
 			event.type === "agent_start" ||
@@ -1118,10 +1155,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 					recentOutputTail !== previousOutput)) ||
 			(event.type === "tool_execution_update" &&
 				!isDeepStrictEqual(previousTaskDetails, progress.inflightTaskDetails));
-		if (phaseChanged || progressEvent) {
-			lastProgressEventAt = Date.now();
-			armPhaseWatchdog();
-		}
+		if (phaseChanged || progressEvent) lastProgressEventAt = Date.now();
+		if (phaseChanged || progressEvent || queueChanged) armPhaseWatchdog();
 		scheduleProgress(flush);
 	};
 	const prepareStallRecovery = (): boolean => {
@@ -1135,6 +1170,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		)
 			return false;
 		activeWatchdogTools.clear();
+		queuedTaskCalls.clear();
+		allToolsQueuedSince = undefined;
 		stallRecoveries += 1;
 		abortController = new AbortController();
 		abortSignal = abortController.signal;
@@ -1218,6 +1255,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		hasExplicitAbortReason: () =>
 			abortReason === "signal" ||
 			abortReason === "stalled" ||
+			abortReason === "spawn-queue-timeout" ||
 			runtimeLimitExceeded ||
 			budgetLimitExceeded ||
 			budgetStopRequested,
@@ -1229,6 +1267,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		isAbortedRun: () =>
 			abortReason === "signal" ||
 			abortReason === "stalled" ||
+			abortReason === "spawn-queue-timeout" ||
 			runtimeLimitExceeded ||
 			budgetLimitExceeded ||
 			abortReason === undefined,

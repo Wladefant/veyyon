@@ -52,6 +52,38 @@ interface InlineSpawnRef {
 	preAllocatedId?: string;
 }
 
+type InlineQueueObserver = (queuedDelta: number, unfinishedDelta: number) => void;
+
+/** Only inline spawns hold this tool call open. Detached jobs do not affect its queue state. */
+function observeInlineQueue(call: SpawnCall, unfinished: number): InlineQueueObserver | undefined {
+	const { onUpdate } = call;
+	if (!onUpdate) return undefined;
+	let queued = 0;
+	let waiting = false;
+	const startedAt = Date.now();
+	return (queuedDelta: number, unfinishedDelta: number) => {
+		queued += queuedDelta;
+		unfinished += unfinishedDelta;
+		const next = queued > 0 && queued === unfinished;
+		if (next === waiting) return;
+		waiting = next;
+		try {
+			onUpdate({
+				content: [{ type: "text", text: waiting ? "Waiting for a spawn slot..." : "Running inline agents..." }],
+				details: {
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: Date.now() - startedAt,
+					waitingForSpawnSlot: waiting,
+				},
+			});
+		} catch (error) {
+			// Progress delivery must not interrupt permit acquisition or release.
+			logger.warn("Inline spawn queue update failed", { error: errorMessage(error) });
+		}
+	};
+}
+
 /** Inline spawn payloads merged into one result view: joined text plus flattened results, usage and paths. */
 interface MergedInlinePayloads {
 	contentParts: string[];
@@ -434,15 +466,10 @@ export class SpawnScheduler {
 		if (items.length === 1) {
 			const params = spawnParamsFor(call.params, items[0], call.defaultAgent);
 			const { toolCallId, signal, onUpdate, grantRootSessionId } = call;
-			return this.#runAdmitted({
-				toolCallId,
-				params,
-				signal,
-				onUpdate,
-				grantRootSessionId,
-				index: 0,
-				detached: false,
-			});
+			return this.#runAdmitted(
+				{ toolCallId, params, signal, onUpdate, grantRootSessionId, index: 0, detached: false },
+				observeInlineQueue(call, 1),
+			);
 		}
 
 		const startTime = Date.now();
@@ -528,17 +555,35 @@ export class SpawnScheduler {
 	}
 
 	/** Run one spawn inline once the semaphore admits it, stamping the wait for the launch-timing log. */
-	async #runAdmitted(request: Omit<SpawnRequest, "launchTiming">): Promise<AgentToolResult<TaskToolDetails>> {
+	async #runAdmitted(
+		request: Omit<SpawnRequest, "launchTiming">,
+		reportQueue: InlineQueueObserver | undefined,
+	): Promise<AgentToolResult<TaskToolDetails>> {
 		const invokedAt = Date.now();
-		await this.#semaphore().acquire(request.signal, request.params.priority);
-		const acquiredAt = Date.now();
+		let queued = false;
+		const onQueued = reportQueue
+			? () => {
+					queued = true;
+					reportQueue(1, 0);
+				}
+			: undefined;
 		try {
-			return await runSpawn(this.#session, this.#parentApprovalBypassed, {
-				...request,
-				launchTiming: { invokedAt, acquiredAt },
-			});
+			await this.#semaphore().acquire(request.signal, request.params.priority, onQueued);
+			const acquiredAt = Date.now();
+			try {
+				if (queued) {
+					queued = false;
+					reportQueue?.(-1, 0);
+				}
+				return await runSpawn(this.#session, this.#parentApprovalBypassed, {
+					...request,
+					launchTiming: { invokedAt, acquiredAt },
+				});
+			} finally {
+				this.#release();
+			}
 		} finally {
-			this.#release();
+			reportQueue?.(queued ? -1 : 0, -1);
 		}
 	}
 
@@ -552,25 +597,29 @@ export class SpawnScheduler {
 		spawns: InlineSpawnRef[],
 		onItemProgress?: (index: number, progress: AgentProgress) => void,
 	): Promise<(AgentToolResult<TaskToolDetails> | undefined)[]> {
+		const reportQueue = observeInlineQueue(call, spawns.length);
 		const { results } = await mapWithConcurrencyLimit(
 			spawns,
 			spawns.length,
 			(spawn, _position, workerSignal) =>
-				this.#runAdmitted({
-					toolCallId: call.toolCallId,
-					grantRootSessionId: call.grantRootSessionId,
-					params: spawnParamsFor(call.params, spawn.item, call.defaultAgent),
-					signal: workerSignal,
-					onUpdate: onItemProgress
-						? update => {
-								const progress = update.details?.progress?.[0];
-								if (progress) onItemProgress(spawn.index, progress);
-							}
-						: undefined,
-					preAllocatedId: spawn.preAllocatedId,
-					index: spawn.index,
-					detached: false,
-				}),
+				this.#runAdmitted(
+					{
+						toolCallId: call.toolCallId,
+						grantRootSessionId: call.grantRootSessionId,
+						params: spawnParamsFor(call.params, spawn.item, call.defaultAgent),
+						signal: workerSignal,
+						onUpdate: onItemProgress
+							? update => {
+									const progress = update.details?.progress?.[0];
+									if (progress) onItemProgress(spawn.index, progress);
+								}
+							: undefined,
+						preAllocatedId: spawn.preAllocatedId,
+						index: spawn.index,
+						detached: false,
+					},
+					reportQueue,
+				),
 			call.signal,
 		);
 		return results;

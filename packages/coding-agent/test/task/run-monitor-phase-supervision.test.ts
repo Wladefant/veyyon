@@ -16,7 +16,7 @@ const agent: AgentDefinition = {
 	source: "bundled",
 };
 
-function createMonitor(options?: { model?: Record<string, unknown>; settings?: Settings }) {
+function createMonitor(options?: { model?: Record<string, unknown>; settings?: Settings; maxRuntimeMs?: number }) {
 	const monitor = createAgentRunMonitor({
 		index: 0,
 		id: "phase-test",
@@ -25,7 +25,7 @@ function createMonitor(options?: { model?: Record<string, unknown>; settings?: S
 		settings: options?.settings,
 		softRequestBudget: 0,
 		softRequestBudgetNotice: false,
-		maxRuntimeMs: 0,
+		maxRuntimeMs: options?.maxRuntimeMs ?? 0,
 	});
 	let listener: ((event: AgentSessionEvent) => void) | undefined;
 	const abort = vi.fn(async () => {});
@@ -285,6 +285,27 @@ describe("run monitor phase supervision", () => {
 		expect(monitor.abortKind()).toBeUndefined();
 		vi.advanceTimersByTime(1);
 		expect(monitor.abortKind()).toBe("stalled");
+	});
+
+	it.each([
+		{ runtimeMs: 0, deadlineMs: 60 * 60_000, reason: "spawn-queue-timeout" },
+		{ runtimeMs: 2_000, deadlineMs: 2_000, reason: "timeout" },
+	])("keeps the $reason deadline armed during a queue wait", ({ runtimeMs, deadlineMs, reason }) => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor({ maxRuntimeMs: runtimeMs });
+		const toolCallId = "queued-child";
+		emit(event("tool_execution_start", { toolName: "task", toolCallId }));
+		const queued = event("tool_execution_update", {
+			toolName: "task",
+			toolCallId,
+			partialResult: { details: { results: [], totalDurationMs: 0, waitingForSpawnSlot: true } },
+		});
+		emit(queued);
+		vi.advanceTimersByTime(deadlineMs - 1);
+		expect(monitor.abortKind()).toBeUndefined();
+		emit(queued);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortKind()).toBe(reason);
 	});
 
 	it("gives a nested task child the thirty-minute wait window", () => {

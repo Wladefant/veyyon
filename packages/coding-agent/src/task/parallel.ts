@@ -115,7 +115,7 @@ export class Semaphore {
 	 * High-priority waiters precede normal waiters; each priority keeps FIFO
 	 * order. Priority never preempts a holder or raises the concurrency ceiling.
 	 */
-	async acquire(signal?: AbortSignal, priority: SpawnPriority = "normal"): Promise<void> {
+	async acquire(signal?: AbortSignal, priority: SpawnPriority = "normal", onQueued?: () => void): Promise<void> {
 		if (signal?.aborted) {
 			throw semaphoreAbortReason(signal);
 		}
@@ -145,6 +145,7 @@ export class Semaphore {
 		} else {
 			queue.push(waiter);
 		}
+		onQueued?.();
 		return promise;
 	}
 

@@ -658,6 +658,8 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	outputPaths?: string[];
 	progress?: AgentProgress[];
+	/** Queue-only update: every unfinished inline spawn in this call is waiting for a permit. */
+	waitingForSpawnSlot?: boolean;
 	/** Operator-facing warning for a spawn refused before any agent started. */
 	warning?: {
 		kind: "homogeneous-triage";
