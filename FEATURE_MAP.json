@@ -18,13 +18,8 @@
       ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1224",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "IRC"
-      ],
-      "docs": [
-        "docs/tools/irc.md"
-      ]
+      "components": ["coding-agent", "IRC"],
+      "docs": ["docs/tools/irc.md"]
     },
     "large-session-compaction-publish": {
       "name": "Large session compaction publication",
@@ -43,14 +38,8 @@
       ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1225",
       "risk": "high",
-      "components": [
-        "kernel",
-        "session",
-        "compaction"
-      ],
-      "docs": [
-        "docs/internal/session.md"
-      ]
+      "components": ["kernel", "session", "compaction"],
+      "docs": ["docs/internal/session.md"]
     },
     "subagent-launch-grants": {
       "name": "Subagent launch grants",
@@ -72,10 +61,7 @@
       ],
       "owning_issue": "https://github.com/Wladefant/superboard/issues/2922",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "kernel"
-      ]
+      "components": ["coding-agent", "kernel"]
     },
     "sage-approved-context": {
       "name": "Sage approved context",
@@ -91,10 +77,7 @@
       ],
       "owning_issue": "2397",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "SageOx"
-      ]
+      "components": ["coding-agent", "SageOx"]
     },
     "launch-incarnation-guard": {
       "name": "Launch incarnation guard",
@@ -111,10 +94,7 @@
       ],
       "owning_issue": "1071",
       "risk": "medium",
-      "components": [
-        "coding-agent",
-        "launch"
-      ],
+      "components": ["coding-agent", "launch"],
       "docs": [
         "docs/tools/launch.md"
       ]
@@ -130,10 +110,7 @@
       ],
       "owning_issue": "https://github.com/Wladefant/super-board/issues/375",
       "risk": "medium",
-      "components": [
-        "coding-agent",
-        "Herdr"
-      ]
+      "components": ["coding-agent", "Herdr"]
     },
     "native-lane-capacity": {
       "name": "Native lane capacity",
@@ -151,13 +128,8 @@
       ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1183",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "task"
-      ],
-      "docs": [
-        "docs/handbook/src/features/agents.md"
-      ]
+      "components": ["coding-agent", "task"],
+      "docs": ["docs/handbook/src/features/agents.md"]
     },
     "writetool-windows-stage": {
       "name": "Windows WriteTool staging",
@@ -176,27 +148,19 @@
       ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1157",
       "risk": "high",
-      "components": [
-        "utils",
-        "coding-agent"
-      ]
+      "components": ["utils", "coding-agent"]
     },
     "gemini-4-cloud-code-tool-replay": {
       "name": "Gemini 4 Cloud Code Assist tool replay",
       "description": "Preserve native tool signatures and mark a step's first tool call if it has no usable signature, including after compaction or a model switch.",
-      "entry_files": [
-        "packages/ai/src/providers/google-shared.ts"
-      ],
+      "entry_files": ["packages/ai/src/providers/google-shared.ts"],
       "tests": [
         "packages/ai/test/google-gemini3-unsigned-tool-call.test.ts",
         "packages/coding-agent/test/session/compacted-gemini-tool-replay.test.ts"
       ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1284",
       "risk": "medium",
-      "components": [
-        "ai",
-        "Cloud Code Assist"
-      ]
+      "components": ["ai", "Cloud Code Assist"]
     },
     "terminal-registry-snapshot": {
       "name": "Terminal registry snapshot",
@@ -206,23 +170,15 @@
         "packages/coding-agent/src/launch/terminal-control-session.ts",
         "packages/coding-agent/src/launch/terminal-registry-snapshot.ts"
       ],
-      "tests": [
-        "packages/coding-agent/test/terminal-registry-snapshot.test.ts"
-      ],
+      "tests": ["packages/coding-agent/test/terminal-registry-snapshot.test.ts"],
       "owning_issue": "https://github.com/Wladefant/superboard/issues/3039",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "terminal-control",
-        "agent-registry"
-      ]
+      "components": ["coding-agent", "terminal-control", "agent-registry"]
     },
     "terminal-delivery-readback": {
       "name": "Terminal delivery readback",
       "description": "Report terminal queue capacity and confirm durable user entries by their stable delivery IDs.",
-      "entry_files": [
-        "packages/coding-agent/src/launch/terminal-control.ts"
-      ],
+      "entry_files": ["packages/coding-agent/src/launch/terminal-control.ts"],
       "tests": [
         "packages/coding-agent/test/a-terminal-control-acks-a-delivery-before-the-terminal-does-the-work.test.ts",
         "packages/coding-agent/test/cli/terminal-control.test.ts",
@@ -230,10 +186,7 @@
       ],
       "owning_issue": "https://github.com/Wladefant/superboard/issues/3473",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "terminal-control"
-      ]
+      "components": ["coding-agent", "terminal-control"]
     },
     "session-stderr-retention": {
       "name": "Supervised child stderr retention",
@@ -248,28 +201,25 @@
       ],
       "owning_issue": "https://github.com/Wladefant/superboard/issues/3367",
       "risk": "high",
-      "components": [
-        "coding-agent",
-        "supervisor"
-      ]
+      "components": ["coding-agent", "supervisor"]
     },
-    "read-url-lists": {
-      "name": "Read lists with web URLs",
-      "description": "Read semicolon-delimited targets separately without splitting semicolons inside a URL.",
-      "entry_files": [
-        "packages/coding-agent/src/tools/fs/read.ts",
-        "packages/coding-agent/src/tools/fs/read-paths.ts"
-      ],
-      "tests": [
-        "packages/coding-agent/test/tools/a-url-read-degrades-on-a-payload-or-link-it-cannot-use.test.ts",
-        "packages/coding-agent/test/tools/a-read-of-a-semicolon-list-reaches-every-target.test.ts"
-      ],
-      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1104",
-      "risk": "low",
-      "docs": [
-        "docs/handbook/src/context/reads-search.md"
-      ]
-    },
+      "read-url-lists": {
+        "name": "Read lists with web URLs",
+        "description": "Read semicolon-delimited targets separately without splitting semicolons inside a URL.",
+        "entry_files": [
+          "packages/coding-agent/src/tools/fs/read.ts",
+          "packages/coding-agent/src/tools/fs/read-paths.ts"
+        ],
+        "tests": [
+          "packages/coding-agent/test/tools/a-url-read-degrades-on-a-payload-or-link-it-cannot-use.test.ts",
+          "packages/coding-agent/test/tools/a-read-of-a-semicolon-list-reaches-every-target.test.ts"
+        ],
+        "owning_issue": "https://github.com/Wladefant/veyyon/issues/1104",
+        "risk": "low",
+        "docs": [
+          "docs/handbook/src/context/reads-search.md"
+        ]
+      },
     "eval-status-sanitization": {
       "name": "Eval tool status sanitization",
       "description": "Filter credential data from tool status before publishing live events or retaining results.",
@@ -280,18 +230,11 @@
         "packages/coding-agent/src/eval/js/tool-bridge.ts",
         "packages/coding-agent/src/secrets/producer-output.ts"
       ],
-      "tests": [
-        "packages/coding-agent/test/eval/an-eval-status-withholds-credential-data.test.ts"
-      ],
+      "tests": ["packages/coding-agent/test/eval/an-eval-status-withholds-credential-data.test.ts"],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/939",
       "risk": "medium",
-      "components": [
-        "coding-agent",
-        "eval"
-      ],
-      "docs": [
-        "docs/tools/eval.md"
-      ]
+      "components": ["coding-agent", "eval"],
+      "docs": ["docs/tools/eval.md"]
     }
   }
 }
