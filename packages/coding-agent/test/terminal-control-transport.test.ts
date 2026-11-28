@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -466,21 +466,10 @@ $client.Dispose()
 } | ConvertTo-Json -Compress
 `.trim();
 
-			const powershell = path.win32.join(
-				process.env.SystemRoot ?? "C:\\Windows",
-				"System32",
-				"WindowsPowerShell",
-				"v1.0",
-				"powershell.exe",
-			);
+			const system32 = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32");
 			type ProcessResult = { stdout: string; stderr: string; exitCode: number };
-			const runBoundedProcess = (
-				command: string,
-				args: string[],
-				label: string,
-			): Promise<ProcessResult> => {
+			const waitForProcess = (proc: ChildProcessWithoutNullStreams, label: string): Promise<ProcessResult> => {
 				const result = Promise.withResolvers<ProcessResult>();
-				const proc = spawn(command, args, { windowsHide: true });
 				let stdout = "";
 				let stderr = "";
 				let settled = false;
@@ -517,16 +506,21 @@ $client.Dispose()
 				return result.promise;
 			};
 			const cp = await withClientBound(
-				runBoundedProcess(
-					powershell,
-					["-NoProfile", "-NonInteractive", "-Command", psCommand],
+				waitForProcess(
+					spawn(
+						path.win32.join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"),
+						["-NoProfile", "-NonInteractive", "-Command", psCommand],
+						{ windowsHide: true },
+					),
 					"Pipe ACL query",
 				),
 				"Pipe ACL query",
 			);
-			const whoami = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe");
 			const identity = await withClientBound(
-				runBoundedProcess(whoami, ["/user", "/fo", "csv", "/nh"], "Current-user SID query"),
+				waitForProcess(
+					spawn(path.win32.join(system32, "whoami.exe"), ["/user", "/fo", "csv", "/nh"], { windowsHide: true }),
+					"Current-user SID query",
+				),
 				"Current-user SID query",
 			);
 
