@@ -285,6 +285,7 @@ import { TurnPreludes } from "./runtime/turn-preludes";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
 import { isTerminalYieldToolResult, YieldTracker } from "./runtime/yield-tracker";
+import { ScreenshotCompactor } from "./screenshot-compaction";
 import { SessionSpendLedger } from "./session-spend";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
 import type { VibeModeState } from "./vibe-runtime";
@@ -1639,6 +1640,16 @@ export class AgentSession {
 			cwd: this.sessionManager.getCwd(),
 			upstream: config.transformProviderContext,
 			secrets: this.#secrets,
+			screenshotCompaction: new ScreenshotCompactor({
+				settings: this.settings,
+				sessionStore: this.sessionManager,
+				modelRegistry: config.modelRegistry,
+				completeImpl: this.#transport.sideComplete,
+				prepareOptions: (options, provider) => this.#transport.prepare(options, provider),
+				telemetryConfig: () => this.agent.telemetry,
+				sessionId: () => this.sessionId,
+				isDisposed: () => this.#isDisposed,
+			}),
 		});
 		// Agent was constructed before AgentSession; install the wire so the main loop, side
 		// requests and advisors share one session-local tool-call id map.

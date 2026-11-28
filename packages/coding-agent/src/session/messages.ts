@@ -553,9 +553,11 @@ export function replaceLostBlobPayloads(messages: Message[]): Message[] {
 			nextContent = replaced;
 		}
 		if (out === undefined) out = messages.slice();
-		out[i] = (
+		const replacement = (
 			payloadLost ? { ...msg, content: nextContent, providerPayload: undefined } : { ...msg, content: nextContent }
 		) as Message;
+		if (isDerivedUserMessage(msg)) markDerivedUserMessage(replacement);
+		out[i] = replacement;
 	}
 	return out ?? messages;
 }
@@ -609,6 +611,22 @@ function isUserInvokedSkillPrompt(message: CustomMessage): boolean {
 	return message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user";
 }
 
+
+/**
+ * LLM `role: "user"` messages synthesized from non-`UserMessage` `AgentMessage` roles
+ * (`fileMention`, `custom`, `hookMessage`, `skill-prompt`) so outbound-only transforms can
+ * distinguish genuine user attachments from derived messages without altering wire types.
+ */
+const derivedUserMessages = new WeakSet<Message>();
+
+export function markDerivedUserMessage<T extends Message>(message: T): T {
+	if (message.role === "user") derivedUserMessages.add(message);
+	return message;
+}
+
+export function isDerivedUserMessage(message: Message): boolean {
+	return message.role === "user" && derivedUserMessages.has(message);
+}
 const imageBearingCustomMessageCache = new WeakMap<
 	CustomMessage | HookMessage,
 	{ sourceContent: unknown; attribution: MessageAttribution | undefined; customType?: string; converted: Message[] }
@@ -640,12 +658,14 @@ function convertImageBearingCustomMessage(message: CustomMessage | HookMessage):
 			timestamp: message.timestamp,
 		});
 	}
-	converted.push({
-		role: "user",
-		content: [{ type: "text", text: `Images attached to ${message.customType}.` }, ...imageBlocks],
-		attribution: message.attribution,
-		timestamp: message.timestamp,
-	});
+	converted.push(
+		markDerivedUserMessage({
+			role: "user",
+			content: [{ type: "text", text: `Images attached to ${message.customType}.` }, ...imageBlocks],
+			attribution: message.attribution,
+			timestamp: message.timestamp,
+		}),
+	);
 	imageBearingCustomMessageCache.set(message, {
 		sourceContent: message.content,
 		attribution: message.attribution,
@@ -825,12 +845,14 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					for (const file of imageFiles) {
 						if (file.image) content.push(file.image);
 					}
-					out.push({
-						role: "user",
-						content,
-						attribution: "user",
-						timestamp: m.timestamp,
-					});
+					out.push(
+						markDerivedUserMessage({
+							role: "user",
+							content,
+							attribution: "user",
+							timestamp: m.timestamp,
+						}),
+					);
 				}
 				codingAgentMessageCache.set(m, {
 					role: "fileMention",
@@ -847,12 +869,12 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						return cached.converted;
 					}
 					const converted: Message[] = [
-						{
+						markDerivedUserMessage({
 							role: "user",
 							content: customMessageContentToLlmContent(m.content),
 							attribution: "user",
 							timestamp: m.timestamp,
-						},
+						}),
 					];
 					codingAgentMessageCache.set(m, {
 						role: "skillPrompt",

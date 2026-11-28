@@ -12,13 +12,8 @@
  * Without this the provider layer drops the image entirely (NON_VISION_IMAGE_PLACEHOLDER).
  */
 import * as path from "node:path";
-import {
-	type AgentTelemetry,
-	type AgentTelemetryConfig,
-	instrumentedCompleteSimple,
-	resolveTelemetry,
-} from "@veyyon/agent-core";
-import type { Api, completeSimple, ImageContent, Model, TextContent } from "@veyyon/ai";
+import { type AgentTelemetryConfig, instrumentedCompleteSimple, resolveTelemetry } from "@veyyon/agent-core";
+import type { Api, completeSimple, ImageContent, Model, SimpleStreamOptions, TextContent } from "@veyyon/ai";
 import { logger, prompt, toError } from "@veyyon/utils";
 import { extractTextContent } from "../commit/utils";
 import { normalizeModelPatternList } from "../config/model-pattern-list";
@@ -30,6 +25,7 @@ import type { Settings } from "../config/settings";
 import { type LocalProtocolOptions, resolveLocalRoot } from "../internal-urls/local-protocol";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { helperModelPatterns, helperSettingPath } from "../task/helper-settings";
+import { webpExclusionForModel } from "./image-loading";
 import { canonicalizeImageContent } from "./image-resize";
 
 /** Telemetry tag for the oneshot vision-description calls. */
@@ -45,6 +41,16 @@ const DESCRIPTION_UNAVAILABLE_NOTE =
 /** Registry surface needed to resolve a vision model and authorize requests. */
 export type VisionFallbackRegistry = Pick<ModelRegistry, "getAvailable" | "getApiKey" | "resolver">;
 
+
+export interface DescribeImageWithModelDeps {
+	readonly modelRegistry: Pick<ModelRegistry, "resolver">;
+	readonly telemetryConfig?: AgentTelemetryConfig;
+	readonly sessionId?: string;
+	readonly completeImpl?: typeof completeSimple;
+	readonly prepareOptions?: (options: SimpleStreamOptions, provider: string) => Promise<SimpleStreamOptions>;
+	readonly oneshotKind?: string;
+	readonly maxTokens?: number;
+}
 export interface DescribeAttachedImagesDeps {
 	/** Active (text-only) model the prompt is destined for. */
 	activeModel: Model<Api>;
@@ -123,19 +129,32 @@ function resolveVisionModel(deps: DescribeAttachedImagesDeps): Model<Api> | unde
 	);
 }
 
-/** Run one vision-description round-trip; returns trimmed text or `null` on any failure. */
-async function describeImage(
+/**
+ * Run one vision-description round-trip against `visionModel`; returns trimmed text or `null`
+ * on any failure (invalid/corrupt image bytes, provider error, abort, or empty reply).
+ */
+export async function describeImageWithModel(
 	image: ImageContent,
 	visionModel: Model<Api>,
-	deps: DescribeAttachedImagesDeps,
-	telemetry: AgentTelemetry | undefined,
-	signal: AbortSignal | undefined,
+	deps: DescribeImageWithModelDeps,
+	signal?: AbortSignal,
 ): Promise<string | null> {
 	try {
 		// normalizeModelContextImages is intentionally not trusted as the final
 		// boundary: restored or extension-supplied blocks can reach this helper
 		// directly. Decode and re-encode again immediately before provider use.
-		const providerImage = await canonicalizeImageContent(image);
+		const providerImage = await canonicalizeImageContent(image, {
+			excludeWebP: webpExclusionForModel(visionModel),
+		});
+		const baseOptions: SimpleStreamOptions = {
+			apiKey: deps.modelRegistry.resolver(visionModel, deps.sessionId),
+			...(deps.maxTokens !== undefined ? { maxTokens: deps.maxTokens } : {}),
+			...(signal !== undefined ? { signal } : {}),
+		};
+		const streamOptions = deps.prepareOptions
+			? await deps.prepareOptions(baseOptions, visionModel.provider)
+			: baseOptions;
+		const telemetry = resolveTelemetry(deps.telemetryConfig, deps.sessionId);
 		const response = await instrumentedCompleteSimple(
 			visionModel,
 			{
@@ -151,8 +170,8 @@ async function describeImage(
 					},
 				],
 			},
-			{ apiKey: deps.modelRegistry.resolver(visionModel, deps.sessionId), signal },
-			{ telemetry, oneshotKind: ONESHOT_KIND, completeImpl: deps.completeImpl },
+			streamOptions,
+			{ telemetry, oneshotKind: deps.oneshotKind ?? ONESHOT_KIND, completeImpl: deps.completeImpl },
 		);
 		if (response.stopReason === "error" || response.stopReason === "aborted") {
 			logger.warn("image attachment description did not complete", {
@@ -187,15 +206,13 @@ export async function describeAttachedImagesForTextModel(
 	const visionModel = resolveVisionModel(deps);
 	const apiKey = visionModel ? await deps.modelRegistry.getApiKey(visionModel, deps.sessionId) : undefined;
 	const canDescribe = Boolean(visionModel && apiKey);
-	const telemetry = resolveTelemetry(deps.telemetryConfig, deps.sessionId);
-
 	return Promise.all(
 		images.map(async (image): Promise<TextContent> => {
 			const localUrl = await saveImage(image, localRoot);
 			let description: string;
 			if (canDescribe && visionModel) {
 				description =
-					(await describeImage(image, visionModel, deps, telemetry, signal)) ?? DESCRIPTION_UNAVAILABLE_NOTE;
+					(await describeImageWithModel(image, visionModel, deps, signal)) ?? DESCRIPTION_UNAVAILABLE_NOTE;
 			} else {
 				description = NO_VISION_MODEL_NOTE;
 			}
