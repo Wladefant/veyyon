@@ -98,6 +98,13 @@ describe("closed JSON Schema objects", () => {
 		expect(issuesOf(failureFor(single, { app: "fixture" }), single.name)).toContain("app:");
 	});
 
+	it("does not rename keys to make a later closed union branch pass", () => {
+		const union = { ...tool, parameters: { anyOf: [{ type: "null" }, selector] } } as Tool;
+		expect(failureFor(union, { [JSON.stringify("application")]: "fixture" })).toContain(
+			'Validation failed for tool "select"',
+		);
+	});
+
 	it("preserves declared selectors and extras on open objects", () => {
 		const args = { application: "fixture", extra: true };
 		const open = { ...tool, parameters: { ...selector, additionalProperties: true } };

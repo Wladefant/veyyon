@@ -1916,7 +1916,8 @@ function annotateIssuesWithAcceptedValues(json: unknown, messages: readonly stri
 /** Keep the raw names if the input validator rejects them as extra keys. */
 function guardRawKeys(schema: Record<string, unknown>, raw: unknown, candidate: unknown): unknown {
 	if (raw === candidate) return raw;
-	const { issues } = validateJsonSchemaValue(schema, raw);
+	// A union's first failed branch may not be the closed object branch.
+	const { issues } = validateJsonSchemaValue(schema, raw, true);
 	return issues.some(issue => issue.keyword === "additionalProperties") ? raw : candidate;
 }
 
