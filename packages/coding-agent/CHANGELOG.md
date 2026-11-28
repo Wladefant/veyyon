@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Emit one `[image omitted: provider image limit]` marker per affected message when the provider image cap drops images from a mixed message, while preserving existing `no-vision` and `images.blockImages` behavior ([Refs #1323](https://github.com/Wladefant/veyyon/issues/1323)).
+
 ## [1.12.4] - 2026-11-28
 
 ### Added

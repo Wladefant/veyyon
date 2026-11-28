@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import type { Context, ImageContent, TextContent } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
-import { clampProviderContextImages, providerImageBudget } from "@veyyon/coding-agent/session/provider-image-budget";
+import {
+	applyProviderImagePolicy,
+	clampProviderContextImages,
+	providerImageBudget,
+} from "@veyyon/coding-agent/session/provider-image-budget";
 
 const UMANS_MODEL = buildModel({
 	id: "umans-glm-5.2",
@@ -92,7 +96,10 @@ describe("provider context image budgets", () => {
 		const clamped = clampProviderContextImages(context, UMANS_MODEL);
 
 		expect(imageData(clamped)).toEqual(Array.from({ length: 10 }, (_, index) => `image-${index + 21}`));
-		expect(textData(clamped)).toEqual(Array.from({ length: 31 }, (_, index) => `text-${index}`));
+		expect(textData(clamped).filter(value => value !== "[image omitted: provider image limit]")).toEqual(
+			Array.from({ length: 31 }, (_, index) => `text-${index}`),
+		);
+		expect(textData(clamped).filter(value => value === "[image omitted: provider image limit]")).toHaveLength(21);
 		expect(clamped).not.toBe(context);
 		expect(imageData(context)).toEqual(Array.from({ length: 31 }, (_, index) => `image-${index}`));
 	});
@@ -167,23 +174,80 @@ describe("provider context image budgets", () => {
 		expect(firstMessage?.content).toEqual([text("[image omitted: provider image limit]")]);
 	});
 
-	it("does not add a placeholder when the clamped user message still has text", () => {
-		// The placeholder is only for the ALL-empty case: a mixed text+image message keeps just its
-		// text after the image is dropped, with no spurious placeholder appended.
+	it("adds one omission marker per affected mixed message across user, developer, and toolResult roles", () => {
 		const context: Context = {
 			systemPrompt: [],
 			tools: [],
-			messages: Array.from({ length: 11 }, (_, index) => ({
-				role: "user",
-				content: [text(`text-${index}`), image(`image-${index}`)],
-				timestamp: index,
-			})),
+			messages: [
+				{
+					role: "user",
+					content: [text("first user"), image("u1"), image("u2")],
+					timestamp: 1,
+				},
+				{
+					role: "developer",
+					content: [text("dev context"), image("d1"), image("d2")],
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-1",
+					toolName: "inspect_image",
+					content: [text("tool output"), image("t1")],
+					isError: false,
+					timestamp: 3,
+				},
+				{
+					role: "user",
+					content: Array.from({ length: 10 }, (_, index) => image(`kept-${index}`)),
+					timestamp: 4,
+				},
+			],
+		};
+		const originalSnapshot = structuredClone(context);
+
+		const clamped = clampProviderContextImages(context, UMANS_MODEL);
+
+		expect(imageData(clamped)).toEqual(Array.from({ length: 10 }, (_, index) => `kept-${index}`));
+		expect(clamped.messages[0]?.content).toEqual([text("first user"), text("[image omitted: provider image limit]")]);
+		expect(clamped.messages[1]?.content).toEqual([
+			text("dev context"),
+			text("[image omitted: provider image limit]"),
+		]);
+		expect(clamped.messages[2]?.content).toEqual([
+			text("tool output"),
+			text("[image omitted: provider image limit]"),
+		]);
+		// Transcript is never mutated in place.
+		expect(context).toEqual(originalSnapshot);
+	});
+
+	it("adds one omission marker when a mixed message loses only some of its images", () => {
+		const context: Context = {
+			systemPrompt: [],
+			tools: [],
+			messages: [
+				{
+					role: "user",
+					content: [text("partial"), image("dropped-1"), image("dropped-2"), image("kept-1")],
+					timestamp: 1,
+				},
+				{
+					role: "user",
+					content: Array.from({ length: 9 }, (_, index) => image(`kept-${index + 2}`)),
+					timestamp: 2,
+				},
+			],
 		};
 
 		const clamped = clampProviderContextImages(context, UMANS_MODEL);
 
-		expect(clamped.messages[0]?.content).toEqual([text("text-0")]);
-		expect(textData(clamped)).toEqual(Array.from({ length: 11 }, (_, index) => `text-${index}`));
+		expect(imageData(clamped)).toEqual(Array.from({ length: 10 }, (_, index) => `kept-${index + 1}`));
+		expect(clamped.messages[0]?.content).toEqual([
+			text("partial"),
+			image("kept-1"),
+			text("[image omitted: provider image limit]"),
+		]);
 	});
 
 	it("preserves context identity when the provider cap is not exceeded", () => {
@@ -200,5 +264,41 @@ describe("provider context image budgets", () => {
 		};
 
 		expect(clampProviderContextImages(context, UMANS_MODEL)).toBe(context);
+		expect(applyProviderImagePolicy(context, UMANS_MODEL, { blockImages: false })).toBe(context);
+	});
+
+	it("keeps existing blockImages and no-vision replacement behavior intact", () => {
+		const context: Context = {
+			systemPrompt: [],
+			tools: [],
+			messages: [
+				{
+					role: "user",
+					content: [text("inspect"), image("u1"), image("u2")],
+					timestamp: 1,
+				},
+			],
+		};
+		const noVisionModel = buildModel({
+			id: "text-only",
+			name: "text-only",
+			api: "anthropic-messages",
+			provider: "umans",
+			baseUrl: "https://api.code.umans.ai",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+		});
+
+		const blocked = applyProviderImagePolicy(context, UMANS_MODEL, { blockImages: true });
+		expect(blocked.messages[0]?.content).toEqual([text("inspect"), text("Image reading is disabled.")]);
+
+		const noVision = applyProviderImagePolicy(context, noVisionModel, { blockImages: false });
+		expect(noVision.messages[0]?.content).toEqual([
+			text("inspect"),
+			text("[image omitted: the model serving this request does not support image input]"),
+		]);
 	});
 });

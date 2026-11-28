@@ -69,41 +69,40 @@ function clampContent(
 }
 
 /**
- * Clamp content parts, then substitute the omission placeholder when the clamp
- * would otherwise leave an empty content array. Providers (Anthropic / Bedrock
- * anthropic-messages and others) reject a message with empty content, so an
- * image-only message whose sole image is dropped must never ship as `[]`.
+ * Clamp content parts, then append one omission placeholder whenever at least one
+ * image was dropped from the message. This tells the model that visual context was
+ * omitted even when text remains, and ensures an image-only message never ships as
+ * `content: []` (which Anthropic / Bedrock reject).
  * Returns undefined when nothing was dropped so callers keep the original.
  * Shared by every role clamper so the guard lives in exactly one place.
  */
-function clampContentPreservingNonEmpty(
+function clampContentWithOmissionMarker(
 	content: readonly (TextContent | ImageContent | VideoContent)[],
 	state: { remainingDrops: number },
 ): (TextContent | ImageContent | VideoContent)[] | undefined {
 	const clamped = clampContent(content, state);
 	if (!clamped) return undefined;
-	return clamped.length > 0 ? clamped : [IMAGE_OMISSION_PLACEHOLDER];
+	return [...clamped, IMAGE_OMISSION_PLACEHOLDER];
 }
 
 function clampUserMessage(message: UserMessage, state: { remainingDrops: number }): UserMessage {
 	if (!Array.isArray(message.content) || state.remainingDrops <= 0) return message;
-	const content = clampContentPreservingNonEmpty(message.content, state);
+	const content = clampContentWithOmissionMarker(message.content, state);
 	return content ? { ...message, content } : message;
 }
 
 function clampDeveloperMessage(message: DeveloperMessage, state: { remainingDrops: number }): DeveloperMessage {
 	if (!Array.isArray(message.content) || state.remainingDrops <= 0) return message;
-	const content = clampContentPreservingNonEmpty(message.content, state);
+	const content = clampContentWithOmissionMarker(message.content, state);
 	return content ? { ...message, content } : message;
 }
 
 function clampToolResultMessage(message: ToolResultMessage, state: { remainingDrops: number }): ToolResultMessage {
 	if (state.remainingDrops <= 0) return message;
-	const content = clampContentPreservingNonEmpty(message.content, state);
+	const content = clampContentWithOmissionMarker(message.content, state);
 	if (!content) return message;
 	return { ...message, content };
 }
-
 /** Drops oldest transient image blocks so outgoing vision requests fit the active provider's image cap. */
 export function clampProviderContextImages(context: Context, model: Model): Context {
 	if (!model.input.includes("image")) return context;
