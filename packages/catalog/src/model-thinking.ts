@@ -584,7 +584,7 @@ export function requireSupportedEffort<TApi extends Api>(model: ApiModel<TApi>, 
 export function mapEffortToGoogleThinkingLevel<TApi extends Api>(
 	effort: Effort,
 	model?: ApiModel<TApi>,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH" {
 	if (effort === Effort.Minimal) {
 		const routing = model?.thinking?.effortRouting;
 		if (routing?.[Effort.Minimal] && routing[Effort.Minimal] === routing[Effort.Low]) {
@@ -598,9 +598,10 @@ export function mapEffortToGoogleThinkingLevel<TApi extends Api>(
 		case Effort.Medium:
 			return "MEDIUM";
 		case Effort.High:
-		case Effort.XHigh:
 		case Effort.Max:
 			return "HIGH";
+		case Effort.XHigh:
+			return "XHIGH";
 	}
 }
 
@@ -611,7 +612,7 @@ export function mapEffortToGoogleThinkingLevel<TApi extends Api>(
  */
 export function googleThinkingLevelWhenOff<TApi extends Api>(
 	model: ApiModel<TApi>,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" {
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH" {
 	return mapEffortToGoogleThinkingLevel(minimumSupportedEffort(model) ?? Effort.Minimal);
 }
 
