@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Do not retry an optional Auto-Learn capture when the provider reports tool use without a tool call or text ([Refs #1026](https://github.com/Wladefant/veyyon/issues/1026)).
 - Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
 - Include source file, line, and column in legacy Pi export prepass errors when Bun provides them ([Refs #985](https://github.com/Wladefant/veyyon/issues/985)).
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
