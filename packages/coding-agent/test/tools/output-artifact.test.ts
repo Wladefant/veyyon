@@ -66,7 +66,11 @@ describe("saveOutputArtifact returns undefined without throwing", () => {
 	});
 
 	it("when the write fails (unwritable path)", async () => {
-		const s = session(async () => ({ path: "/nonexistent-dir-xyz/out.txt", id: "z" }));
+		// A regular file where the directory should be: the write fails for every user, root included.
+		// A missing directory is not a portable failure, because root creates it.
+		const blocker = path.join(dir, "blocker");
+		fs.writeFileSync(blocker, "");
+		const s = session(async () => ({ path: path.join(blocker, "out.txt"), id: "z" }));
 		expect(await saveOutputArtifact(s, "bash", "x")).toBeUndefined();
 	});
 

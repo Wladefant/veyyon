@@ -116,6 +116,8 @@ describe("check-doc-freshness keeps the other answer on purpose", () => {
 const NAMES_ONLY: Readonly<Record<string, string>> = {
 	"scripts/a-test-reads-a-module-through-its-graph-not-its-bytes.test.ts":
 		"lists the ignored entries its walk skips, opens none of them",
+	"scripts/affected-workspace-tests.ts":
+		"collects drift names without opening them, including deletions that must fail closed",
 	"scripts/check-doc-paths.test.ts": "derives top-level directory names from the index, opens no listed path",
 	"scripts/check-doc-freshness.ts": "reports a listed doc that is gone, the asymmetry asserted above",
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts":

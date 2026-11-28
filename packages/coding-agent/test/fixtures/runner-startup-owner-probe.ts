@@ -1,6 +1,6 @@
-import { KernelSessionPool } from "../../executor-base";
-import type { SessionKernel } from "../../kernel-base";
-import { PythonKernel } from "../kernel";
+import { KernelSessionPool } from "../../src/eval/executor-base";
+import type { SessionKernel } from "../../src/eval/kernel-base";
+import { PythonKernel } from "../../src/eval/py/kernel";
 
 const gate = Promise.withResolvers<void>();
 const pool = new KernelSessionPool({

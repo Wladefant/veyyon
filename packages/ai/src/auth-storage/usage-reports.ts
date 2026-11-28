@@ -133,6 +133,18 @@ export function isUsageLimitExhausted(limit: UsageLimit): boolean {
 	return false;
 }
 
+/** A prediction is reconcilable only when one known window explains it. */
+export function getUsagePredictionWindow(limits: UsageLimit[]): string | undefined {
+	let window: string | undefined;
+	for (const limit of limits) {
+		if (!isUsageLimitExhausted(limit) || limit.display?.inapplicable) continue;
+		const id = limit.scope.windowId;
+		if (!id || (window !== undefined && window !== id)) return undefined;
+		window = id;
+	}
+	return window;
+}
+
 /** Return the usage limits that apply to the requested model for this strategy. */
 export function getScopedUsageLimits(
 	strategy: CredentialRankingStrategy,

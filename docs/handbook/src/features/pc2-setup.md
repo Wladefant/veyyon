@@ -85,7 +85,7 @@ providers:
     apiKey: ${VEYYON_DEVICE_BEARER}
 ```
 
-Replace `openai-codex` with the original provider name. Keep the base URL free of a `/v1` suffix.
+Replace `openai-codex` with the original provider name. Keep the base URL free of a trailing v1 path segment.
 The existing client sends model requests to `/v1/pi/stream`.
 The hostname above illustrates the format. It is not a provisioned endpoint.
 

@@ -33,7 +33,7 @@ import * as pythonKernel from "@veyyon/coding-agent/eval/py/kernel";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { setAgentDir, Snowflake, TempDir } from "@veyyon/utils";
+import { Snowflake, setAgentDir, TempDir } from "@veyyon/utils";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
@@ -150,7 +150,7 @@ describe("AgentSession dispose and the Python runners it owns", () => {
 			await shared.executePython("print('shared')");
 			await survivor.executePython("print('survivor-warmup')");
 			await unrelated.executePython("print('unrelated')");
-			expect(startSpy).toHaveBeenCalledTimes(3);
+			expect(startSpy.mock.calls).toHaveLength(3);
 
 			// Step 1: a session that shares a runner leaves. The runner must survive for the other.
 			const sharedStarted = performance.now();
@@ -161,7 +161,7 @@ describe("AgentSession dispose and the Python runners it owns", () => {
 
 			await survivor.executePython("print('after-shared-left')");
 			expect(sharedRunner.executed).toContain("print('after-shared-left')");
-			expect(startSpy).toHaveBeenCalledTimes(3);
+			expect(startSpy.mock.calls).toHaveLength(3);
 
 			// Step 2: the only owner of its runner leaves. That runner must exit, and nothing else may.
 			const leaverStarted = performance.now();
@@ -176,7 +176,7 @@ describe("AgentSession dispose and the Python runners it owns", () => {
 			// Step 3: the unrelated session is still live and its runner still answers.
 			await unrelated.executePython("print('unrelated-after')");
 			expect(unrelatedRunner.executed).toContain("print('unrelated-after')");
-			expect(startSpy).toHaveBeenCalledTimes(3);
+			expect(startSpy.mock.calls).toHaveLength(3);
 		} finally {
 			await survivor.dispose();
 			await unrelated.dispose();

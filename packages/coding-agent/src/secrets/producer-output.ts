@@ -7,6 +7,8 @@ import { currentProducerSecretOwner } from "./producer-owner";
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
+// Local shell capture can scan wider records before spilling them to disk.
+const MAX_SHELL_CAPTURE_RECORD_CHARS = 256 * 1024;
 const MAX_SCALAR_CHARS = 16 * 1024 * 1024;
 const MAX_PENDING_LOOKBEHIND_CHARS = 1024 * 1024;
 const MAX_DIRECT_SANITIZE_CHARS = 4 * 1024 * 1024;
@@ -43,6 +45,20 @@ const MARKDOWN_COMMIT_LINK =
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
 
 const MD_AUTH_COLON_SUFFIX = /\b(authori[sz]ation):[ \t]*(\*\*|\*|__|_|`)/gi;
+const CREDENTIAL_RECORD_GLOBAL = new RegExp(CREDENTIAL_RECORD.source, "gi");
+
+function allLinesWithinRecordLimit(text: string): boolean {
+	let lineStart = 0;
+	while (lineStart < text.length) {
+		const newline = text.indexOf("\n", lineStart);
+		const end = newline < 0 ? text.length : newline;
+		const sepLen = newline < 0 ? 0 : 1;
+		if (end - lineStart + sepLen > MAX_RECORD_CHARS) return false;
+		if (newline < 0) break;
+		lineStart = newline + 1;
+	}
+	return true;
+}
 
 function pickSentinel(text: string): string | null {
 	for (let code = 0xe000; code <= 0xe0ff; code++) {
@@ -125,7 +141,8 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 	const { stripped, toOriginal } = text.includes("^[[")
 		? stripCaretCsiWithMap(text)
 		: { stripped: text, toOriginal: null };
-	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
+	CREDENTIAL_RECORD_GLOBAL.lastIndex = 0;
+	const labels = CREDENTIAL_RECORD_GLOBAL;
 	const spans: { start: number; valueStart: number; end: number }[] = [];
 	let authorizationHeading = false;
 	let offset = 0;
@@ -152,11 +169,11 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		)
 			continue;
 		const escapedBreak = stripped.lastIndexOf("\\n", match.index);
-		const logicalLineStart = Math.max(
-			sourceLineStart,
-			escapedBreak >= 0 ? escapedBreak + 2 : 0,
-		);
-		if (PERSIST_CREDENTIALS_LABEL.test(stripped.slice(logicalLineStart, start)) && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
+		const logicalLineStart = Math.max(sourceLineStart, escapedBreak >= 0 ? escapedBreak + 2 : 0);
+		if (
+			PERSIST_CREDENTIALS_LABEL.test(stripped.slice(logicalLineStart, start)) &&
+			PERSIST_CREDENTIALS_BOOLEAN.test(tail)
+		)
 			continue;
 		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail)) continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
@@ -350,6 +367,7 @@ function stripCaretCsiWithMap(text: string): { stripped: string; toOriginal: num
 function structuredStart(text: string, skipInlineCode = false): number {
 	// Only a complete scalar record owns its quotes. Quotes in raw labels must
 	// not consume delimiters belonging to a later structured argument.
+	if (!text.includes("{") && !text.includes("[")) return -1;
 	let seenNonWhitespace = false;
 	for (let start = 0; start < text.length; start++) {
 		const escapedCsi = caretCsiLength(text, start);
@@ -520,12 +538,13 @@ function classifyJsonStringScalar(text: string, first: number): "scalar" | "over
 	return text.length > MAX_SCALAR_CHARS ? "oversized" : "scalar";
 }
 
-function hasOversizedLine(text: string): boolean {
+export function hasOversizedLine(text: string, maxChars = MAX_RECORD_CHARS): boolean {
+	if (text.length <= maxChars) return false;
 	let lineStart = 0;
 	while (lineStart <= text.length) {
 		const newline = text.indexOf("\n", lineStart);
 		const end = newline < 0 ? text.length : newline;
-		if (end - lineStart > MAX_RECORD_CHARS) return true;
+		if (end - lineStart > maxChars) return true;
 		if (newline < 0) break;
 		lineStart = newline + 1;
 	}
@@ -659,7 +678,7 @@ function appendBoundedTail(existing: string, addition: string, maxChars: number)
 }
 
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
-export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
+export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard, maxChars = MAX_RECORD_CHARS): unknown {
 	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
 		cycles: "mark",
 		transformValue: (nested, key) => {
@@ -681,7 +700,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 		},
 	});
 	const serialized = JSON.stringify(safe);
-	if (typeof serialized === "string" && serialized.length > MAX_RECORD_CHARS) return OVERSIZED_OUTPUT_RECORD;
+	if (typeof serialized === "string" && serialized.length > maxChars) return OVERSIZED_OUTPUT_RECORD;
 	return typeof serialized !== "string" || isInventory(sanitizeText(serialized)) ? BLOCKED_OUTPUT_RECORD : safe;
 }
 
@@ -715,12 +734,21 @@ export class ProducerOutputGuard {
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
-	constructor(redact?: (text: string) => string, pendingPrefixLength?: (text: string) => number) {
+	constructor(
+		redact?: (text: string) => string,
+		pendingPrefixLength?: (text: string) => number,
+		private readonly maxRecordChars = MAX_RECORD_CHARS,
+	) {
 		const owner = currentProducerSecretOwner();
 		const rawRedact = redact ?? owner?.redact;
 		this.#redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
+
+	static forShellCapture(redact?: (text: string) => string): ProducerOutputGuard {
+		return new ProducerOutputGuard(redact, undefined, MAX_SHELL_CAPTURE_RECORD_CHARS);
+	}
+
 	sanitize(text: string): string {
 		return this.#sanitize(text, true);
 	}
@@ -745,11 +773,11 @@ export class ProducerOutputGuard {
 			}
 			const original = sanitizeText(text);
 			if (isInventory(original)) return BLOCKED_OUTPUT_RECORD;
-			if (hasOversizedLine(original)) return this.#sanitizeOversizedRecords(text);
+			if (hasOversizedLine(original, this.maxRecordChars)) return this.#sanitizeOversizedRecords(text);
 			if (/^\s*[{[]/.test(text)) {
 				try {
 					const value = JSON.parse(text);
-					const serialized = JSON.stringify(sanitizeProducerJson(value, this));
+					const serialized = JSON.stringify(sanitizeProducerJson(value, this, this.maxRecordChars));
 					return serialized === JSON.stringify(value) ? original : serialized;
 				} catch {
 					// util.inspect records are not JSON; the bounded record guard owns them.
@@ -759,14 +787,15 @@ export class ProducerOutputGuard {
 			// Classify labels before an owner can rename them. Normalization must not
 			// reveal a label that was missed while retaining raw literal secret bytes.
 			const classified = classifyCredentialText(text);
-			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== classifyCredentialText(original))
+			const originalClassified = original === text ? classified : classifyCredentialText(original);
+			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== originalClassified)
 				return BLOCKED_OUTPUT_RECORD;
-			const filtered = classifyCredentialText(text, this.#redact);
+			const filtered = this.#redact ? classifyCredentialText(text, this.#redact) : classified;
 			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
 			const sanitized = sanitizeText(filtered);
 			const normalized = this.#redact?.(sanitized) ?? sanitized;
 			if (isInventory(normalized)) return BLOCKED_OUTPUT_RECORD;
-			if (normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return OVERSIZED_OUTPUT_RECORD;
+			if (hasOversizedLine(normalized, this.maxRecordChars)) return OVERSIZED_OUTPUT_RECORD;
 			let redacted = normalized;
 			for (const family of BARE_PROVIDER_SECRET_FAMILIES) redacted = family.redact(redacted);
 			return redacted.replace(EXTRA_PREFIXED_KEY, "[REDACTED]");
@@ -780,6 +809,7 @@ export class ProducerOutputGuard {
 		const guard = new ProducerOutputGuard(
 			this.#redact ? value => this.#redact!(value) : undefined,
 			this.#pendingPrefixLength ? value => this.#pendingPrefixLength!(value) : undefined,
+			this.maxRecordChars,
 		);
 		return guard.#pushRecords(text) + guard.#finishRecords();
 	}
@@ -791,6 +821,7 @@ export class ProducerOutputGuard {
 		const guard = new ProducerOutputGuard(
 			value => this.#redact?.(value) ?? value,
 			value => this.#pendingPrefixLength?.(value) ?? 0,
+			this.maxRecordChars,
 		);
 		return guard.push(text) + guard.finish();
 	}
@@ -819,7 +850,7 @@ export class ProducerOutputGuard {
 
 	#holdOversizedCandidateLine(newline: string): void {
 		const entry = `${OVERSIZED_OUTPUT_RECORD}${newline}`;
-		if (!this.#candidateOversized && this.#candidate.length + entry.length > MAX_RECORD_CHARS) {
+		if (!this.#candidateOversized && this.#candidate.length + entry.length > this.maxRecordChars) {
 			this.#candidate = "";
 			this.#candidateOversized = true;
 		}
@@ -963,7 +994,10 @@ export class ProducerOutputGuard {
 		if (this.#withholding) return prefix;
 		const structured = this.#structured || lines.some(line => structuredStart(line, true) >= 0);
 		if (structured || assignment || separator) {
-			if (!this.#candidateOversized && this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS) {
+			if (
+				!this.#candidateOversized &&
+				this.#candidate.length + record.length + newline.length > this.maxRecordChars
+			) {
 				this.#candidate = "";
 				this.#candidateOversized = true;
 			}
@@ -980,7 +1014,7 @@ export class ProducerOutputGuard {
 			}
 			return prefix + (this.#structured || this.#assignments > 0 ? "" : this.#flushCandidate());
 		}
-		return prefix + this.#sanitize(record + newline, false);
+		return prefix + safe;
 	}
 
 	push(chunk: string): string {
@@ -1107,8 +1141,39 @@ export class ProducerOutputGuard {
 	#pushRecords(chunk: string): string {
 		if (this.#withholding) return "";
 		const output: string[] = [];
+		let batchChecked = false;
 		let offset = 0;
 		while (offset < chunk.length) {
+			if (
+				!batchChecked &&
+				!this.#redact &&
+				!this.#pendingPrefixLength &&
+				!this.#dropping &&
+				!this.#oversizedPending &&
+				!this.#structured &&
+				this.#assignments === 0 &&
+				!this.#candidate &&
+				!this.#candidateOversized &&
+				!this.#authorizationHeading &&
+				this.#pending === ""
+			) {
+				batchChecked = true;
+				const lastNl = chunk.lastIndexOf("\n");
+				if (lastNl >= offset) {
+					const batch = offset === 0 && lastNl === chunk.length - 1 ? chunk : chunk.slice(offset, lastNl + 1);
+					if (
+						batch.length <= MAX_DIRECT_SANITIZE_CHARS &&
+						(batch.length <= MAX_RECORD_CHARS || allLinesWithinRecordLimit(batch)) &&
+						// Decimal records cannot contain labels, structured data or built-in
+						// secret prefixes. Owner-supplied filters still take the record path.
+						!/[^0-9\n]/.test(batch)
+					) {
+						output.push(batch);
+						offset = lastNl + 1;
+						continue;
+					}
+				}
+			}
 			const newline = chunk.indexOf("\n", offset);
 			const end = newline < 0 ? chunk.length : newline;
 			const separator = newline < 0 ? "" : "\n";
@@ -1161,8 +1226,8 @@ export class ProducerOutputGuard {
 						this.#recordLength += segmentLength;
 					}
 				} else if (
-					this.#recordLength + segmentLength + separator.length > MAX_RECORD_CHARS ||
-					this.#pending.length + segmentLength + separator.length > MAX_RECORD_CHARS
+					this.#recordLength + segmentLength + separator.length > this.maxRecordChars ||
+					this.#pending.length + segmentLength + separator.length > this.maxRecordChars
 				) {
 					const buffered = this.#pending;
 					const prospective = buffered + segment + separator;

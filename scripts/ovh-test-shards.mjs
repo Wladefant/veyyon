@@ -104,7 +104,7 @@ export async function runCli(args = process.argv.slice(2), env = process.env) {
 	const manifestPath = fileURLToPath(new URL("./ovh-test-durations.json", import.meta.url));
 	const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 	if (!manifest || !manifest.metadata || !manifest.durations || typeof manifest.durations !== "object") throw new Error("duration manifest is malformed");
-	const target = manifest.metadata.target_shard_duration_ms;
+	const target = env.OVH_TARGET_SHARD_MS ? Number(env.OVH_TARGET_SHARD_MS) : manifest.metadata.target_shard_duration_ms;
 	const unknownDuration = manifest.metadata.default_unknown_duration_ms;
 	if (typeof unknownDuration !== "number" || !Number.isFinite(unknownDuration) || unknownDuration < 0) throw new Error("duration manifest has invalid unknown fallback");
 	// In #1202, 295s estimates exhausted a 720s deadline. Budget the full

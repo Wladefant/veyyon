@@ -203,10 +203,8 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 			timestamp: Date.now(),
 		});
 		harness.queueReply(assistantMessage(model, "done", 120, 10));
-		// The cut lands inside the BRAVO turn, so compaction summarizes the history (cache-aligned)
-		// and the turn prefix in parallel: two summarizer calls, one per span.
+		// The full final tool-call turn fits. Only the previous turn needs a summary.
 		harness.queueSummary("LOCAL-SUMMARY: the alpha turn condensed");
-		harness.queueSummary("LOCAL-SUMMARY: the bravo turn prefix condensed");
 
 		await session.prompt(ALPHA_REQUEST);
 		await session.prompt(BRAVO_REQUEST);
@@ -214,7 +212,7 @@ describe("#685 discovered-tool regressions through a real AgentSession", () => {
 
 		await session.compact();
 
-		expect(harness.summarizerCalls()).toBe(2);
+		expect(harness.summarizerCalls()).toBe(1);
 		const compactions = sessionManager
 			.getBranch()
 			.filter((entry): entry is CompactionEntry => entry.type === "compaction");

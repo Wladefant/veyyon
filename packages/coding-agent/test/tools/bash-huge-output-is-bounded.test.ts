@@ -28,17 +28,19 @@
  * A cap that silently dropped the middle would pass a naive size assertion and
  * would be a data-loss bug.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { disposeAllBashSessions } from "@veyyon/coding-agent/exec/bash-executor";
+import { OVERSIZED_OUTPUT_RECORD } from "@veyyon/coding-agent/secrets/producer-output";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
 // The real shape the tool emits. A local all-optional copy used to stand here,
 // which let every assertion in this file read a field the type said might not
 // exist, so nothing could prove one was actually populated.
 import type { OutputMeta } from "@veyyon/coding-agent/tools/core/output-meta";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
-import type { TruncationMeta } from "@veyyon/coding-agent/tools/core/output-notice"
+import type { TruncationMeta } from "@veyyon/coding-agent/tools/core/output-notice";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
@@ -49,14 +51,24 @@ useIsolatedGlobalSettings();
 let tmpDir: string;
 /** Every artifact path handed out, so a test can read back what was preserved. */
 let artifactPaths: string[];
+let runAbort: AbortController;
+let inFlightRuns: Array<Promise<unknown>>;
 
 beforeEach(async () => {
 	tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bash-huge-output-"));
 	artifactPaths = [];
+	runAbort = new AbortController();
+	inFlightRuns = [];
 });
 
 afterEach(async () => {
+	runAbort.abort();
+	await Promise.allSettled(inFlightRuns);
 	await removeWithRetries(tmpDir);
+});
+
+afterAll(async () => {
+	await disposeAllBashSessions();
 });
 
 /** The tool as the session registers it, so the text read here is the text the model reads. */
@@ -93,7 +105,11 @@ async function run(
 	id: string,
 	command: string,
 ): Promise<{ text: string; bytes: number; truncation: TruncationMeta | undefined; meta: OutputMeta | undefined }> {
-	const result = await bashTool().execute(id, { command, timeout: 180 });
+	const signal = runAbort.signal;
+	const execPromise = bashTool().execute(id, { command, timeout: 180 }, signal);
+	inFlightRuns.push(execPromise);
+	const result = await execPromise;
+	signal.throwIfAborted();
 	const text = (result.content ?? [])
 		.filter(block => block.type === "text")
 		.map(block => (block as { text: string }).text)
@@ -120,12 +136,7 @@ describe("a multi-megabyte stream is capped, not inlined", () => {
 		expect(bytes).toBeLessThan(INLINE_CEILING);
 	});
 
-	/**
-	 * ~47MB, the scale this row was actually filed about. Kept in the suite despite
-	 * its size because it costs well under a second: the point of the design is
-	 * that cost does not scale with output, and a test that only ever ran at 2MB
-	 * could not tell that from a cap that happened to work at small sizes.
-	 */
+	/** Keep the original report's scale. This stream crosses both the inline and artifact caps. */
 	it("returns kilobytes inline for a 47MB stream", async () => {
 		const { bytes, truncation } = await run("huge", "seq 1 6000000");
 
@@ -134,20 +145,33 @@ describe("a multi-megabyte stream is capped, not inlined", () => {
 	});
 
 	/**
-	 * The adversarial shape: 20MB with no newline anywhere. Truncation trims to
-	 * line boundaries, and a single line offers none, so a naive implementation
-	 * either keeps everything (defeating the cap) or keeps nothing. The per-line
-	 * column cap is what bounds it: every line is still shown, so the result
-	 * reports the column limit rather than a byte window, and the artifact on
-	 * disk still holds all 20MB.
+	 * The adversarial shape: 20MB with no newline anywhere. The producer output
+	 * guard refuses to pass an unscanned >65,536-char line into artifacts or
+	 * model output, replacing it with {@link OVERSIZED_OUTPUT_RECORD} and
+	 * withholding the raw payload entirely.
 	 */
 	it("bounds a 20MB single line that offers no line boundary to trim to", async () => {
-		const { bytes, meta } = await run("one-line", "head -c 20000000 /dev/zero | tr '\\0' 'x'");
+		const { text, bytes, meta } = await run("one-line", "head -c 20000000 /dev/zero | tr '\\0' 'x'");
+
+		expect(bytes).toBeLessThan(INLINE_CEILING);
+		expect(text).toBe(OVERSIZED_OUTPUT_RECORD);
+		expect(text).not.toContain("xxxx");
+		expect(meta?.limits?.columnTruncated).toBeUndefined();
+		expect(await fs.readdir(tmpDir)).toEqual([]);
+	});
+
+	/**
+	 * A single line under the 65,536-char producer guard limit offers no newline
+	 * to trim to, so the per-line column cap bounds the inline view while the
+	 * artifact on disk preserves the complete 60,000-byte line.
+	 */
+	it("bounds a wide single line under the guard record cap with the column limit", async () => {
+		const { bytes, meta } = await run("wide-line", "head -c 60000 /dev/zero | tr '\\0' 'x'");
 
 		expect(bytes).toBeLessThan(INLINE_CEILING);
 		expect(meta?.limits?.columnTruncated?.maxColumn).toBeGreaterThan(0);
 		const sizes = await Promise.all(artifactPaths.map(async file => (await fs.stat(file)).size));
-		expect(sizes).toContain(20_000_000);
+		expect(sizes).toContain(60_000);
 	});
 });
 

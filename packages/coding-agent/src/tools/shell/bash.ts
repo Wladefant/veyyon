@@ -632,19 +632,22 @@ export class BashTool
 	 * handle instead of re-saving a possibly middle-elided body as a second
 	 * artifact — the sink's file holds the full pre-truncation stream.
 	 */
-	async #boundBashOutput(text: string, existingArtifactId?: string): Promise<string> {
+	async #boundBashOutput(text: string, result: BashResult | BashInteractiveResult): Promise<string> {
+		const { artifactId, artifactError } = result;
+		const incomplete = "outputIncomplete" in result && result.outputIncomplete === true;
 		const capped = await enforceInlineByteCap(text, {
 			...inlineOutputPricing(this.session),
-			saveArtifact: existingArtifactId
-				? async () => existingArtifactId
-				: full => saveBashOriginalArtifact(this.session, full),
+			saveArtifact:
+				artifactError || incomplete || (result.wideRecord && !artifactId)
+					? undefined
+					: full => artifactId ?? saveBashOriginalArtifact(this.session, full),
 		});
 		// enforceInlineByteCap only appends a footer when it itself truncated. If
 		// the sink already truncated into the budget (and wrote the full stream
 		// to its artifact), still advertise the recoverable handle.
-		if (existingArtifactId && !capped.includes(`artifact://${existingArtifactId}`)) {
+		if (artifactId && !artifactError && !incomplete && !capped.includes(`artifact://${artifactId}`)) {
 			const sep = capped.length === 0 || capped.endsWith("\n") ? "" : "\n";
-			return `${capped}${sep}${artifactFooter(existingArtifactId)}`;
+			return `${capped}${sep}${artifactFooter(artifactId)}`;
 		}
 		return capped;
 	}
@@ -665,30 +668,23 @@ export class BashTool
 		timeoutSec: number | undefined,
 		outputText: string,
 	): Promise<void> {
-		const captureNotice =
-			"artifactError" in result && result.artifactError
-				? `\n\n[${formatArtifactErrorNotice(result.artifactError)}]`
-				: "";
+		const captureNotice = result.artifactError ? `\n\n[${formatArtifactErrorNotice(result.artifactError)}]` : "";
 		if (result.cancelled) {
 			// executeBash output already carries a `[Command cancelled]` notice from
 			// the sink; PTY/bridge interactive output does not, so annotate it here.
 			// The annotation is appended AFTER the cap so it is never elided.
-			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
+			const out = await this.#boundBashOutput(normalizeResultOutput(result), result);
 			const annotated = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out;
 			throw new ToolError(`${annotated || "Command aborted"}${captureNotice}`);
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			const captureNotice =
-				"artifactError" in result && result.artifactError
-					? `\n\n[${formatArtifactErrorNotice(result.artifactError)}]`
-					: "";
-			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
+			const out = await this.#boundBashOutput(normalizeResultOutput(result), result);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
 			throw new ToolError(`${out ? `${out}\n\n[${message}]` : message}${captureNotice}`);
 		}
 		if (result.exitCode === undefined) {
-			const out = await this.#boundBashOutput(outputText, result.artifactId);
+			const out = await this.#boundBashOutput(outputText, result);
 			throw new ToolError(`${out}\n\nCommand failed: missing exit status${captureNotice}`);
 		}
 	}
@@ -750,18 +746,28 @@ export class BashTool
 		// already held to the budget is not cut again for the bytes a notice adds. A
 		// sink that spilled saved the full stream already, so a cut here points at that
 		// artifact rather than saving the sink's window as a second one.
+		const incomplete = "outputIncomplete" in result && result.outputIncomplete === true;
+		const unavailable = result.wideRecord && !result.artifactId && !result.artifactError;
 		const cappedBody = await enforceInlineByteCap(body, {
 			...inlineOutputPricing(this.session),
 			saveArtifact:
-				"artifactError" in result && result.artifactError
+				result.artifactError || incomplete || unavailable
 					? undefined
-					: full => saveBashOriginalArtifact(this.session, full),
+					: full => result.artifactId ?? saveBashOriginalArtifact(this.session, full),
 		});
 
-		const resultBuilder = toolResult(details).text(withNotices(cappedBody));
+		let output = cappedBody;
+		if (unavailable && !incomplete) {
+			output = appendNotice(output, "[Full output was not saved (artifact storage is unavailable)]");
+		} else if (result.wideRecord && result.artifactId && !result.artifactElidedBytes && !incomplete) {
+			const footer = artifactFooter(result.artifactId);
+			if (!cappedBody.includes(footer)) output = appendNotice(output, footer);
+		}
+		const resultBuilder = toolResult(details).text(withNotices(output));
 		// The summary describes the sink's window. A body cut again here carries its own
 		// elision marker and artifact footer, which a summary notice would contradict.
 		if (cappedBody === body) resultBuilder.truncationFromSummary(result, { direction: "tail" });
+		else if (result.artifactError) details.meta = { artifactError: result.artifactError };
 		if (failedExit) resultBuilder.error();
 		return resultBuilder.done();
 	}
@@ -883,6 +889,7 @@ export class BashTool
 			},
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
+				endsOnItsOwn: options.timeoutSec !== undefined,
 				onProgress: async (text, details) => {
 					latestText = text;
 					if (!forwardUpdates) return;

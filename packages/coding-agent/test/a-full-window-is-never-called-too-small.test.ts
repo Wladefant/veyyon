@@ -171,6 +171,7 @@ describe("a session with a full context window is never told it is too small to 
 
 	it("still says a small session is small", async () => {
 		const session = await sessionReporting(1_200);
+		expect(session.getContextUsage()?.tokens).toBeLessThan(FULL_PROMPT_TOKENS);
 
 		expect(await compactOutcome(session)).toBe("Nothing to compact (session too small)");
 	});

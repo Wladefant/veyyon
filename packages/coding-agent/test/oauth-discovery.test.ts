@@ -6,12 +6,21 @@ import {
 	extractOAuthChallengeScopes,
 	fetchResourceMetadataScopes,
 } from "@veyyon/coding-agent/mcp/oauth-discovery";
+import { mcpHttpFailure } from "@veyyon/coding-agent/mcp/transports/http-failure";
 import { type FetchInput, mockFetch } from "./helpers/fetch-mock";
 
 describe("mcp oauth discovery", () => {
-	it("extracts Mcp-Auth-Server from transport error headers", () => {
-		const error = new Error(
-			'HTTP 401: unauthorized [WWW-Authenticate: Bearer resource_metadata="https://mcp.figma.com/.well-known/oauth-protected-resource"; Mcp-Auth-Server: https://www.figma.com]',
+	it("extracts Mcp-Auth-Server from transport error headers", async () => {
+		const error = await mcpHttpFailure(
+			"https://mcp.figma.com/mcp",
+			new Response("unauthorized", {
+				status: 401,
+				headers: {
+					"WWW-Authenticate":
+						'Bearer resource_metadata="https://mcp.figma.com/.well-known/oauth-protected-resource"',
+					"Mcp-Auth-Server": "https://www.figma.com",
+				},
+			}),
 		);
 
 		expect(extractMcpAuthServerUrl(error)).toBe("https://www.figma.com/");
@@ -193,6 +202,123 @@ describe("path-prefixed auth servers", () => {
 	});
 });
 
+describe("WWW-Authenticate scopes", () => {
+	it.each([
+		['Bearer realm="team, west", scope="read write"', "read write"],
+		[String.raw`Bearer error_description="he said \"scope=ignored\", retry", scope="write"`, "write"],
+		['Basic realm="example", scope="ignored", Bearer scope=read', "read"],
+		["Negotiate YWJjZA==, Bearer scope=read", "read"],
+		["Bearer scope=read", "read"],
+		['Bearer scope=""', undefined],
+		['Bearer scope="   "', undefined],
+		['Bearer realm="https://[::1]/authorize", scope="read"', "read"],
+		[undefined, undefined],
+	] as const)("reads %s as %s without parsing the JSON body or neighboring header", async (header, expected) => {
+		const headers = new Headers({ "Mcp-Auth-Server": "https://[::1]/issuer" });
+		if (header) headers.set("WWW-Authenticate", header);
+		const error = await mcpHttpFailure(
+			"https://mcp.example.com",
+			new Response(
+				'{"authorization_endpoint":"https://auth.example.com/authorize?scope=","token_endpoint":"https://auth.example.com/token"}',
+				{
+					status: 401,
+					headers,
+				},
+			),
+		);
+		expect(extractOAuthChallengeScopes(error)).toBe(expected);
+		expect(extractMcpAuthServerUrl(error)).toBe("https://[::1]/issuer");
+	});
+
+	it("uses the complete Bearer challenge without borrowing hints from an earlier realm", async () => {
+		const error = await mcpHttpFailure(
+			"https://mcp.example.com",
+			new Response(null, {
+				status: 401,
+				headers: {
+					"WWW-Authenticate":
+						'Bearer realm="MCP", scope=old, resource_metadata="https://mcp.example.com/old", Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=read, resource_metadata="https://mcp.example.com/current"',
+				},
+			}),
+		);
+		expect(extractOAuthChallengeScopes(error)).toBe("read");
+		expect(analyzeAuthError(error)).toMatchObject({
+			scopes: "read",
+			resourceMetadataUrl: "https://mcp.example.com/current",
+			oauth: {
+				authorizationUrl: "https://auth.example.com/authorize",
+				tokenUrl: "https://auth.example.com/token",
+				scopes: "read",
+				explicitScopes: true,
+			},
+		});
+	});
+
+	it("does not assemble an endpoint pair from two incomplete challenges", () => {
+		const error = new Error(
+			'HTTP 401: Bearer authorization_uri="https://auth.example.com/authorize", scope=read, Bearer token_url="https://other.example.com/token"',
+		);
+		const result = analyzeAuthError(error);
+		expect(result.oauth).toBeUndefined();
+		expect(result.scopes).toBe("read");
+	});
+
+	it.each([
+		["urn:example:legacy", "https://legacy.example.com/token"],
+		["https://legacy.example.com/authorize", "ftp://legacy.example.com/token"],
+	] as const)("does not use a direct pair with realm %s and token URL %s", (realm, tokenUrl) => {
+		const metadata = "https://mcp.example.com/current";
+		const unusable = `Bearer realm="${realm}", token_url="${tokenUrl}", resource_metadata="${metadata}", scope=legacy`;
+		const usable =
+			'Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=read';
+
+		const discovery = analyzeAuthError(new Error(`HTTP 401: WWW-Authenticate: ${unusable}`));
+		expect(discovery.oauth).toBeUndefined();
+		expect(discovery.resourceMetadataUrl).toBe(metadata);
+		expect(discovery.scopes).toBe("legacy");
+
+		const direct = analyzeAuthError(new Error(`HTTP 401: WWW-Authenticate: ${unusable}, ${usable}`));
+		expect(direct.resourceMetadataUrl).toBeUndefined();
+		expect(direct.oauth).toMatchObject({
+			authorizationUrl: "https://auth.example.com/authorize",
+			tokenUrl: "https://auth.example.com/token",
+			scopes: "read",
+		});
+	});
+
+	const challenges = {
+		direct:
+			'Bearer realm="https://auth.example.com/authorize", token_url="https://auth.example.com/token", scope=direct',
+		metadata: 'Bearer resource_metadata="https://mcp.example.com/current", scope=metadata',
+		scope: "Bearer scope=standalone",
+		incomplete: 'Bearer realm="https://legacy.example.com/authorize", resource_metadata=invalid',
+	};
+	it.each([
+		["direct", "metadata", "direct"],
+		["metadata", "direct", "direct"],
+		["direct", "scope", "direct"],
+		["scope", "direct", "direct"],
+		["direct", "incomplete", "direct"],
+		["incomplete", "direct", "direct"],
+		["metadata", "scope", "metadata"],
+		["scope", "metadata", "metadata"],
+		["metadata", "incomplete", "metadata"],
+		["incomplete", "metadata", "metadata"],
+		["scope", "incomplete", "scope"],
+		["incomplete", "scope", "scope"],
+	] as const)("selects %s + %s as %s without mixing parameters", (first, second, selected) => {
+		const auth = analyzeAuthError(
+			new Error(`HTTP 401: WWW-Authenticate: ${challenges[first]}, ${challenges[second]}`),
+		);
+		expect(auth.scopes).toBe(selected === "scope" ? "standalone" : selected);
+		expect(auth.resourceMetadataUrl).toBe(selected === "metadata" ? "https://mcp.example.com/current" : undefined);
+		expect(auth.oauth?.authorizationUrl).toBe(
+			selected === "direct" ? "https://auth.example.com/authorize" : undefined,
+		);
+		expect(auth.oauth?.tokenUrl).toBe(selected === "direct" ? "https://auth.example.com/token" : undefined);
+	});
+});
+
 describe("resource_metadata chain", () => {
 	it("extracts resourceMetadataUrl from error message", () => {
 		const error = new Error(
@@ -206,9 +332,16 @@ describe("resource_metadata chain", () => {
 		);
 	});
 
-	it("extracts scope= from insufficient_scope challenge alongside resource_metadata", () => {
-		const error = new Error(
-			'HTTP 403: {"error":"insufficient_scope","required":["jit"]} [WWW-Authenticate: Bearer error="insufficient_scope", scope="jit", resource_metadata="https://gateway.example.com/jit/.well-known/oauth-protected-resource"]',
+	it("extracts scope= from insufficient_scope challenge alongside resource_metadata", async () => {
+		const error = await mcpHttpFailure(
+			"https://gateway.example.com/jit",
+			new Response('{"error":"insufficient_scope","required":["jit"]}', {
+				status: 403,
+				headers: {
+					"WWW-Authenticate":
+						'Bearer error="insufficient_scope", scope="jit", resource_metadata="https://gateway.example.com/jit/.well-known/oauth-protected-resource"',
+				},
+			}),
 		);
 
 		expect(extractOAuthChallengeScopes(error)).toBe("jit");
@@ -218,9 +351,13 @@ describe("resource_metadata chain", () => {
 		expect(auth.resourceMetadataUrl).toBe("https://gateway.example.com/jit/.well-known/oauth-protected-resource");
 	});
 
-	it("merges challenge scopes into oauth endpoints when the JSON body omits them", () => {
-		const error = new Error(
-			'HTTP 403: {"error":"insufficient_scope","oauth":{"authorization_url":"https://auth.example.com/oauth/auth","token_url":"https://auth.example.com/oauth/token"}} [WWW-Authenticate: Bearer error="insufficient_scope", scope="jit"]',
+	it("merges challenge scopes into oauth endpoints when the JSON body omits them", async () => {
+		const error = await mcpHttpFailure(
+			"https://gateway.example.com/jit",
+			new Response(
+				'{"error":"insufficient_scope","oauth":{"authorization_url":"https://auth.example.com/oauth/auth","token_url":"https://auth.example.com/oauth/token"}}',
+				{ status: 403, headers: { "WWW-Authenticate": 'Bearer error="insufficient_scope", scope="jit"' } },
+			),
 		);
 
 		const auth = analyzeAuthError(error);

@@ -51,6 +51,18 @@ async function writeRegistry(fixture: Fixture, installPath: string): Promise<str
 	return registryPath;
 }
 
+/**
+ * A plugin install directory INSIDE the project, with real content. The registry gate hashes every file under each
+ * named install path and refuses one that resolves outside the project root (CHANGELOG #633, #666), so a directory
+ * beside the project, or one that does not exist, never reaches a recorded decision.
+ */
+async function writePayload(fixture: Fixture): Promise<string> {
+	const installPath = path.join(fixture.cwd, "payloads", "plugin");
+	await fs.mkdir(installPath, { recursive: true });
+	await fs.writeFile(path.join(installPath, "index.js"), "export const value = 1;\n");
+	return installPath;
+}
+
 async function writeExtension(fixture: Fixture, relativePath: string): Promise<string> {
 	const absolutePath = path.join(fixture.cwd, relativePath);
 	await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -67,7 +79,7 @@ async function projectRoots(fixture: Fixture): Promise<string[]> {
 describe("`veyyon trust` decides what the gate then honours", () => {
 	it("approves the discovered project registry, and discovery starts reading it", async () => {
 		const fixture = await makeFixture();
-		const installPath = path.join(fixture.home, "plugin");
+		const installPath = await writePayload(fixture);
 		await writeRegistry(fixture, installPath);
 
 		expect(await projectRoots(fixture)).toEqual([]);
@@ -144,7 +156,7 @@ describe("`veyyon trust` decides what the gate then honours", () => {
 
 	it("forgets a denial, so the same project can be decided again", async () => {
 		const fixture = await makeFixture();
-		const installPath = path.join(fixture.home, "plugin");
+		const installPath = await writePayload(fixture);
 		await writeRegistry(fixture, installPath);
 		const args = { cwd: fixture.cwd, agentDir: fixture.agentDir, paths: [] as string[] };
 
@@ -160,7 +172,7 @@ describe("`veyyon trust` decides what the gate then honours", () => {
 describe("`/trust` answers it from inside a running session", () => {
 	it("reports without deciding when it is given no verb", async () => {
 		const fixture = await makeFixture();
-		await writeRegistry(fixture, path.join(fixture.home, "plugin"));
+		await writeRegistry(fixture, await writePayload(fixture));
 
 		const report = await runTrustSlashCommand("", fixture.agentDir, fixture.cwd);
 
@@ -184,7 +196,7 @@ describe("`/trust` answers it from inside a running session", () => {
 
 	it("refuses a verb it does not have, instead of guessing at a decision", async () => {
 		const fixture = await makeFixture();
-		await writeRegistry(fixture, path.join(fixture.home, "plugin"));
+		await writeRegistry(fixture, await writePayload(fixture));
 
 		const report = await runTrustSlashCommand("yes please", fixture.agentDir, fixture.cwd);
 

@@ -79,7 +79,7 @@ describe("relative write/read overwrite adversarial", () => {
 		const s = session();
 		const content = "絵文字🙂\n";
 		const result = await new WriteTool(s).execute("w", { path: "u.ts", content });
-		expect(toolResultText(result)).toContain(`Successfully wrote ${content.length} bytes`);
+		expect(toolResultText(result)).toContain(`Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes`);
 		expect(await Bun.file(path.join(tmpDir, "u.ts")).text()).toBe(content);
 	});
 

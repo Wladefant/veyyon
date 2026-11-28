@@ -88,3 +88,4 @@ jobs:
             ${{ runner.temp }}/veyyon.exe
             ${{ runner.temp }}/veyyon.exe.sha256
           if-no-files-found: error
+          retention-days: 7

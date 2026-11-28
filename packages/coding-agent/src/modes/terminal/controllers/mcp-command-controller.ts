@@ -351,7 +351,10 @@ export class MCPCommandController {
 		const failure = await this.#connectionFailure(stripOAuthAuth(config), { oauth: false });
 		if (!failure) throw new Error("Server connection succeeded without OAuth; reauthorization is not required.");
 		const authResult = analyzeAuthError(failure.error, config.url);
-		const oauth = await oauthEndpointsForAuthFailure(authResult, config.url, { ignoreDiscoveryFailure: false });
+		const oauth = await oauthEndpointsForAuthFailure(authResult, config.url, {
+			ignoreDiscoveryFailure: false,
+			configuredScopes: config.oauth?.scopes,
+		});
 		if (!oauth) throw new Error("Could not discover OAuth endpoints from server response.");
 		return oauth;
 	}

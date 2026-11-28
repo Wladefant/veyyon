@@ -5,7 +5,7 @@ import { HttpTransport } from "../src/mcp/transports/http";
 
 async function bounded<T>(promise: Promise<T>, phase: string): Promise<T> {
 	const deadline = Promise.withResolvers<never>();
-	const timer = setTimeout(() => deadline.reject(new Error("Timed out waiting for " + phase)), 4_000);
+	const timer = setTimeout(() => deadline.reject(new Error(`Timed out waiting for ${phase}`)), 4_000);
 	try {
 		return await Promise.race([promise, deadline.promise]);
 	} finally {
@@ -13,10 +13,7 @@ async function bounded<T>(promise: Promise<T>, phase: string): Promise<T> {
 	}
 }
 
-async function withDisposableSSE<T>(
-	payload: string,
-	run: (transport: HttpTransport) => Promise<T>,
-): Promise<T> {
+async function withDisposableSSE<T>(payload: string, run: (transport: HttpTransport) => Promise<T>): Promise<T> {
 	const server: Server = createServer((request, response) => {
 		if (request.method !== "GET" || request.url !== "/mcp") {
 			response.writeHead(202).end();
@@ -26,7 +23,7 @@ async function withDisposableSSE<T>(
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache",
 		});
-		response.write("data: " + payload + "\n\n");
+		response.write(`data: ${payload}\n\n`);
 		// Keep the GET response open to test the actual reader, not EOF recovery.
 	});
 	const listening = Promise.withResolvers<void>();
@@ -41,7 +38,7 @@ async function withDisposableSSE<T>(
 	}
 	const transport = new HttpTransport({
 		type: "http",
-		url: "http://127.0.0.1:" + address.port + "/mcp",
+		url: `http://127.0.0.1:${address.port}/mcp`,
 		timeout: 1_500,
 	});
 	try {
@@ -81,10 +78,10 @@ describe("MCP HTTP GET SSE malformed JSON diagnostics", () => {
 				expect(observed).toHaveLength(1);
 				expect(error.message).toBe("MCP HTTP SSE stream received malformed JSON");
 				expect(error.stack ?? "").not.toContain("FAKE_PRIVA");
-				expect(debug).toHaveBeenCalledWith("HTTP SSE stream error", {
-					url: transport.url,
-					error: "MCP HTTP SSE stream received malformed JSON",
-				});
+				expect(debug.mock.calls).toContainEqual([
+					"HTTP SSE stream error",
+					{ url: transport.url, error: "MCP HTTP SSE stream received malformed JSON" },
+				]);
 				expect(JSON.stringify(debug.mock.calls)).not.toContain("FAKE_PRIVA");
 				expect(JSON.stringify(debug.mock.calls)).not.toContain(marker);
 			});
@@ -111,9 +108,7 @@ describe("MCP HTTP GET SSE malformed JSON diagnostics", () => {
 			await bounded(transport.startSSEListener(), "valid SSE GET connection");
 			await bounded(notified.promise, "valid SSE notification");
 			expect(errors).toHaveLength(0);
-			expect(notices).toEqual([
-				{ method: "notifications/tools/list_changed", params: { from: "safe-fixture" } },
-			]);
+			expect(notices).toEqual([{ method: "notifications/tools/list_changed", params: { from: "safe-fixture" } }]);
 		});
 	}, 15_000);
 });

@@ -63,19 +63,18 @@ describe("60s session heartbeat interval", () => {
 		const infoSpy = vi.spyOn(logger, "info");
 
 		// Initially, no heartbeat logged
-		expect(infoSpy).not.toHaveBeenCalledWith("Session heartbeat", expect.anything());
+		expect(infoSpy.mock.calls).not.toContainEqual(["Session heartbeat", expect.anything()]);
 
 		// 59 seconds: no heartbeat yet
 		vi.advanceTimersByTime(59_000);
-		expect(infoSpy).not.toHaveBeenCalledWith("Session heartbeat", expect.anything());
+		expect(infoSpy.mock.calls).not.toContainEqual(["Session heartbeat", expect.anything()]);
 
 		// 60 seconds: first heartbeat logged with empty string phase
 		vi.advanceTimersByTime(1_000);
-		expect(infoSpy).toHaveBeenCalledWith("Session heartbeat", {
-			pid: process.pid,
-			sessionId: s.sessionManager.getSessionId(),
-			phase: "",
-		});
+		expect(infoSpy.mock.calls).toContainEqual([
+			"Session heartbeat",
+			{ pid: process.pid, sessionId: s.sessionManager.getSessionId(), phase: "" },
+		]);
 
 		// Tool starts in flight
 		s.agent.emitExternalEvent({
@@ -87,11 +86,10 @@ describe("60s session heartbeat interval", () => {
 
 		// 120 seconds total: heartbeat logged with tool name phase
 		vi.advanceTimersByTime(60_000);
-		expect(infoSpy).toHaveBeenCalledWith("Session heartbeat", {
-			pid: process.pid,
-			sessionId: s.sessionManager.getSessionId(),
-			phase: "bash",
-		});
+		expect(infoSpy.mock.calls).toContainEqual([
+			"Session heartbeat",
+			{ pid: process.pid, sessionId: s.sessionManager.getSessionId(), phase: "bash" },
+		]);
 
 		// Tool ends
 		s.agent.emitExternalEvent({
@@ -103,11 +101,10 @@ describe("60s session heartbeat interval", () => {
 
 		// 180 seconds total: heartbeat logged with empty string phase again
 		vi.advanceTimersByTime(60_000);
-		expect(infoSpy).toHaveBeenCalledWith("Session heartbeat", {
-			pid: process.pid,
-			sessionId: s.sessionManager.getSessionId(),
-			phase: "",
-		});
+		expect(infoSpy.mock.calls).toContainEqual([
+			"Session heartbeat",
+			{ pid: process.pid, sessionId: s.sessionManager.getSessionId(), phase: "" },
+		]);
 	});
 
 	it("clears the heartbeat interval on session exit/dispose", async () => {
@@ -116,7 +113,7 @@ describe("60s session heartbeat interval", () => {
 
 		// Advance 60s to confirm it was logging
 		vi.advanceTimersByTime(60_000);
-		expect(infoSpy).toHaveBeenCalledTimes(1);
+		expect(infoSpy.mock.calls).toHaveLength(1);
 
 		// Dispose session (exit path)
 		await s.dispose();
@@ -125,7 +122,7 @@ describe("60s session heartbeat interval", () => {
 
 		// Advance another 180s: no heartbeats logged
 		vi.advanceTimersByTime(180_000);
-		expect(infoSpy).not.toHaveBeenCalledWith("Session heartbeat", expect.anything());
+		expect(infoSpy.mock.calls).not.toContainEqual(["Session heartbeat", expect.anything()]);
 	});
 
 	it("wraps the heartbeat log call so an exception cannot break the session", async () => {
@@ -138,6 +135,6 @@ describe("60s session heartbeat interval", () => {
 		expect(() => {
 			vi.advanceTimersByTime(60_000);
 		}).not.toThrow();
-		expect(infoSpy).toHaveBeenCalledTimes(1);
+		expect(infoSpy.mock.calls).toHaveLength(1);
 	});
 });

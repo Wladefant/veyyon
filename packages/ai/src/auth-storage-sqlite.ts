@@ -1014,7 +1014,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
-	getCredentialBlock(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+	getCredentialBlock(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+		ignoreWritesBeforeMs?: number,
+	): number | undefined {
 		const nowMs = Date.now();
 		this.#deleteExpiredCredentialBlocksStmt.run(nowMs);
 		const row = this.#getCredentialBlockStmt.get(credentialId, providerKey, blockScope, nowMs) as
@@ -1026,7 +1031,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		// hold the credential for the length of the jump. This matters more here
 		// than in memory: a persisted block survives restarts, so without the
 		// check the credential stays unusable across every later process too.
-		if (isRecordFromFutureClock(epochSecondsToMs(row.updated_at), nowMs)) return undefined;
+		const writtenAtMs = epochSecondsToMs(row.updated_at);
+		if (isRecordFromFutureClock(writtenAtMs, nowMs)) return undefined;
+		if (writtenAtMs !== undefined && ignoreWritesBeforeMs !== undefined && writtenAtMs < ignoreWritesBeforeMs) {
+			return undefined;
+		}
 		return row.blocked_until_ms;
 	}
 

@@ -16,8 +16,8 @@
 import * as fs from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
 import * as path from "node:path";
-import { logger } from "@veyyon/utils";
-import { type } from "arktype";
+import { type } from "@veyyon/ai/utils/schema/arktype";
+import { lazy, logger } from "@veyyon/utils";
 import type { Server, ServerWebSocket } from "bun";
 import {
 	checkCdpMethod,
@@ -158,49 +158,52 @@ interface PendingCall {
 	timer: NodeJS.Timeout;
 }
 
-const cdpRequestSchema = type({
-	id: "number",
-	method: "string",
-	"params?": "Record<string, unknown>",
-	"sessionId?": "string",
-});
-
-const extensionMessageSchema = type({
-	"id?": "number",
-	"method?": "string",
-	"params?": "unknown[]",
-	"result?": "unknown",
-	"error?": "unknown",
-});
-
-const debugSourceSchema = type({ tabId: "number", "sessionId?": "string" });
-const targetInfoSchema = type({
-	targetInfo: { targetId: "string", "title?": "string", "url?": "string" },
-});
-const targetInfoChangedSchema = targetInfoSchema;
-const responseBodySchema = type({ body: "string", "base64Encoded?": "boolean" });
-const tabSchema = type({
-	id: "number",
-	"openerTabId?": "number",
-	"pendingUrl?": "string",
-	"url?": "string",
-	"windowId?": "number",
-});
-const requestPausedSchema = type({
-	requestId: "string",
-	"frameId?": "string",
-	request: { url: "string" },
-	resourceType: "string",
-	"responseStatusCode?": "number",
-	"responseStatusText?": "string",
-	"responseErrorReason?": "string",
-	"responseHeaders?": [{ name: "string", value: "string" }, "[]"],
-});
-const frameNavigatedSchema = type({ frame: { "parentId?": "string", url: "string" } });
-const attachedSchema = type({
-	sessionId: "string",
-	"waitingForDebugger?": "boolean",
-	"targetInfo?": { type: "string", "targetId?": "string" },
+const relaySchemas = lazy(() => {
+	const targetInfoSchema = type({
+		targetInfo: { targetId: "string", "title?": "string", "url?": "string" },
+	});
+	return {
+		cdpRequest: type({
+			id: "number",
+			method: "string",
+			"params?": "Record<string, unknown>",
+			"sessionId?": "string",
+		}),
+		extensionMessage: type({
+			"id?": "number",
+			"method?": "string",
+			"params?": "unknown[]",
+			"result?": "unknown",
+			"error?": "unknown",
+		}),
+		debugSource: type({ tabId: "number", "sessionId?": "string" }),
+		targetInfo: targetInfoSchema,
+		targetInfoChanged: targetInfoSchema,
+		responseBody: type({ body: "string", "base64Encoded?": "boolean" }),
+		tab: type({
+			id: "number",
+			"openerTabId?": "number",
+			"pendingUrl?": "string",
+			"url?": "string",
+			"windowId?": "number",
+		}),
+		requestPaused: type({
+			requestId: "string",
+			"frameId?": "string",
+			request: { url: "string" },
+			resourceType: "string",
+			"responseStatusCode?": "number",
+			"responseStatusText?": "string",
+			"responseErrorReason?": "string",
+			"responseHeaders?": [{ name: "string", value: "string" }, "[]"],
+		}),
+		frameNavigated: type({ frame: { "parentId?": "string", url: "string" } }),
+		attached: type({
+			sessionId: "string",
+			"waitingForDebugger?": "boolean",
+			"targetInfo?": { type: "string", "targetId?": "string" },
+		}),
+	};
 });
 
 function diagnosticMethod(method: string, scrub: readonly string[]): string {
@@ -522,12 +525,12 @@ export class ExtensionRelay {
 			return;
 		}
 		if (ws.data.role === "extension") {
-			const message = extensionMessageSchema(raw);
+			const message = relaySchemas.value.extensionMessage(raw);
 			if (message instanceof type.errors) return;
 			this.#onExtensionMessage(message);
 			return;
 		}
-		const request = cdpRequestSchema(raw);
+		const request = relaySchemas.value.cdpRequest(raw);
 		if (request instanceof type.errors) return;
 		const client = ws.data.clientId === undefined ? undefined : this.#clients.get(ws.data.clientId);
 		if (!client) return;
@@ -543,12 +546,18 @@ export class ExtensionRelay {
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				const debuggee = params[0];
-				const cdpMethod = method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string" ? params[1] : undefined;
+				const cdpMethod =
+					method === "chrome.debugger.sendCommand" && Array.isArray(params) && typeof params[1] === "string"
+						? params[1]
+						: undefined;
 				this.#log("extension RPC timed out", {
 					port: this.port,
 					method,
 					...(cdpMethod === undefined ? {} : { cdpMethod: diagnosticMethod(cdpMethod, this.#scrub) }),
-					...(typeof debuggee === "object" && debuggee !== null && "tabId" in debuggee && typeof debuggee.tabId === "number"
+					...(typeof debuggee === "object" &&
+					debuggee !== null &&
+					"tabId" in debuggee &&
+					typeof debuggee.tabId === "number"
 						? { tabId: debuggee.tabId }
 						: {}),
 				});
@@ -567,7 +576,7 @@ export class ExtensionRelay {
 		ws.send(JSON.stringify({ id: this.#nextCallId++, method, params }));
 	}
 
-	#onExtensionMessage(message: typeof extensionMessageSchema.infer): void {
+	#onExtensionMessage(message: typeof relaySchemas.value.extensionMessage.infer): void {
 		if (message.id !== undefined && this.#pending.has(message.id)) {
 			const pending = this.#pending.get(message.id);
 			this.#pending.delete(message.id);
@@ -584,7 +593,7 @@ export class ExtensionRelay {
 				this.#onDebuggerEvent(params);
 				return;
 			case "chrome.debugger.onDetach": {
-				const source = debugSourceSchema(params[0]);
+				const source = relaySchemas.value.debugSource(params[0]);
 				if (!(source instanceof type.errors)) this.#dropTab(source.tabId);
 				return;
 			}
@@ -592,7 +601,7 @@ export class ExtensionRelay {
 				if (typeof params[0] === "number") this.#dropTab(params[0]);
 				return;
 			case "chrome.tabs.onCreated": {
-				const tab = tabSchema(params[0]);
+				const tab = relaySchemas.value.tab(params[0]);
 				if (tab instanceof type.errors) return;
 				const landing = tab.pendingUrl ?? tab.url;
 				if (this.#bootstrapUrl !== undefined && landing === this.#bootstrapUrl) {
@@ -630,7 +639,7 @@ export class ExtensionRelay {
 	}
 
 	#onDebuggerEvent(params: unknown[]): void {
-		const source = debugSourceSchema(params[0]);
+		const source = relaySchemas.value.debugSource(params[0]);
 		const method = params[1];
 		if (source instanceof type.errors || typeof method !== "string") return;
 		const tab = this.#tabs.get(source.tabId);
@@ -641,7 +650,7 @@ export class ExtensionRelay {
 			return;
 		}
 		if (method === "Target.attachedToTarget") {
-			const attached = attachedSchema(eventParams);
+			const attached = relaySchemas.value.attached(eventParams);
 			if (attached instanceof type.errors) return;
 			this.#childSessions.set(attached.sessionId, tab.tabId);
 			void this.#gateChild(tab, source, attached, eventParams).catch(error =>
@@ -650,16 +659,16 @@ export class ExtensionRelay {
 			return;
 		}
 		if (method === "Target.detachedFromTarget") {
-			const detached = attachedSchema(eventParams);
+			const detached = relaySchemas.value.attached(eventParams);
 			if (!(detached instanceof type.errors)) this.#childSessions.delete(detached.sessionId);
 		} else if (method === "Target.targetInfoChanged") {
-			const changed = targetInfoChangedSchema(eventParams);
+			const changed = relaySchemas.value.targetInfoChanged(eventParams);
 			if (!(changed instanceof type.errors) && changed.targetInfo.targetId === tab.mainFrameId) {
 				if (changed.targetInfo.url !== undefined) tab.url = changed.targetInfo.url;
 				if (changed.targetInfo.title !== undefined) tab.title = changed.targetInfo.title;
 			}
 		} else if (method === "Page.frameNavigated" && source.sessionId === undefined) {
-			const navigated = frameNavigatedSchema(eventParams);
+			const navigated = relaySchemas.value.frameNavigated(eventParams);
 			if (!(navigated instanceof type.errors) && navigated.frame.parentId === undefined) {
 				this.#onMainFrameNavigated(tab, navigated.frame.url);
 			}
@@ -690,7 +699,7 @@ export class ExtensionRelay {
 	async #gateChild(
 		tab: OwnedTab,
 		source: { tabId: number; sessionId?: string },
-		attached: typeof attachedSchema.infer,
+		attached: typeof relaySchemas.value.attached.infer,
 		eventParams: unknown,
 	): Promise<void> {
 		const debuggee = { tabId: tab.tabId, sessionId: attached.sessionId };
@@ -747,7 +756,7 @@ export class ExtensionRelay {
 	 * A document response of the main frame (second pause, asked for by the first) is let through with the popup sandbox added.
 	 */
 	#onRequestPaused(source: { tabId: number; sessionId?: string }, params: unknown): void {
-		const paused = requestPausedSchema(params);
+		const paused = relaySchemas.value.requestPaused(params);
 		if (paused instanceof type.errors) return;
 		const debuggee = source.sessionId === undefined ? { tabId: source.tabId } : source;
 		const answer = (cdpMethod: string, body: Record<string, unknown>): Promise<unknown> =>
@@ -775,7 +784,7 @@ export class ExtensionRelay {
 			];
 			answer("Fetch.getResponseBody", {})
 				.then(body => {
-					const parsed = responseBodySchema(body);
+					const parsed = relaySchemas.value.responseBody(body);
 					if (parsed instanceof type.errors) throw new Error("no response body");
 					const { body: content, base64Encoded } = parsed;
 					return answer("Fetch.fulfillRequest", {
@@ -856,7 +865,7 @@ export class ExtensionRelay {
 			await this.#enableFetchGate({ tabId }, true);
 			await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.setAutoAttach", AUTO_ATTACH]);
 			// Chrome names a page's main frame after its target. Needed to tell its document from a sub-frame's.
-			const info = targetInfoSchema(
+			const info = relaySchemas.value.targetInfo(
 				await this.#call("chrome.debugger.sendCommand", [{ tabId }, "Target.getTargetInfo", {}]),
 			);
 			if (info instanceof type.errors) throw new Error("Chrome did not name the main frame of the tab.");
@@ -958,8 +967,17 @@ export class ExtensionRelay {
 					: await this.#sessionCommand(sessionId, client, method, params);
 			this.#reply(client, id, sessionId, { result });
 		} catch (error) {
-			const mappedTabId = sessionId === undefined ? undefined : client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId);
-			const clientTabId = mappedTabId ?? (method === "Target.createTarget" ? undefined : typeof params.targetId === "string" ? this.#tabByTargetId(params.targetId)?.tabId : undefined);
+			const mappedTabId =
+				sessionId === undefined
+					? undefined
+					: (client.sessions.get(sessionId) ?? this.#childSessions.get(sessionId));
+			const clientTabId =
+				mappedTabId ??
+				(method === "Target.createTarget"
+					? undefined
+					: typeof params.targetId === "string"
+						? this.#tabByTargetId(params.targetId)?.tabId
+						: undefined);
 			this.#log("CDP client command failed", {
 				port: this.port,
 				clientId: client.id,
@@ -1127,7 +1145,9 @@ export class ExtensionRelay {
 		let tab = this.#bootstrapTabId === undefined ? undefined : this.#tabs.get(this.#bootstrapTabId);
 		this.#bootstrapTabId = undefined;
 		if (!tab) {
-			const created = tabSchema(await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]));
+			const created = relaySchemas.value.tab(
+				await this.#call("chrome.tabs.create", [{ url: "about:blank", active: true }]),
+			);
 			if (created instanceof type.errors) throw new Error("The extension returned no tab.");
 			tab = await this.#registerTab(created.id, false, created.windowId);
 		}

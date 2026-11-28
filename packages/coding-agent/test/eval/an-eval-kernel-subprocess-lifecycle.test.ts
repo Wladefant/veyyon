@@ -119,6 +119,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 		expect(durationMs).toBeLessThan(4000);
 		expect(result.cancelled).toBe(true);
 		expect(result.output).toMatch(/timed out/i);
+		expect(result.cancellationPending).toBe(true);
 	}, 15_000);
 
 	it("aborts execution when AbortSignal fires", async () => {
@@ -142,6 +143,7 @@ describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
 
 		expect(durationMs).toBeLessThan(4000);
 		expect(result.cancelled).toBe(true);
+		expect(result.cancellationPending).toBe(true);
 	}, 15_000);
 
 	it("isolates execution in per-call mode without mutating session state", async () => {

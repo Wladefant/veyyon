@@ -70,8 +70,8 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<DiscoveredSkill>
 }
 
 /** Every extension package root as a config directory at the root's own scope. */
-async function extensionConfigDirs(ctx: LoadContext): Promise<ScopedConfigDir[]> {
-	const roots = await listVeyyonExtensionRoots(ctx, { agentDir: ctx.agentDir });
+async function extensionConfigDirs(ctx: LoadContext, includeMarketplace = false): Promise<ScopedConfigDir[]> {
+	const roots = await listVeyyonExtensionRoots(ctx, { agentDir: ctx.agentDir, includeMarketplace });
 	return roots.map(root => ({ dir: root.path, level: root.level }));
 }
 
@@ -213,7 +213,8 @@ registerProvider<Rule>(ruleCapability.id, {
 	displayName: DISPLAY_NAME,
 	description: DESCRIPTION,
 	priority: PRIORITY,
-	load: async ctx => loadRuleDirs(await extensionConfigDirs(ctx), PROVIDER_ID),
+	// The Claude provider does not load Veyyon's TTSR rules, even for approved installs.
+	load: async ctx => loadRuleDirs(await extensionConfigDirs(ctx, true), PROVIDER_ID),
 });
 
 registerProvider<Prompt>(promptCapability.id, {

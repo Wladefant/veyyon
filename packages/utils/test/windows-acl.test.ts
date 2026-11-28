@@ -307,6 +307,9 @@ describe("owner-only Windows ACL helpers", () => {
 		expect(child.stderr.listenerCount("data")).toBe(0);
 	});
 
+	// The `verifyOwnerOnlyWindowsAcl` calls in this block pass no injected runner, so each verify below is
+	// answered by packages/utils/src/windows-acl-native.ts (the read-only Win32 DACL check). The refusals
+	// for a removed SYSTEM rule and an added Everyone rule are that module's "exactly two access rules" error.
 	describe.skipIf(process.platform !== "win32")("real Windows ACL", () => {
 		/** Applying a private record must allow verification with only the owner and LocalSystem principals. */
 		it("applies and independently verifies a protected owner-and-SYSTEM DACL", async () => {

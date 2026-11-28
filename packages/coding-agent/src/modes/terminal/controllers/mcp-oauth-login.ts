@@ -12,6 +12,7 @@ import {
 	discoverOAuthEndpoints,
 	fetchResourceMetadataScopes,
 	type OAuthEndpoints,
+	resolveOAuthScopes,
 } from "../../../mcp";
 import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "../../../mcp/oauth-flow";
 import type { MCPServerConfig, MCPStdioServerConfig } from "../../../mcp/types";
@@ -414,30 +415,34 @@ export function oauthRedirectOptions(oauth: MCPServerConfig["oauth"]): McpOAuthL
 /**
  * The OAuth endpoints an authentication failure from `url` leads to: the
  * endpoints the failure states, else the ones the server's well-known
- * documents advertise, completed with the scopes the protected-resource
- * metadata requires when neither states any. Null when no endpoints are found.
+ * documents advertise. Configured scopes override discovery. Otherwise, scopes
+ * from protected-resource metadata take precedence over a supported-set fallback.
  * A failed well-known discovery rejects unless `ignoreDiscoveryFailure` is set,
  * which reads it as no endpoints.
  */
 export async function oauthEndpointsForAuthFailure(
 	authResult: AuthDetectionResult,
 	url: string | undefined,
-	options: { ignoreDiscoveryFailure: boolean },
+	options: { ignoreDiscoveryFailure: boolean; configuredScopes?: string },
 ): Promise<OAuthEndpoints | null> {
-	let oauth = authResult.authType === "oauth" ? (authResult.oauth ?? null) : null;
-	if (!oauth && url) {
+	const oauth = authResult.authType === "oauth" ? authResult.oauth : undefined;
+	if (!oauth) {
+		if (!url) return null;
 		const discovery = discoverOAuthEndpoints(url, authResult.authServerUrl, authResult.resourceMetadataUrl, {
 			protectedScopes: authResult.scopes,
+			scopes: options.configuredScopes,
 		});
-		oauth = options.ignoreDiscoveryFailure ? await discovery.catch(() => null) : await discovery;
+		return options.ignoreDiscoveryFailure ? await discovery.catch(() => null) : await discovery;
 	}
-	if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
-		// The JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
-		// advertised protected-resource metadata for the required scopes.
-		const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
-		if (scopes) oauth = { ...oauth, scopes };
-	}
-	return oauth;
+
+	const requested = resolveOAuthScopes(options.configuredScopes, oauth.explicitScopes ? oauth.scopes : undefined);
+	if (requested.explicitScopes) return { ...oauth, ...requested };
+
+	// Direct endpoints bypass discovery. Read the resource scope before using the supported set.
+	const resourceScopes = authResult.resourceMetadataUrl
+		? await fetchResourceMetadataScopes(authResult.resourceMetadataUrl)
+		: undefined;
+	return { ...oauth, ...resolveOAuthScopes(undefined, undefined, resourceScopes, oauth.scopes) };
 }
 
 /**

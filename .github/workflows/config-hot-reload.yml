@@ -79,6 +79,7 @@ jobs:
           name: config-hot-reload-proof
           path: proof/captures/x11/
           if-no-files-found: error
+          retention-days: 7
       - name: Coding-agent package tests
         run: bash scripts/test-sandbox/run.sh bun run --cwd packages/coding-agent test
       - name: Diagnose package failure against pre-repair source

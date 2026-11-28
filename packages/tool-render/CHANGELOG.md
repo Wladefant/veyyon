@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Show `secret_request` status and metadata without printing raw tool output or secret handles ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+
 ## [1.8.0] - 2026-11-05
 
 ### Changed

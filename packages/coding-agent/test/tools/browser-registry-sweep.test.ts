@@ -1,26 +1,22 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
-import type { Subprocess } from "bun";
-import type { Browser } from "puppeteer-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
-import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
-import * as launch from "@veyyon/coding-agent/tools/web/browser/launch";
-import * as attach from "@veyyon/coding-agent/tools/web/browser/attach";
 import * as cpuLimit from "@veyyon/coding-agent/session/cpu-limit";
-import {
-	acquireBrowser,
-	getBrowsersMapForTest,
-	releaseBrowser,
-} from "@veyyon/coding-agent/tools/web/browser/registry";
+import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import * as attach from "@veyyon/coding-agent/tools/web/browser/attach";
+import type { CmuxKind } from "@veyyon/coding-agent/tools/web/browser/cmux/rpc";
+import { CmuxSocketClient } from "@veyyon/coding-agent/tools/web/browser/cmux/socket-client";
+import * as launch from "@veyyon/coding-agent/tools/web/browser/launch";
+import { acquireBrowser, getBrowsersMapForTest, releaseBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
 import * as tabSupervisor from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import {
+	acquireTab,
 	getTabsMapForTest,
 	releaseTab,
 	releaseTabsForOwner,
 } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
-import { acquireTab } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
-import type { CmuxKind } from "@veyyon/coding-agent/tools/web/browser/cmux/rpc";
-import { CmuxSocketClient } from "@veyyon/coding-agent/tools/web/browser/cmux/socket-client";
+import type { Subprocess } from "bun";
+import type { Browser } from "puppeteer-core";
 
 async function drainAll(): Promise<void> {
 	for (const name of [...getTabsMapForTest().keys()]) {
@@ -66,19 +62,19 @@ describe("browser registry sweep — close browsers when session releases tabs",
 		const owned = await acquireBrowser(kind, { cwd: "/tmp", ownerSessionId: "session-owner" });
 		// Another session reuses that browser before the owner's hold lands.
 		const reused = await acquireBrowser(kind, { cwd: "/tmp", ownerSessionId: "session-reuser" });
-		expect(launchSpy).toHaveBeenCalledTimes(1);
+		expect(launchSpy.mock.calls).toHaveLength(1);
 		expect(reused).toBe(owned);
 
 		// The owner session releases now. The reuser's lease must keep the browser open.
 		await releaseTabsForOwner("session-owner", { kill: true });
-		expect(closeSpy).not.toHaveBeenCalled();
+		expect(closeSpy.mock.calls).toHaveLength(0);
 		expect(getBrowsersMapForTest().get(owned.key)).toBe(owned);
 
 		// The browser closes only when the last lease is released.
 		await releaseBrowser(owned, { kill: true });
-		expect(closeSpy).not.toHaveBeenCalled();
+		expect(closeSpy.mock.calls).toHaveLength(0);
 		await releaseBrowser(reused, { kill: true });
-		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(closeSpy.mock.calls).toHaveLength(1);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
@@ -108,11 +104,11 @@ describe("browser registry sweep — close browsers when session releases tabs",
 			tool.execute("call-1", { action: "open", name: "fail-tab", url: "https://example.com" }),
 		).rejects.toThrow("Simulated tab worker init failure");
 
-		expect(launchSpy).toHaveBeenCalledTimes(1);
-		expect(acquireTabSpy).toHaveBeenCalledTimes(1);
+		expect(launchSpy.mock.calls).toHaveLength(1);
+		expect(acquireTabSpy.mock.calls).toHaveLength(1);
 		// Before fix: browser was acquired at refCount 0, sat in browsers map, close was never called.
 		// After fix: finally block in #open ensures the browser is closed and evicted.
-		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(closeSpy.mock.calls).toHaveLength(1);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 });
@@ -146,7 +142,7 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 		await expect(releaseTabsForOwner("s-sweep", { kill: false })).resolves.toBe(0);
 
 		// Before fix: the first close threw, so the second zero-ref browser was never closed.
-		expect(closeSpy).toHaveBeenCalledTimes(2);
+		expect(closeSpy.mock.calls).toHaveLength(2);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
@@ -172,7 +168,7 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 
 		// Before fix: the tab's failed surface close threw out of the owner loop, so the zero-ref
 		// browser was never swept. Two closes are expected: the tab's browser, then the orphan.
-		expect(closeSpy).toHaveBeenCalledTimes(2);
+		expect(closeSpy.mock.calls).toHaveLength(2);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 
@@ -186,7 +182,10 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 			},
 		);
 
-		const otherBrowser = await acquireBrowser(makeCmuxKind("other-owner"), { cwd: "/tmp", ownerSessionId: "s-other" });
+		const otherBrowser = await acquireBrowser(makeCmuxKind("other-owner"), {
+			cwd: "/tmp",
+			ownerSessionId: "s-other",
+		});
 		await acquireTab("other-tab", otherBrowser, { timeoutMs: 1_000, ownerSessionId: "s-other" });
 		await acquireBrowser(makeCmuxKind("unowned"), { cwd: "/tmp" });
 
@@ -194,15 +193,13 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 
 		expect(getTabsMapForTest().has("other-tab")).toBe(true);
 		expect(getBrowsersMapForTest().size).toBe(2);
-		expect(closeSpy).not.toHaveBeenCalled();
-		expect(requestSpy).not.toHaveBeenCalledWith("surface.close", expect.anything(), expect.anything());
+		expect(closeSpy.mock.calls).toHaveLength(0);
+		expect(requestSpy.mock.calls).not.toContainEqual(["surface.close", expect.anything(), expect.anything()]);
 	});
 
 	it.each([false, true])("cleans only its spawned process when puppeteer loading fails (reused=%s)", async reused => {
 		const pid = 54321;
-		spyOn(attach, "findReusableCdp").mockResolvedValue(
-			reused ? { pid, cdpUrl: "http://127.0.0.1:9222" } : null,
-		);
+		spyOn(attach, "findReusableCdp").mockResolvedValue(reused ? { pid, cdpUrl: "http://127.0.0.1:9222" } : null);
 		spyOn(attach, "killExistingByPath").mockResolvedValue(0);
 		spyOn(attach, "findFreeCdpPort").mockResolvedValue(9222);
 		spyOn(attach, "waitForCdp").mockResolvedValue(undefined);
@@ -214,13 +211,13 @@ describe("browser registry sweep — one failed release never stops the sweep", 
 		} as unknown as Subprocess);
 		spyOn(launch, "loadPuppeteer").mockRejectedValue(new Error("puppeteer import failed"));
 
-		await expect(
-			acquireBrowser({ kind: "spawned", path: process.execPath }, { cwd: process.cwd() }),
-		).rejects.toThrow("puppeteer import failed");
+		await expect(acquireBrowser({ kind: "spawned", path: process.execPath }, { cwd: process.cwd() })).rejects.toThrow(
+			"puppeteer import failed",
+		);
 
-		expect(spawnSpy).toHaveBeenCalledTimes(reused ? 0 : 1);
-		expect(killSpy).toHaveBeenCalledTimes(reused ? 0 : 1);
-		if (!reused) expect(killSpy).toHaveBeenCalledWith(pid);
+		expect(spawnSpy.mock.calls).toHaveLength(reused ? 0 : 1);
+		expect(killSpy.mock.calls).toHaveLength(reused ? 0 : 1);
+		if (!reused) expect(killSpy.mock.calls).toContainEqual([pid]);
 		expect(getBrowsersMapForTest().size).toBe(0);
 	});
 });

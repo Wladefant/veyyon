@@ -260,7 +260,9 @@ describe("runSubprocess yield reminders", () => {
 		expect(systemPrompt?.[2]).toMatch(/ROLE\n=+\n\ntest/);
 		expect(systemPrompt?.[2]).toContain("# IRC Coordination");
 		expect(systemPrompt?.[2]).toContain('call `irc` with `op:"list"`');
-		expect(systemPrompt?.[2]).not.toContain("agent-context-system");
+		// The COOP section states the agent's own runtime registry ID, and no parent provenance when none is verified.
+		expect(systemPrompt?.[2]).toContain("Runtime self ID: `agent-context-system`.");
+		expect(systemPrompt?.[2]).toContain("Direct parent provenance is unknown");
 		// The parent-conversation CONTEXT section is gone: agents get their
 		// background inside the assignment (or a local:// file), never a dump.
 		expect(systemPrompt?.[2]).not.toMatch(/CONTEXT\n=+/);
@@ -478,17 +480,18 @@ describe("runSubprocess yield reminders", () => {
 		const createAgentSessionSpy = mockCreateAgentSession(session);
 
 		// A level only reaches the child when its model accepts it; a non-reasoning model runs at none.
+		const gpt5 = {
+			provider: "openai",
+			id: "gpt-5",
+			name: "GPT-5",
+			reasoning: true,
+			thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		};
 		const modelRegistry = {
 			refresh: async () => {},
-			getAvailable: () => [
-				{
-					provider: "openai",
-					id: "gpt-5",
-					name: "GPT-5",
-					reasoning: true,
-					thinking: { efforts: [Effort.Low, Effort.Medium, Effort.High] },
-				},
-			],
+			getAvailable: () => [gpt5],
+			getAll: () => [gpt5],
+			getApiKey: async () => "test-key",
 		} as unknown as ModelRegistry;
 
 		await runSubprocess({

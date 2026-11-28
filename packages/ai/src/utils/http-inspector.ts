@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { getLogsDir } from "@veyyon/utils/dirs";
 import { isBunTestRuntime } from "@veyyon/utils/env";
@@ -11,6 +10,7 @@ import {
 } from "../error/error-body";
 import * as AIError from "../error/flags";
 import { ProviderResponseError } from "../error/provider";
+import { saveRejectedRequestDump } from "./rejected-request-dumps.js";
 import { redactDiagnosticHeaders } from "./request-debug.js";
 import { appendRetryAfterHint, errorText } from "./retry-after.js";
 
@@ -250,12 +250,8 @@ export async function appendRawHttpRequestDumpFor400(
 		return message;
 	}
 
-	const payload = buildHttp400DumpPayload(dump, error, message);
-	const fileName = `${Date.now()}-${Bun.hash(JSON.stringify(payload)).toString(36)}.json`;
-	const filePath = path.join(getLogsDir(), "http-400-requests", fileName);
-
 	try {
-		await Bun.write(filePath, `${JSON.stringify(payload, null, 2)}\n`);
+		const filePath = await saveRejectedRequestDump(getLogsDir(), buildHttp400DumpPayload(dump, error, message));
 		return `${message}\nraw-http-request=${filePath}`;
 	} catch (writeError) {
 		return `${message}\nraw-http-request-save-failed=${errorMessage(writeError)}`;

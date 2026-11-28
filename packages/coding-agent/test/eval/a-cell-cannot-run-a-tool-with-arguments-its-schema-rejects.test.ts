@@ -266,13 +266,7 @@ const TRANSPORTS: Record<string, TransportDriver | null> = {
 	"kernel http bridge": driveKernelHttp,
 };
 
-/**
- * The intent each transport carries. The bridge strips this field before
- * validation and puts it back on the executed arguments, so the exact value is
- * pinned rather than matched loosely: a transport that lost the round trip, or
- * that started sending someone else's intent, is a renderer reading the wrong
- * label.
- */
+/** The default intent carried through to a tool that declares it. */
 const INTENT_ON_THE_WIRE: Record<string, string> = {
 	"cmux in-process runtime": "js prelude",
 	"js worker": "js prelude",
@@ -325,6 +319,7 @@ const CHECKED_BY_THE_SWEEP: string[] = [
 	"rewind",
 	"search",
 	"search_tool_bm25",
+	"secret_request",
 	"set_cwd",
 	"ssh",
 	"task",
@@ -467,7 +462,7 @@ describe("an eval cell cannot run a tool with arguments its schema rejects", () 
 				name: "counter",
 				label: "Counter",
 				description: "counter",
-				parameters: type({ limit: "number" }),
+				parameters: type({ limit: "number", i: "string" }),
 				execute: async (_id: string, args: unknown) => {
 					seen = args;
 					return ok("counted");
@@ -510,7 +505,7 @@ describe("an eval cell cannot run a tool with arguments its schema rejects", () 
 			});
 
 			expect(await drive(session, "closed", { path: "src/foo.ts" })).toBe("accepted");
-			expect(seen).toEqual({ path: "src/foo.ts", [INTENT_FIELD]: INTENT_ON_THE_WIRE[transport] });
+			expect(seen).toEqual({ path: "src/foo.ts" });
 
 			// The same closed schema still enforces itself on this transport.
 			expect(await drive(session, "closed", {})).toContain('Validation failed for tool "closed"');
@@ -557,7 +552,7 @@ describe("an eval cell cannot run a tool with arguments its schema rejects", () 
 		const session = makeToolSession({ getToolByName: () => tool });
 
 		expect(await callSessionTool("lenient", {}, { session })).toBe("ran");
-		expect(seen).toEqual({ [INTENT_FIELD]: "js prelude" });
+		expect(seen).toEqual({});
 
 		// The opt-out covers the shape check too. A tool that asked for no
 		// validation must not be handed a refusal the object branch invented.
@@ -571,7 +566,7 @@ describe("an eval cell cannot run a tool with arguments its schema rejects", () 
 			name: "reader",
 			label: "Reader",
 			description: "reader",
-			parameters: type({ path: "string", "offset?": "number" }),
+			parameters: type({ path: "string", "offset?": "number", i: "string" }),
 			execute: async (_id: string, args: unknown) => {
 				seen = args;
 				return ok("contents");

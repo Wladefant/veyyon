@@ -49,50 +49,37 @@ bun needs the `./` prefix on a path: without it the argument is a name FILTER ma
 against the files discovery already found, not a path, so a target discovery did not
 collect matches nothing and the run reports clean.
 
-#### Focused Windows tests through WSL
+#### Focused Linux evidence on OVH CI
 
-When repository policy permits focused local checks, use WSL's Linux sandbox from the Windows
-worktree. This also works when the worktree's `node_modules` is a shared Windows
-junction: do not install through that junction.
+Linux evidence for a pull request comes from the `OVH CI` workflow on the exact pushed head.
+Do not run `bun test` on the bare host or on a VPS.
 
-Reuse a prepared Linux dependency tree for the checkout's lockfile. Set
-`VEYYON_SANDBOX_NODE_MODULES` to its absolute Linux `node_modules` path. The bwrap
-runner binds that tree read-only over the worktree's `node_modules` and automatically
-binds the tested worktree's `packages` over the dependency checkout's workspace
-packages. Workspace aliases such as `@veyyon/catalog/models` therefore resolve to
-the code under test, not to another checkout.
-The manifest's Bun version must be available outside the hidden home, normally at
-`/usr/local/bin/bun`. WSL must also provide Git, sh, and bwrap.
-
-Save the external `.sh` file with LF line endings, not CRLF.
-
-Save this script outside the repository, replacing both example paths:
+1. Push the branch. Record the exact head SHA and the exact PR base SHA.
+2. Dispatch `OVH CI` (`.github/workflows/ovh-ci.yml`) for that head:
 
 ```sh
-#!/bin/bash
-set -euo pipefail
-cd /mnt/c/repo/veyyon-wt/my-lane
-export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules
-bash scripts/test-sandbox/run.sh --rung=bwrap bun test ./packages/catalog/test/model-thinking.test.ts
+gh workflow run ovh-ci.yml --repo Wladefant/veyyon --ref <branch> \
+  -f target_sha=<head-sha> -f base_sha=<base-sha> \
+  -f test_files='["<test-path>"]'
 ```
 
-Run the script through the workstation's build-slot wrapper:
+   - `target_sha`: the exact head SHA. The workflow fails if its checkout differs.
+   - `base_sha`: the exact PR base SHA. Required for focused checks.
+   - `test_files`: a JSON array of related test paths that exist at `target_sha`.
+   - Keep `typecheck` false. Focused mode skips lint and package typecheck.
+3. Read back the run. Confirm the checked-out SHA, the runner identity, the selected test
+   paths, and the parsed counts.
 
-```text
-python C:/Users/<user>/.veyyon/workflows/build_slot.py run focused-operator-answers --class medium --timeout 900 -- wsl.exe --exec /bin/bash /mnt/c/repo/scratch/focused-operator-answers.sh
-```
+A receipt passes only with `N pass`, `0 fail`, and `N > 0` in the Bun summary for that exact
+SHA. A pending run, a skipped job, an exit status alone, or a zero-test run is not evidence.
+A skip while `OVH_CI_PR_ADMISSION` is closed is not test evidence.
 
-Pass Linux paths to WSL. A script avoids Windows shell expansion of Linux variables.
-Never export `VEYYON_TEST_SANDBOX` yourself: the sandbox driver sets its marker only
-after it establishes the kernel boundary, and the preload independently checks it.
-An unavailable pinned rung is an error, not permission to run on the bare host.
+Automatic runs on a ready PR start only after `OVH_CI_PR_ADMISSION` is `verified`. Dispatch
+does not depend on that variable, but the admission policy in [OVH CI](ovh-ci.md) still applies.
 
-Read the Bun summary and keep the tested commit SHA with it. A successful receipt
-requires positive test and assertion counts, with zero failures. A missing module,
-exit status alone, or a zero-test run proves nothing. Dependency preparation and
-the full rung contract live in
-[`scripts/test-sandbox/README.md`](../../scripts/test-sandbox/README.md#windows-through-wsl).
-If repository policy does not permit local checks, use its remote CI route instead.
+Do not export `VEYYON_TEST_SANDBOX` yourself. An unavailable pinned rung is an error, not
+permission to run on the bare host. The sandbox contract, the rungs, and the native Windows
+AppContainer runner are in [`scripts/test-sandbox/README.md`](../../scripts/test-sandbox/README.md).
 
 #### The one exception: real-browser suites on a host with Chromium
 

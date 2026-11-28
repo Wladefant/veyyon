@@ -45,14 +45,12 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/agent/review";
 import { jsonTreeViewLines } from "../tools/core/json-tree-view";
-import { TRUNCATE_LENGTHS } from "../tools/core/render-limits";
 import {
 	extractResultText,
 	formatMoreItems,
 	previewLine,
 	replaceTabs,
 	shortenEmbeddedPaths,
-	shortenPath,
 	type ToolViewResult,
 	truncateToWidth,
 } from "../tools/core/render-utils";
@@ -651,6 +649,9 @@ function progressTitleSpans(progress: AgentProgress, description: string | undef
  * recovery, and the row under it already says which one.
  */
 function progressBadge(progress: AgentProgress): ViewSpan | undefined {
+	if (progress.status === "pending" && progress.startupPhase) {
+		return { text: `starting: ${progress.startupPhase}`, badge: true, tone: "dim" };
+	}
 	if (progress.retryState && progress.status === "running") {
 		return {
 			text: progress.retryState.mode === "continue" ? "continuing" : "retrying",

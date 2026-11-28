@@ -7,6 +7,7 @@ import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import type { AgentRegistry } from "../../registry/agent-registry";
+import type { TaskStartupPhase } from "../../task/types";
 import { formatArtifactErrorNotice, type OutputMeta } from "../core/output-meta";
 import { PREVIEW_LIMITS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
@@ -40,9 +41,11 @@ function parseWaitDurationMs(value: string | undefined): number {
 export interface JobSnapshot {
 	id: string;
 	type: AsyncJobType;
-	status: "running" | "completed" | "failed" | "cancelled";
+	status: "starting" | "running" | "completed" | "failed" | "cancelled";
 	/** Registered but parked behind the spawn semaphore: no work has started yet. */
 	queued?: true;
+	/** Pre-ready startup phase while starting, or the phase reached before a terminal pre-ready outcome. */
+	startupPhase?: TaskStartupPhase;
 	label: string;
 	durationMs: number;
 	resultText?: string;
@@ -152,7 +155,11 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			}
 			if (existing.status !== "running") {
 				const ref = this.session.agentRegistry?.get(id);
-				if (ref && ref.kind === "sub" && (ref.session !== null || ref.status === "idle" || ref.status === "running")) {
+				if (
+					ref &&
+					ref.kind === "sub" &&
+					(ref.session !== null || ref.status === "idle" || ref.status === "running")
+				) {
 					cancelOutcomes.push(await this.#cancelAgent(id, ownerId));
 					continue;
 				}
@@ -410,6 +417,7 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			resultText?: string;
 			errorText?: string;
 			queued?: boolean;
+			startupPhase?: TaskStartupPhase;
 			meta?: OutputMeta;
 		}[],
 	): JobSnapshot[] {
@@ -421,11 +429,17 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 				(current?.latestDetails as { meta?: OutputMeta } | undefined)?.meta ??
 				(latest as { meta?: OutputMeta } | undefined)?.meta ??
 				j.meta;
+			const startupPhase =
+				latest.startupPhase !== undefined && latest.startupPhase !== "ready" ? latest.startupPhase : undefined;
+			const status = (
+				latest.status === "running" && startupPhase !== undefined ? "starting" : latest.status
+			) as JobSnapshot["status"];
 			return {
 				id: latest.id,
 				type: latest.type,
-				status: latest.status as JobSnapshot["status"],
+				status,
 				...(latest.status === "running" && latest.queued === true ? { queued: true as const } : {}),
+				...(startupPhase !== undefined ? { startupPhase } : {}),
 				label: latest.label,
 				durationMs: Math.max(0, now - latest.startTime),
 				...(latest.resultText ? { resultText: latest.resultText } : {}),
@@ -445,6 +459,8 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			startTime: number;
 			resultText?: string;
 			errorText?: string;
+			queued?: boolean;
+			startupPhase?: TaskStartupPhase;
 		}[],
 		cancelOutcomes: CancelOutcome[],
 		agents: AgentActivitySnapshot[] = [],
@@ -459,10 +475,13 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 		});
 		const jobResults = this.#snapshotJobs(uniqueJobs);
 
-		if (acknowledge) manager.acknowledgeDeliveries(jobResults.filter(j => j.status !== "running").map(j => j.id));
-
-		const completed = jobResults.filter(j => j.status !== "running");
-		const running = jobResults.filter(j => j.status === "running");
+		const completed: JobSnapshot[] = [];
+		const running: JobSnapshot[] = [];
+		for (const j of jobResults) {
+			if (j.status === "running" || j.status === "starting") running.push(j);
+			else completed.push(j);
+		}
+		if (acknowledge) manager.acknowledgeDeliveries(completed.map(j => j.id));
 
 		const lines: string[] = [];
 
@@ -477,6 +496,9 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 			for (const j of completed) {
 				lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
 				lines.push(`Label: ${j.label}`);
+				if (j.startupPhase) {
+					lines.push(`Startup phase: ${j.startupPhase}`);
+				}
 				if (j.resultText) {
 					lines.push("```", j.resultText, "```");
 				}
@@ -499,7 +521,9 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 				lines.push(
 					j.queued
 						? `- \`${j.id}\` [${j.type}] — ${j.label} (queued ${formatDuration(j.durationMs)}, waiting for a concurrency slot)`
-						: `- \`${j.id}\` [${j.type}] — ${j.label} (up ${formatDuration(j.durationMs)})`,
+						: j.status === "starting" && j.startupPhase
+							? `- \`${j.id}\` [${j.type}] — ${j.label} (starting: ${j.startupPhase}, up ${formatDuration(j.durationMs)})`
+							: `- \`${j.id}\` [${j.type}] — ${j.label} (up ${formatDuration(j.durationMs)})`,
 				);
 			}
 		}
