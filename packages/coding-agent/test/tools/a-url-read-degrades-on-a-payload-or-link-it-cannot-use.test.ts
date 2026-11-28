@@ -90,6 +90,50 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 		return new ReadTool(makeSession(testDir)).execute("read-url", { path: url });
 	}
 
+	it("fetches each URL in a semicolon list as a separate section", async () => {
+		const first = `https://example.com/first-${Snowflake.next()};lang=en`;
+		const second = `https://example.org/second-${Snowflake.next()}`;
+		stubSite(
+			{
+				[first]: { contentType: "text/plain", content: "First page body" },
+				[second]: { contentType: "text/plain", content: "Second page body" },
+			},
+			GARBAGE,
+		);
+
+		const result = await read(`${first}; ${second}`);
+
+		expect(result.details?.displayReadTargets).toEqual([first, second]);
+		expect(toolResultText(result)).toMatch(/First page body[\s\S]*URL: https:\/\/example\.org\/.*[\s\S]*Second page body/);
+		expect(scrapers.loadPage).toHaveBeenCalledTimes(2);
+		expect(scrapers.loadPage).toHaveBeenNthCalledWith(1, first, expect.anything());
+		expect(scrapers.loadPage).toHaveBeenNthCalledWith(2, second, expect.anything());
+	});
+
+	it("reads a local file after a URL in a semicolon list", async () => {
+		const url = `https://example.com/mixed-${Snowflake.next()}`;
+		stubSite({ [url]: { contentType: "text/plain", content: "Remote page body" } }, GARBAGE);
+		fs.writeFileSync(path.join(testDir, "notes.txt"), "Local file body");
+
+		const result = await read(`${url}; ./notes.txt`);
+
+		expect(result.details?.displayReadTargets).toEqual([url, "./notes.txt"]);
+		expect(toolResultText(result)).toMatch(/Remote page body[\s\S]*Local file body/);
+		expect(scrapers.loadPage).toHaveBeenCalledTimes(1);
+	});
+
+	it("preserves matrix and query semicolons in a single URL", async () => {
+		const url = `https://example.com/page-${Snowflake.next()};lang=en?q=one;two`;
+		stubSite({ [url]: { contentType: "text/plain", content: "Unsplit page body" } }, GARBAGE);
+
+		const result = await read(url);
+
+		expect(result.details?.displayReadTargets).toBeUndefined();
+		expect(toolResultText(result)).toContain("Unsplit page body");
+		expect(scrapers.loadPage).toHaveBeenCalledTimes(1);
+		expect(scrapers.loadPage).toHaveBeenCalledWith(url, expect.anything());
+	});
+
 	const images: Array<{ label: string; contentType: string; extension: string; mimeType: string }> = [
 		{ label: "png by type", contentType: "image/png", extension: "", mimeType: "image/png" },
 		{ label: "jpeg by type", contentType: "image/jpeg", extension: "", mimeType: "image/jpeg" },
