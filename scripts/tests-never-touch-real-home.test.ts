@@ -171,24 +171,6 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 	// Two fixtures run a temporary file named `veyyon`, not the installed binary.
 	// Every entry still has to match a finding in its named file.
 	{
-		file: "packages/coding-agent/src/eval/__tests__/runner-request-cancellation.test.ts",
-		rule: "unresolved-spawn-target",
-		reason:
-			'`pythonPath` is `Bun.env.PYTHON ?? "python3"`. It runs this checkout’s `py/runner.py` with `-u` and sends cancellation requests through pipes, without opening the installed CLI.',
-	},
-	{
-		file: "packages/coding-agent/test/a-client-terminal-command-never-waits-for-stdin-or-a-pager.test.ts",
-		rule: "unresolved-spawn-target",
-		reason:
-			"`params.command` is the shell selected by the ACP terminal request. The suite checks that request by running it, with the working directory and all command scripts in the test fixture directory.",
-	},
-	{
-		file: "packages/coding-agent/test/terminal-control-transport.test.ts",
-		rule: "unresolved-spawn-target",
-		reason:
-			"`command` is either PowerShell or whoami.exe under Windows System32. The Windows-only test uses them to query its test pipe ACL and the current process identity.",
-	},
-	{
 		file: "packages/coding-agent/src/eval/py/__tests__/prelude.test.ts",
 		rule: "unresolved-spawn-target",
 		reason:

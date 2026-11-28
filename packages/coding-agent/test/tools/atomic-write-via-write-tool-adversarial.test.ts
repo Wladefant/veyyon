@@ -64,13 +64,16 @@ describe("WriteTool concurrent same-path overwrites", () => {
 	});
 
 	function runIcacls(file: string, ...args: string[]): void {
-		const icacls = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
-		const result = spawnSync(icacls, [path.basename(file), ...args], {
-			cwd: path.dirname(file),
-			encoding: "utf8",
-			timeout: 10_000,
-			windowsHide: true,
-		});
+		const result = spawnSync(
+			path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"),
+			[path.basename(file), ...args],
+			{
+				cwd: path.dirname(file),
+				encoding: "utf8",
+				timeout: 10_000,
+				windowsHide: true,
+			},
+		);
 		if (result.error) throw result.error;
 		if (result.status !== 0) {
 			throw new Error(
