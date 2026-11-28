@@ -125,7 +125,9 @@ function makeClientTerminal(): ClientTerminalFixture {
 			delete env.BASH_ENV;
 
 			const child = spawn(
-				process.platform === "win32" ? path.win32.join(path.win32.dirname(shellConfig.shell), "bash.exe") : "/bin/bash",
+				process.platform === "win32"
+					? path.win32.join(path.win32.dirname(shellConfig.shell), "bash.exe")
+					: "/bin/bash",
 				params.args ?? [],
 				{
 					cwd: params.cwd,
