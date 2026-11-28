@@ -101,7 +101,9 @@ describe("closed JSON Schema objects", () => {
 	it("preserves declared selectors and extras on open objects", () => {
 		const args = { application: "fixture", extra: true };
 		const open = { ...tool, parameters: { ...selector, additionalProperties: true } };
-		expect(validateToolArguments(open, { type: "toolCall", id: "c", name: open.name, arguments: args })).toEqual(args);
+		expect(validateToolArguments(open, { type: "toolCall", id: "c", name: open.name, arguments: args })).toEqual(
+			args,
+		);
 		const declared = { application: "fixture", selectors: [{ application: "child" }] };
 		expect(validateToolArguments(tool, { type: "toolCall", id: "c", name: tool.name, arguments: declared })).toEqual(
 			declared,

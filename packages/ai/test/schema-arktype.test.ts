@@ -8,8 +8,7 @@ import { z } from "zod/v4";
 // ---------------------------------------------------------------------------
 // Phase-1 parity gate: ArkType schemas must flow through the same wire-emission
 // + validation/coercion pipeline as Zod, with the two contracts the dispatcher
-// depends on (root-extra survival on plain objects; strip-extras on closed
-// objects) preserved.
+// depends on (root-extra survival on plain objects; rejection on closed objects).
 // ---------------------------------------------------------------------------
 
 // Plain object — ArkType's default `ignore` undeclared-key behavior.
@@ -111,16 +110,15 @@ describe("validateToolArguments — ArkType contracts", () => {
 		expect((result.nested as Record<string, unknown>).extraNested).toBe(9);
 	});
 
-	it('Contract B: "+": "reject" strips both root and nested extras', () => {
-		const result = validateToolArguments(rejectTool, {
-			type: "toolCall",
-			id: "b",
-			name: "ark-reject",
-			arguments: { name: "n", count: 2, obj: { inner: "v", extraNested: 9 }, extraRoot: 7 },
-		}) as Record<string, unknown>;
-		expect(result.name).toBe("n");
-		expect(result.extraRoot).toBeUndefined();
-		expect((result.obj as Record<string, unknown>).extraNested).toBeUndefined();
+	it('Contract B: "+": "reject" rejects both root and nested extras', () => {
+		expect(() =>
+			validateToolArguments(rejectTool, {
+				type: "toolCall",
+				id: "b",
+				name: "ark-reject",
+				arguments: { name: "n", count: 2, obj: { inner: "v", extraNested: 9 }, extraRoot: 7 },
+			}),
+		).toThrow(/obj\/extraNested:.*extraRoot:/s);
 	});
 
 	it("coerces a numeric string for a numeric field", () => {
