@@ -138,9 +138,9 @@ describe("automatic user screenshot compaction", () => {
 		const modelRegistry = new ModelRegistry(authStorage, path.join(root, `models-${cleanups.length}.yml`));
 		const sessionManager =
 			options.sessionManager ??
-			(options.fileBacked
-				? SessionManager.create(root, path.join(root, "sessions"))
-				: SessionManager.inMemory(root));
+			(options.fileBacked === false
+				? SessionManager.inMemory(root)
+				: SessionManager.create(root, path.join(root, "sessions")));
 
 		const mainRequests: RecordedRequest[] = [];
 		const sideRequests: RecordedRequest[] = [];
@@ -230,6 +230,7 @@ describe("automatic user screenshot compaction", () => {
 
 	it("keeps original pixels in an in-memory session even when compaction is enabled", async () => {
 		const { session, sessionManager, mainRequests, sideRequests } = await createHarness({
+			fileBacked: false,
 			settings: { "images.compactAfterTurns": 1 },
 		});
 		await session.prompt("Review this report", { images: [RED_1X1_PNG] });
@@ -263,8 +264,10 @@ describe("automatic user screenshot compaction", () => {
 		}
 	});
 
-	it("keeps recent screenshots intact and compacts older user screenshots after default N=3 later user turns", async () => {
-		const { session, sessionManager, mainRequests, sideRequests } = await createHarness();
+	it("keeps recent screenshots and compacts older screenshots after three configured user turns", async () => {
+		const { session, sessionManager, mainRequests, sideRequests } = await createHarness({
+			settings: { "images.compactAfterTurns": 3 },
+		});
 
 		await session.prompt("check this bug", { images: [RED_1X1_PNG] });
 		const attachedTurn0 = imageBlocks(mainRequests[0]!.context.messages.find(m => m.role === "user")!);
@@ -273,12 +276,12 @@ describe("automatic user screenshot compaction", () => {
 
 		await session.prompt("follow-up 1");
 		await session.prompt("follow-up 2");
-		// Still only 2 later user turns (< default 3): pixels must remain intact.
+		// Only two later turns have arrived; the configured threshold is three.
 		const reqBeforeThreshold = mainRequests.at(-1)!.context.messages;
 		expect(imageBlocks(reqBeforeThreshold.find(m => m.role === "user")!)).toHaveLength(1);
 		expect(sideRequests).toHaveLength(0);
 
-		// 3rd later user turn crosses default threshold (N=3).
+		// The third follow-up reaches the threshold.
 		await session.prompt("follow-up 3");
 		expect(sideRequests).toHaveLength(1);
 
@@ -538,8 +541,8 @@ describe("automatic user screenshot compaction", () => {
 		const persistFail = await createHarness({
 			settings: { "images.compactAfterTurns": 1 },
 		});
-		spyOn(persistFail.sessionManager, "flush").mockRejectedValue(new Error("disk full"));
-		await persistFail.session.prompt("keep on flush fail", { images: [RED_1X1_PNG] });
+		spyOn(persistFail.sessionManager, "sync").mockRejectedValue(new Error("disk full"));
+		await persistFail.session.prompt("keep on disk failure", { images: [RED_1X1_PNG] });
 		await persistFail.session.prompt("later");
 		expect(persistFail.sideRequests).toHaveLength(1);
 		expect(imageBlocks(persistFail.mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!)).toHaveLength(
@@ -580,9 +583,10 @@ describe("automatic user screenshot compaction", () => {
 	});
 
 	it("coalesces concurrent vision summaries for the same image hash and preserves compacted message identity across turns", async () => {
-		const { sideRequests, transformHook } = await createHarness({
+		const { sessionManager, sideRequests, transformHook } = await createHarness({
 			settings: { "images.compactAfterTurns": 1 },
 		});
+		await sessionManager.ensureOnDisk();
 		const sharedUserMsg: UserMessage = {
 			role: "user",
 			content: [{ type: "text", text: "concurrent shot" }, RED_1X1_PNG],

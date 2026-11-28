@@ -1,10 +1,9 @@
 /**
  * Automatic outbound screenshot compaction.
  *
- * Replaces older eligible user-attached `ImageContent` blocks in outbound provider requests with
- * durably cached vision summaries once at least `N` later genuine user turns follow, while leaving
- * the recorded session transcript, live agent messages, non-image content, and recent screenshots
- * intact.
+ * When enabled, replaces older eligible user-attached `ImageContent` blocks in outbound requests
+ * with durable vision summaries. A later turn that refers to visual evidence keeps earlier pixels
+ * available. The recorded session transcript, live agent messages, and recent screenshots stay intact.
  *
  * Eligibility boundary (strictly typed on existing `Message` / `UserMessage` fields):
  *   - Eligible: `role === "user"`, not marked as derived in `convertToLlm` (`fileMention`,
@@ -18,9 +17,8 @@
  * Vision policy & durability:
  *   - Enforces the current request model's vision policy (`images.blockImages` and
  *     `model.input.includes("image")`); never delegates to a second model client.
- *   - Replaces request pixels only after a summary succeeds and flushes durably via
- *     `SessionManager.appendCustomEntry` + `flush()`. Failures, missing credentials, non-vision
- *     models, or persistence faults preserve original image pixels.
+ *   - Replaces request pixels only after `SessionManager.sync()` confirms the summary write.
+ *     In-memory sessions, failures, missing credentials, and non-vision models preserve pixels.
  */
 
 import { createHash } from "node:crypto";
@@ -37,10 +35,13 @@ import { isDerivedUserMessage } from "./messages";
 
 export const SCREENSHOT_COMPACTION_ENTRY_TYPE = "screenshot-compaction-summary";
 export const SCREENSHOT_COMPACTION_ENTRY_VERSION = 1;
-export const DEFAULT_SCREENSHOT_COMPACT_AFTER_TURNS = 3;
 export const MAX_SCREENSHOT_COMPACT_AFTER_TURNS = 100;
 const SCREENSHOT_SUMMARY_MAX_TOKENS = 512;
 const SCREENSHOT_SUMMARY_CONCURRENCY = 3;
+// Opt-in compaction must keep originals on an explicit visual follow-up. Preserve all
+// preceding screenshots rather than guessing which attachment the user meant.
+const ORIGINAL_IMAGE_REFERENCE =
+	/\b(?:screen[ -]?shots?|images?|pictures?|photos?|figures?|diagrams?|pixels?|(?:upper|lower|top|bottom)[ -]+(?:left|right))\b/i;
 
 export interface ScreenshotCompactionCacheEntryData {
 	readonly version: typeof SCREENSHOT_COMPACTION_ENTRY_VERSION;
@@ -54,7 +55,8 @@ export interface ScreenshotCompactionCacheEntryData {
 export interface ScreenshotCompactionStore {
 	getBranch(): SessionEntry[];
 	appendCustomEntry(customType: string, data?: unknown): string;
-	flush(): Promise<void>;
+	sync(): Promise<void>;
+	getSessionFile(): string | undefined;
 	getSessionId(): string;
 }
 
@@ -90,6 +92,11 @@ function isGenuineUserTurn(message: Message): message is UserMessage {
 		message.demotedReasoningSource === undefined &&
 		message.historyRewriteAt === undefined
 	);
+}
+
+function referencesVisualEvidence(content: UserMessage["content"]): boolean {
+	if (typeof content === "string") return ORIGINAL_IMAGE_REFERENCE.test(content);
+	return content.some(part => part.type === "text" && ORIGINAL_IMAGE_REFERENCE.test(part.text));
 }
 
 function isValidImagePart(part: TextContent | ImageContent | { type: string }): part is ImageContent {
@@ -147,7 +154,7 @@ export class ScreenshotCompactor {
 	): Message[] | Promise<Message[]> {
 		if (policy.blockImages || !model.input.includes("image")) return messages;
 		const threshold = clampScreenshotCompactAfterTurns(this.#host.settings.get("images.compactAfterTurns"));
-		if (threshold <= 0) return messages;
+		if (threshold <= 0 || !this.#host.sessionStore.getSessionFile()) return messages;
 
 		const candidates: CandidateMessage[] = [];
 		let laterUserTurns = 0;
@@ -164,6 +171,8 @@ export class ScreenshotCompactor {
 					candidates.push({ index: i, message: msg, imageParts });
 				}
 			}
+			// The reference may be indirect or point to any earlier attachment.
+			if (referencesVisualEvidence(msg.content)) break;
 			laterUserTurns += 1;
 		}
 		if (candidates.length === 0) return messages;
@@ -297,8 +306,9 @@ export class ScreenshotCompactor {
 			const entryId = this.#host.sessionStore.appendCustomEntry(SCREENSHOT_COMPACTION_ENTRY_TYPE, record);
 			this.#unpersistedEntryIds.add(entryId);
 			try {
-				await this.#host.sessionStore.flush();
+				await this.#host.sessionStore.sync();
 				this.#unpersistedEntryIds.delete(entryId);
+				if (this.#host.sessionStore.getSessionId() !== storeSessionId) return null;
 				this.#cachedSummaries.set(hash, summary);
 				return summary;
 			} catch (err) {

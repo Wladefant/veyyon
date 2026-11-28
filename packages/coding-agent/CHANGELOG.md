@@ -4,7 +4,7 @@
 
 ### Added
 
-- Compact older eligible user-attached screenshots in outbound requests into durably cached vision summaries after `images.compactAfterTurns` later user turns while preserving recent screenshots and original transcripts ([Refs #1326](https://github.com/Wladefant/veyyon/issues/1326)).
+- Opt in to compacting older user screenshots after `images.compactAfterTurns` later user turns. Only saved sessions compact screenshots after the summary syncs to disk. Visual follow-ups keep original screenshots in the request, and the transcript keeps all original pixels ([Refs #1326](https://github.com/Wladefant/veyyon/issues/1326)).
 
 ## [1.12.4] - 2026-11-28
 
