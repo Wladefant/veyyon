@@ -4,6 +4,16 @@
   "repository": "Wladefant/veyyon",
   "description": "Feature map for Veyyon coding-agent capabilities.",
   "features": {
+    "acp-session-history-replay": {
+      "name": "ACP session history replay",
+      "description": "Replay the visible conversation in order when an ACP client loads a live or stored session.",
+      "entry_files": ["packages/coding-agent/src/modes/acp/acp-agent.ts"],
+      "tests": ["packages/coding-agent/test/acp-agent.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/990",
+      "risk": "high",
+      "components": ["coding-agent", "ACP"],
+      "docs": ["docs/handbook/src/reference/acp.md"]
+    },
     "irc-send-receipts": {
       "name": "IRC send receipts",
       "description": "Report confirmed, refused, or unconfirmed peer delivery, including detached children that cannot receive IRC yet.",
