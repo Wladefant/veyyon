@@ -13,19 +13,23 @@ const COMMAND = "ALPHA=fixture-a\nBETA=fixture-b\nGAMMA=fixture-c\n:";
 const PREVIEW = `${"safe preview ".repeat(45)}\nVALUE=fixture-after-limit`;
 
 function makeSession(cwd: string): ToolSession {
-	const bash = {
+	const bash: AgentTool = {
 		name: "bash",
+		label: "Bash fixture",
+		description: "Return a fixed command result.",
 		parameters: type({ command: "string" }),
 		execute: async () => ({ content: [{ type: "text", text: PREVIEW }], details: { exitCode: 0 } }),
-	} as AgentTool;
-	const search = {
+	};
+	const search: AgentTool = {
 		name: "search",
+		label: "Search fixture",
+		description: "Return a fixed nested match.",
 		parameters: type({ input: "string", path: "string" }),
 		execute: async () => ({
 			content: [{ type: "text", text: "one match" }],
 			details: { result: { matchCount: 1, files: [{ path: "sample.txt", lines: ["VALUE=fixture-match", 7] }] } },
 		}),
-	} as AgentTool;
+	};
 	return {
 		cwd,
 		hasUI: false,
