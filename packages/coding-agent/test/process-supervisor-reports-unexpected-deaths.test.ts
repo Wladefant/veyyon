@@ -768,8 +768,10 @@ describe("process supervisor", () => {
 
 			expect(result.report?.stderrStatus).toBe("error");
 			expect(result.report?.stderrError).toContain("segment limit");
-			expect(result.report?.stderrFiles).toEqual([result.report?.stderrLogPath]);
-			const activeContent = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
+			const logPath = result.report?.stderrLogPath;
+			if (logPath === undefined) throw new Error("Expected a retained stderr log path");
+			expect(result.report?.stderrFiles).toEqual([logPath]);
+			const activeContent = fs.readFileSync(logPath, "utf8");
 			expect(activeContent).toBe(chunk1);
 			expect(activeContent.length).toBeLessThanOrEqual(50);
 		} finally {
