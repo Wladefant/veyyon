@@ -117,15 +117,17 @@ describe("automatic user screenshot compaction", () => {
 		tempDir.removeSync();
 	});
 
-	async function createHarness(options: {
-		model?: Model;
-		settings?: Record<string, unknown>;
-		fileBacked?: boolean;
-		sessionManager?: SessionManager;
-		authStorage?: AuthStorage;
-		withApiKey?: boolean;
-		sideHandler?: (request: RecordedRequest) => AssistantMessageEventStream;
-	} = {}) {
+	async function createHarness(
+		options: {
+			model?: Model;
+			settings?: Record<string, unknown>;
+			fileBacked?: boolean;
+			sessionManager?: SessionManager;
+			authStorage?: AuthStorage;
+			withApiKey?: boolean;
+			sideHandler?: (request: RecordedRequest) => AssistantMessageEventStream;
+		} = {},
+	) {
 		const root = tempDir.path();
 		const authStorage =
 			options.authStorage ?? (await AuthStorage.create(path.join(root, `auth-${cleanups.length}.db`)));
@@ -136,7 +138,9 @@ describe("automatic user screenshot compaction", () => {
 		const modelRegistry = new ModelRegistry(authStorage, path.join(root, `models-${cleanups.length}.yml`));
 		const sessionManager =
 			options.sessionManager ??
-			(options.fileBacked ? SessionManager.create(root, path.join(root, "sessions")) : SessionManager.inMemory(root));
+			(options.fileBacked
+				? SessionManager.create(root, path.join(root, "sessions"))
+				: SessionManager.inMemory(root));
 
 		const mainRequests: RecordedRequest[] = [];
 		const sideRequests: RecordedRequest[] = [];
@@ -152,7 +156,8 @@ describe("automatic user screenshot compaction", () => {
 		const blueResized = await resizeImage(BLUE_1X1_PNG);
 		blueVariants.add(blueResized.data);
 		blueVariants.add(
-			(await canonicalizeImageContent({ type: "image", data: blueResized.data, mimeType: blueResized.mimeType })).data,
+			(await canonicalizeImageContent({ type: "image", data: blueResized.data, mimeType: blueResized.mimeType }))
+				.data,
 		);
 
 		const sideStreamFn: StreamFn = (requestModel, context) => {
@@ -208,6 +213,55 @@ describe("automatic user screenshot compaction", () => {
 			blueVariants,
 		};
 	}
+
+	it("keeps original pixels by default when a later turn asks for a visual detail", async () => {
+		const { session, mainRequests, sideRequests } = await createHarness({ fileBacked: true });
+		await session.prompt("Review this report", { images: [RED_1X1_PNG] });
+		const original = imageBlocks(mainRequests[0]!.context.messages.find(m => m.role === "user")!);
+
+		await session.prompt("Summarize the overall result");
+		await session.prompt("List the unresolved items");
+		await session.prompt("What exact number is in the lower-right corner?");
+
+		const firstUser = mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!;
+		expect(imageBlocks(firstUser)).toEqual(original);
+		expect(sideRequests).toHaveLength(0);
+	});
+
+	it("keeps original pixels in an in-memory session even when compaction is enabled", async () => {
+		const { session, sessionManager, mainRequests, sideRequests } = await createHarness({
+			settings: { "images.compactAfterTurns": 1 },
+		});
+		await session.prompt("Review this report", { images: [RED_1X1_PNG] });
+		const original = imageBlocks(mainRequests[0]!.context.messages.find(m => m.role === "user")!);
+		await session.prompt("Prepare the next report");
+
+		const firstUser = mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!;
+		expect(imageBlocks(firstUser)).toEqual(original);
+		expect(sideRequests).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.some(entry => entry.type === "custom" && entry.customType === "screenshot-compaction-summary"),
+		).toBe(false);
+	});
+
+	it("restores cached screenshot pixels for an explicit visual follow-up in an opted-in session", async () => {
+		const { session, mainRequests } = await createHarness({
+			fileBacked: true,
+			settings: { "images.compactAfterTurns": 1 },
+		});
+		await session.prompt("Review this report", { images: [RED_1X1_PNG] });
+		const original = imageBlocks(mainRequests[0]!.context.messages.find(m => m.role === "user")!);
+
+		await session.prompt("Prepare the next report");
+		expect(imageBlocks(mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!)).toEqual([]);
+
+		for (const prompt of ["What exact number was shown in my first screenshot?", "Use that number in the answer"]) {
+			await session.prompt(prompt);
+			expect(imageBlocks(mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!)).toEqual(original);
+		}
+	});
 
 	it("keeps recent screenshots intact and compacts older user screenshots after default N=3 later user turns", async () => {
 		const { session, sessionManager, mainRequests, sideRequests } = await createHarness();
@@ -488,9 +542,9 @@ describe("automatic user screenshot compaction", () => {
 		await persistFail.session.prompt("keep on flush fail", { images: [RED_1X1_PNG] });
 		await persistFail.session.prompt("later");
 		expect(persistFail.sideRequests).toHaveLength(1);
-		expect(
-			imageBlocks(persistFail.mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!),
-		).toHaveLength(1);
+		expect(imageBlocks(persistFail.mainRequests.at(-1)!.context.messages.find(m => m.role === "user")!)).toHaveLength(
+			1,
+		);
 
 		// 4. Partial multi-image failure: RED succeeds & compacts, BLUE fails & keeps pixels.
 		const partialBlueVariants = new Set<string>([BLUE_1X1_PNG.data]);
