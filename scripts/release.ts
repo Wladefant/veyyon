@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { isReleaseTag, isReleaseVersion, RELEASE_VERSION_BODY } from "@veyyon/utils/semver";
 import { $, Glob, JSONC } from "bun";
 import { hasVersionHeading, unreleasedEntries, veyyonOwnedRegion } from "./changelog-unreleased";
+import { isCI } from "./ci-signal";
 import { runChangelogFixer } from "./fix-changelogs";
 import {
 	assertPreparedReleaseChangelogs,
@@ -735,9 +736,13 @@ export async function prepareReleaseTree(version: string, runChecks = true): Pro
 
 	if (runChecks) {
 		console.log("Running checks...");
-		await $`bun run check`;
+		await $`bun run ${releasePreflightTask(process.platform, isCI())}`;
 		console.log();
 	}
+}
+
+export function releasePreflightTask(_platform: NodeJS.Platform, _inCI: boolean): "check" | "check:ts" {
+	return "check";
 }
 
 /**
