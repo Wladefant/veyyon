@@ -1031,7 +1031,11 @@ export class ExtensionRelay {
 				throw new Error("That isolated world could not be guarded and is refused.");
 			}
 		}
-		const result = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params], FORWARDED_CDP_TIMEOUT_MS);
+		const result = await this.#call(
+			"chrome.debugger.sendCommand",
+			[debuggee, method, params],
+			FORWARDED_CDP_TIMEOUT_MS,
+		);
 		return result ?? {};
 	}
 
