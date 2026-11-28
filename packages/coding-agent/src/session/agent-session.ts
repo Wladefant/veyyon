@@ -3243,6 +3243,15 @@ export class AgentSession {
 		return this.agent.state.model;
 	}
 
+	/** Stable identity used by the owning runtime's agent registry. */
+	get registryAgentId(): string | undefined {
+		return this.#config.agentId;
+	}
+
+	liveAdvisorStates() {
+		return this.#advisorRoster.liveStates();
+	}
+
 	/** Live per-family service tiers (OpenAI / Anthropic / Google). */
 	get serviceTierByFamily(): ServiceTierByFamily {
 		return this.#tiers.byFamily;

@@ -467,6 +467,8 @@ export interface AgentProgress {
 	id: string;
 	agent: string;
 	agentSource: AgentSource;
+	/** Last pre-turn phase reported by a detached child. */
+	startupPhase?: TaskStartupPhase;
 	status: "pending" | "running" | "completed" | "failed" | "aborted";
 	task: string;
 	assignment?: string;
@@ -667,3 +669,13 @@ export interface TaskToolDetails {
 		type: "task";
 	};
 }
+
+export type TaskStartupPhase =
+	| "prepare-spawn"
+	| "resolve-model"
+	| "open-transcript"
+	| "record-launch-grant"
+	| "create-session"
+	| "start-session"
+	| "autoload-skills"
+	| "ready";

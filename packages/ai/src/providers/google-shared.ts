@@ -166,17 +166,12 @@ interface GoogleWireTraits {
 	 */
 	readonly sendsPartId: boolean;
 	/**
-	 * What a tool call with no usable signature sends. Gemini 3 requires a thought signature on
-	 * function calls across conversation history. An imported turn's first function call may
-	 * carry Google's `skip_thought_signature_validator` bypass sentinel.
-	 *
-	 * - Public Gemini API (`google-generative-ai`): sends sentinel on all unsigned calls.
-	 * - Cloud Code Assist (`google-gemini-cli`): sends sentinel only on the first imported call
-	 *   per model turn; same-model unsigned parallel calls stay unsigned. (#9638, #844)
-	 * - Vertex AI: omits signatures on unsigned calls.
+	 * Where to use Google's `skip_thought_signature_validator` for a call with no usable signature.
+	 * Public Gemini 3 uses it on every unsigned call. Cloud Code Assist uses it when the
+	 * first call of a Gemini 4 step or an imported Gemini 3 step is unsigned (#1284, #844).
+	 * Unsigned parallel siblings stay unsigned (#9638). Vertex AI never sends the marker.
 	 */
-	readonly unsignedCallSignature: string | undefined;
-	readonly unsignedForeignCallSignature: string | undefined;
+	readonly unsignedToolCallPolicy: "all" | "first" | "first-foreign" | "none";
 	/**
 	 * Tool-result images nest inside `functionResponse.parts`. Gemini 3+ and the
 	 * non-Gemini models behind Cloud Code Assist / Antigravity accept that shape;
@@ -188,6 +183,13 @@ interface GoogleWireTraits {
 function googleWireTraits<T extends GoogleApiType>(model: Model<T>): GoogleWireTraits {
 	const gemini3 = isGemini3Model(model.id);
 	const geminiMajorVersion = getGeminiMajorVersion(model.id);
+	let unsignedToolCallPolicy: GoogleWireTraits["unsignedToolCallPolicy"] = "none";
+	if (model.api === "google-gemini-cli") {
+		if (geminiMajorVersion === 4) unsignedToolCallPolicy = "first";
+		else if (gemini3) unsignedToolCallPolicy = "first-foreign";
+	} else if (model.api === "google-generative-ai" && gemini3) {
+		unsignedToolCallPolicy = "all";
+	}
 	return {
 		supportsImages: model.input.includes("image"),
 		supportsVideos: model.input.includes("video"),
@@ -198,11 +200,7 @@ function googleWireTraits<T extends GoogleApiType>(model: Model<T>): GoogleWireT
 				(model.api === "google-generative-ai" && gemini3) ||
 				((model.api === "google-gemini-cli" || model.provider === "google-antigravity") &&
 					model.id.startsWith("gpt-oss-"))),
-		unsignedCallSignature: gemini3 && model.api === "google-generative-ai" ? SKIP_THOUGHT_SIGNATURE : undefined,
-		unsignedForeignCallSignature:
-			gemini3 && (model.api === "google-generative-ai" || model.api === "google-gemini-cli")
-				? SKIP_THOUGHT_SIGNATURE
-				: undefined,
+		unsignedToolCallPolicy,
 		multimodalFunctionResponse: geminiMajorVersion === undefined || geminiMajorVersion >= 3,
 	};
 }
@@ -338,12 +336,15 @@ class GoogleContentWriter {
 		const functionCall: FunctionCallPart = { name: block.name, args: block.arguments ?? {} };
 		if (this.traits.sendsPartId) functionCall.id = block.id;
 		const part: Part = { functionCall };
-		const effectiveSignature =
-			thoughtSignature ||
-			(!sameModel && firstFunctionCall
-				? this.traits.unsignedForeignCallSignature
-				: this.traits.unsignedCallSignature);
-		if (effectiveSignature) part.thoughtSignature = effectiveSignature;
+		const policy = this.traits.unsignedToolCallPolicy;
+		if (thoughtSignature) {
+			part.thoughtSignature = thoughtSignature;
+		} else if (
+			policy === "all" ||
+			(firstFunctionCall && (policy === "first" || (policy === "first-foreign" && !sameModel)))
+		) {
+			part.thoughtSignature = SKIP_THOUGHT_SIGNATURE;
+		}
 		return part;
 	}
 

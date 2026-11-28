@@ -80,14 +80,14 @@ async function writePrivateFile(filePath: string, content: string): Promise<void
 	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(filePath);
 }
 
-async function pingEndpoint(
+async function terminalRequest(
 	owner: { endpoint: string; token: string; sessionId: string },
-	bound = 5_000,
+	request: Record<string, unknown> = { op: "ping" },
 ): Promise<{ ok: boolean; result?: unknown; error?: unknown }> {
 	const { promise, resolve } = Promise.withResolvers<{ ok: boolean; result?: unknown; error?: unknown }>();
 	const socket = net.createConnection(owner.endpoint);
 
-	socket.setTimeout(bound, () => {
+	socket.setTimeout(5_000, () => {
 		socket.destroy();
 		resolve({ ok: false, error: "timeout" });
 	});
@@ -98,10 +98,10 @@ async function pingEndpoint(
 	socket.on("connect", () => {
 		const frame = JSON.stringify({
 			version: 1,
-			id: `ping-${crypto.randomUUID()}`,
+			id: `request-${crypto.randomUUID()}`,
 			token: owner.token,
 			sessionId: owner.sessionId,
-			op: "ping",
+			...request,
 		});
 		socket.write(`${frame}\n`);
 	});
@@ -460,6 +460,57 @@ describe("terminal-control CLI and owner discovery client", () => {
 		});
 	});
 
+	it("reads an existing durable receipt without a cached delivery and refuses another session's request", async () => {
+		const sessionId = "receipt-session";
+		const sessionFile = path.join(tempDir, `${sessionId}.jsonl`);
+		const messageId = `telegram-${"a".repeat(64)}`;
+		const text = `original\n[telegram-delivery id=${messageId}]`;
+		const syntheticId = `telegram-${"b".repeat(64)}`;
+		const journal = [
+			{ role: "user", synthetic: true, content: `synthetic\n[telegram-delivery id=${syntheticId}]` },
+			{ role: "user", content: [{ type: "text", text }] },
+		]
+			.map(message => `${JSON.stringify({ type: "message", message })}\n`)
+			.join("");
+		await fs.writeFile(sessionFile, journal);
+		let attempts = 0;
+		const close = await serveTerminalControl(
+			{
+				identity: () => ({ sessionId, cwd: tempDir, sessionFile }),
+				deliver: async () => {
+					attempts++;
+					return "started";
+				},
+				abort: async () => false,
+				history: () => [],
+				subscribe: () => () => {},
+			},
+			tempDir,
+		);
+		cleanupServers.push(close);
+		const owner = await discoverTerminalOwner(sessionId, tempDir);
+		const request = { op: "deliveryStatus", messageId };
+		expect(await terminalRequest({ ...owner, sessionId: "other-session" }, request)).toMatchObject({ ok: false });
+		expect(await terminalRequest(owner, { op: "deliver", messageId, text, mode: "auto" })).toMatchObject({
+			ok: true,
+			result: "duplicate",
+		});
+		expect(await terminalRequest(owner, { op: "deliveryStatus", messageId: syntheticId })).toMatchObject({
+			ok: true,
+			result: { state: "unknown" },
+		});
+		expect(await terminalRequest(owner, request)).toMatchObject({
+			ok: true,
+			result: { state: "delivered", consumed: true },
+		});
+		expect(await terminalRequest(owner, { op: "deliver", messageId, text, mode: "auto", ack: true })).toMatchObject({
+			ok: true,
+			result: { accepted: true, state: "delivered", consumed: true },
+		});
+		expect(attempts).toBe(0);
+		expect(await fs.readFile(sessionFile, "utf8")).toBe(journal);
+	});
+
 	describe("registered CLI smoke contract against real server and parser", () => {
 		it("routes terminal-control through resolveCliArgv as a first-class subcommand", () => {
 			const resolved = resolveCliArgv(["terminal-control", "rotate", "sess-1"]);
@@ -498,7 +549,7 @@ describe("terminal-control CLI and owner discovery client", () => {
 			const initialOwner = await readOwnerRecord(profileRoot);
 			const initialToken = initialOwner.token;
 
-			const initialPing = await pingEndpoint(initialOwner);
+			const initialPing = await terminalRequest(initialOwner);
 			expect(initialPing.ok).toBe(true);
 
 			const spawnEnv: Record<string, string> = {
@@ -520,10 +571,10 @@ describe("terminal-control CLI and owner discovery client", () => {
 			expect(updatedOwner.token.length).toBeGreaterThan(0);
 			expect(result.stdout.includes(updatedOwner.token)).toBe(false);
 
-			const newPing = await pingEndpoint(updatedOwner);
+			const newPing = await terminalRequest(updatedOwner);
 			expect(newPing.ok).toBe(true);
 
-			const oldTokenPing = await pingEndpoint({ ...updatedOwner, token: initialToken });
+			const oldTokenPing = await terminalRequest({ ...updatedOwner, token: initialToken });
 			expect(oldTokenPing.ok).toBe(false);
 
 			await fs.rm(hermeticHome, { recursive: true, force: true });

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
@@ -21,7 +20,7 @@ useIsolatedGlobalSettings();
 
 const makeSpillDir = useTrackedTempDirs("failed-artifact-capture-");
 
-function makeBashSession(cwd: string, artifact: { path: string; id: string }): ToolSession {
+function makeBashSession(cwd: string, artifact: { path: string; id: string }, artifactMaxBytes?: number): ToolSession {
 	return makeToolSession({
 		cwd,
 		hasUI: false,
@@ -32,6 +31,7 @@ function makeBashSession(cwd: string, artifact: { path: string; id: string }): T
 		settings: {
 			get(key: string) {
 				if (key === "bash.autoBackground.thresholdMs") return 60_000;
+				if (key === "tools.artifactMaxBytes") return artifactMaxBytes;
 				return key === "async.enabled" || key === "bash.autoBackground.enabled" ? false : undefined;
 			},
 			getBashInterceptorRules() {
@@ -93,21 +93,14 @@ describe("a failed or capped artifact capture", () => {
 	it("records the bytes a capped artifact elided instead of presenting it as complete", async () => {
 		const dir = makeSpillDir();
 		const artifactPath = path.join(dir, "bash-capped.txt");
-		const tool = new BashTool(makeBashSession(dir, { path: artifactPath, id: "bash-capped" }));
-		const settings = await Settings.init();
-		const previousCap = settings.get("tools.artifactMaxBytes");
-		settings.set("tools.artifactMaxBytes", 1);
-		try {
-			const result = await tool.execute("call-capped", {
-				command: "printf 'HEAD_MARK\\n'; yes PADPADPADPADPADPAD | head -c 4194304; printf '\\nTAIL_MARK\\n'",
-				timeout: 60,
-			});
+		const tool = new BashTool(makeBashSession(dir, { path: artifactPath, id: "bash-capped" }, 1));
+		const result = await tool.execute("call-capped", {
+			command: "printf 'HEAD_MARK\\n'; yes \"$(printf '%01024d' 0)\" | head -n 3100; printf 'TAIL_MARK\\n'",
+			timeout: 60,
+		});
 
-			expect(result.details?.meta?.artifactError).toBeUndefined();
-			expect(result.details?.meta?.truncation?.artifactId).toBe("bash-capped");
-			expect(result.details?.meta?.truncation?.artifactElidedBytes).toBeGreaterThan(1024 * 1024);
-		} finally {
-			settings.set("tools.artifactMaxBytes", previousCap);
-		}
+		expect(result.details?.meta?.artifactError).toBeUndefined();
+		expect(result.details?.meta?.truncation?.artifactId).toBe("bash-capped");
+		expect(result.details?.meta?.truncation?.artifactElidedBytes).toBeGreaterThan(1024 * 1024);
 	}, 60_000);
 });

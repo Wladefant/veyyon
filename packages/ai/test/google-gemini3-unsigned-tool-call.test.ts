@@ -1,12 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@veyyon/ai/providers/google-shared";
-import type { Api, AssistantMessage, Context, Model, Usage } from "@veyyon/ai/types";
+import type { Api, AssistantMessage, Context, Model, ToolResultMessage, Usage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 
 // WHY: CCA replay needs a signature on the first function call in each imported
-// model turn, not on its unsigned parallel siblings. Exact-model signatures stay
-// intact. Public Gemini and Vertex keep their existing transport policies.
-// These wire-format tests do not prove live endpoint generation.
+// step (and on unsigned native Gemini 4 steps), not on its unsigned parallel siblings.
+// Exact-model signatures stay intact. Public Gemini and Vertex keep their transport policies.
 
 const ZERO_USAGE: Usage = {
 	input: 0,
@@ -19,6 +18,15 @@ const ZERO_USAGE: Usage = {
 
 const VALID_SIGNATURE = "QUJDRA==";
 const SENTINEL = "skip_thought_signature_validator";
+const SECOND_SIGNATURE = "U0VDT05E";
+const FOREIGN_SIGNATURE = "Rk9SRUlHTg==";
+const LONG_SIGNATURE = "TE9OR19TSUdOQVRVUkU=";
+
+const GEMINI_4_CCA_TARGETS = [
+	"gemini-4-neon-medium",
+	"gemini-4-carbon-medium",
+	"gemini-4-hydrogen-medium",
+] as const;
 
 type GoogleApi = Extract<Api, `google-${string}`>;
 
@@ -37,21 +45,32 @@ function buildGeminiModel(api: GoogleApi, provider: string, id: string): Model<G
 	});
 }
 
+function assistantMessage(
+	api: Api,
+	provider: string,
+	model: string,
+	content: AssistantMessage["content"],
+): AssistantMessage {
+	return { role: "assistant", provider, api, model, content, usage: ZERO_USAGE, stopReason: "toolUse", timestamp: 2000 };
+}
+
 function assistantTurn(api: Api, provider: string, id: string, content: AssistantMessage["content"]): Context {
 	return {
 		messages: [
 			{ role: "user", content: "Optimize the code", timestamp: 1000 },
-			{
-				role: "assistant",
-				provider,
-				api,
-				model: id,
-				content,
-				usage: ZERO_USAGE,
-				stopReason: "toolUse",
-				timestamp: 2000,
-			},
+			assistantMessage(api, provider, id, content),
 		],
+	};
+}
+
+function toolResult(toolCallId: string, toolName: string, text: string, timestamp: number): ToolResultMessage {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName,
+		content: [{ type: "text", text }],
+		isError: false,
+		timestamp,
 	};
 }
 
@@ -197,4 +216,113 @@ describe("Gemini 3 unsigned tool-call signatures (#9638)", () => {
 		expect(geminiCalls).toHaveLength(1);
 		expect(geminiCalls[0]?.thoughtSignature).toBe(VALID_SIGNATURE);
 	});
+});
+
+describe("Gemini 4 Cloud Code Assist tool-call signatures (#1284)", () => {
+	for (const targetId of GEMINI_4_CCA_TARGETS) {
+		const target = buildGeminiModel("google-gemini-cli", "google-antigravity", targetId);
+
+		it(`replays multi-step history with signed target batches, imported fallback after text, and omitted native first signature for ${targetId}`, () => {
+			const context: Context = {
+				messages: [
+					{ role: "user", content: "Fix #1284", timestamp: 1000 },
+					assistantMessage("google-gemini-cli", "google-antigravity", targetId, [
+						{ type: "toolCall", id: "t1_a", name: "read", arguments: {}, thoughtSignature: VALID_SIGNATURE },
+						{ type: "toolCall", id: "t1_b", name: "grep", arguments: {} },
+					]),
+					toolResult("t1_a", "read", "file contents", 2100),
+					toolResult("t1_b", "grep", "match", 2101),
+					assistantMessage("openai-completions", "openai-codex", "gpt-6-luna", [
+						{ type: "text", text: "Checking the caller." },
+						{ type: "toolCall", id: "f1_a", name: "irc", arguments: {}, thoughtSignature: FOREIGN_SIGNATURE },
+						{ type: "toolCall", id: "f1_b", name: "bash", arguments: {} },
+					]),
+					toolResult("f1_a", "irc", "ok", 3100),
+					toolResult("f1_b", "bash", "clean", 3101),
+					assistantMessage("google-gemini-cli", "google-antigravity", targetId, [
+						{ type: "text", text: "Applying fix." },
+						{ type: "toolCall", id: "t2_a", name: "edit", arguments: {}, thoughtSignature: SECOND_SIGNATURE },
+						{ type: "toolCall", id: "t2_b", name: "read", arguments: {} },
+					]),
+					toolResult("t2_a", "edit", "updated", 4100),
+					toolResult("t2_b", "read", "verified", 4101),
+					assistantMessage("google-gemini-cli", "google-antigravity", targetId, [
+						{ type: "text", text: "Running final check." },
+						{ type: "toolCall", id: "t3_a", name: "bash", arguments: {} },
+						{ type: "toolCall", id: "t3_b", name: "read", arguments: {} },
+					]),
+					toolResult("t3_a", "bash", "passed", 5100),
+					toolResult("t3_b", "read", "done", 5101),
+				],
+			};
+
+			const contents = convertMessages(target, context);
+			expect(JSON.stringify(contents)).not.toContain(FOREIGN_SIGNATURE);
+			expect(contents.map(c => c.role)).toEqual([
+				"user", "model", "user", "model", "user", "model", "user", "model", "user",
+			]);
+
+			const callSigs = (index: number) =>
+				contents[index]?.parts?.filter(p => p.functionCall).map(p => [p.functionCall?.name, p.thoughtSignature]);
+			const responseNames = (index: number) =>
+				contents[index]?.parts?.filter(p => p.functionResponse).map(p => p.functionResponse?.name);
+
+			expect(callSigs(1)).toEqual([
+				["read", VALID_SIGNATURE],
+				["grep", undefined],
+			]);
+			expect(responseNames(2)).toEqual(["read", "grep"]);
+
+			expect(contents[3]?.parts?.[0]).toEqual({ text: "Checking the caller." });
+			expect(callSigs(3)).toEqual([
+				["irc", SENTINEL],
+				["bash", undefined],
+			]);
+			expect(responseNames(4)).toEqual(["irc", "bash"]);
+
+			expect(callSigs(5)).toEqual([
+				["edit", SECOND_SIGNATURE],
+				["read", undefined],
+			]);
+			expect(responseNames(6)).toEqual(["edit", "read"]);
+
+			expect(callSigs(7)).toEqual([
+				["bash", SENTINEL],
+				["read", undefined],
+			]);
+			expect(responseNames(8)).toEqual(["bash", "read"]);
+		});
+
+		it(`emits skip sentinel on first call when opt-in retention or max-length elides a Gemini 4 signature for ${targetId}`, () => {
+			const messages: Context["messages"] = [
+				{ role: "user", content: "Check history", timestamp: 1000 },
+				assistantMessage("google-gemini-cli", "google-antigravity", targetId, [
+					{ type: "toolCall", id: "r1_a", name: "read", arguments: {}, thoughtSignature: LONG_SIGNATURE },
+					{ type: "toolCall", id: "r1_b", name: "grep", arguments: {} },
+				]),
+				toolResult("r1_a", "read", "a", 2100),
+				toolResult("r1_b", "grep", "b", 2101),
+				assistantMessage("google-gemini-cli", "google-antigravity", targetId, [
+					{ type: "toolCall", id: "r2_a", name: "edit", arguments: {}, thoughtSignature: VALID_SIGNATURE },
+					{ type: "toolCall", id: "r2_b", name: "read", arguments: {} },
+				]),
+				toolResult("r2_a", "edit", "c", 3100),
+				toolResult("r2_b", "read", "d", 3101),
+			];
+
+			const modelCallSignatures = (context: Context) =>
+				convertMessages(target, context)
+					.filter(c => c.role === "model")
+					.map(c => c.parts?.filter(p => p.functionCall).map(p => p.thoughtSignature));
+
+			expect(modelCallSignatures({ messages, thoughtSignatureRetention: 1 })).toEqual([
+				[SENTINEL, undefined],
+				[VALID_SIGNATURE, undefined],
+			]);
+			expect(modelCallSignatures({ messages, thoughtSignatureMaxLength: VALID_SIGNATURE.length })).toEqual([
+				[SENTINEL, undefined],
+				[VALID_SIGNATURE, undefined],
+			]);
+		});
+	}
 });

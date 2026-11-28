@@ -14,6 +14,7 @@ import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { errorMessage, formatDuration, prompt, toError } from "@veyyon/utils";
+import type { AsyncJob, AsyncJobManager } from "../../async/job-manager";
 import {
 	type BuildIdentity,
 	formatBuildIdentity,
@@ -32,6 +33,7 @@ import {
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { AgentRegistry } from "../../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../../task/irc-bus";
+import type { TaskStartupPhase } from "../../task/types";
 import type { ToolSession } from "..";
 import { isIrcEnabled } from "./irc-enabled";
 
@@ -86,11 +88,43 @@ interface IrcPeerInfo {
 	activity?: string;
 }
 
+const TASK_STARTUP_REFUSALS = {
+	queued_not_yet_on_irc: "The child is waiting for a concurrency slot.",
+	starting_not_yet_on_irc: "The child has started but has not registered with IRC.",
+	registered_no_live_session: "The child has registered with IRC but has no live session.",
+	recipient_cancelled: "The child's job was cancelled and it has no live IRC session.",
+	recipient_job_failed: "The child's job failed and it has no live IRC session.",
+} as const;
+
+export interface IrcStartingChildInfo {
+	state: "queued" | "starting" | "failed" | "cancelled";
+	phase?: TaskStartupPhase;
+	jobId: string;
+	agentId: string;
+	registered: boolean;
+	attached: boolean;
+	routable: boolean;
+	terminalReason?: string;
+}
+
+interface IrcTaskStartupRefusal extends IrcDeliveryReceipt {
+	outcome: "failed";
+	code: keyof typeof TASK_STARTUP_REFUSALS;
+	jobId: string;
+	accepted: false;
+	retained: false;
+	delivered: false;
+	phase?: TaskStartupPhase;
+	terminalReason?: string;
+}
+
+type IrcSendReceipt = IrcDeliveryReceipt | IrcTaskStartupRefusal;
+
 export interface IrcDetails {
 	op: "send" | "wait" | "inbox" | "list";
 	from?: string;
 	to?: string;
-	receipts?: IrcDeliveryReceipt[];
+	receipts?: IrcSendReceipt[];
 	/** Message consumed by `wait` / `send await:true`; null when the wait timed out. */
 	waited?: IrcMessage | null;
 	inbox?: IrcMessage[];
@@ -98,6 +132,8 @@ export interface IrcDetails {
 	identity?: { selfId: string; parentId?: string; ancestorIds: string[]; scope?: string; model?: string | null };
 	/** Other live sessions on the same machine, distinct from same-conversation agent peers. */
 	sessionPeers?: SessionNoticeOwner[];
+	/** Sender's own same-scope detached children that are queued, starting, or terminal pre-ready. */
+	startingChildren?: IrcStartingChildInfo[];
 }
 
 function formatIncoming(msg: IrcMessage): string {
@@ -197,6 +233,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 					this.noticeRuntime.listLiveSessionOwners?.() ?? [],
 					this.session.getSessionId?.() ?? undefined,
 					this.session.getActiveModelString?.()?.trim() || null,
+					this.session.asyncJobManager,
 				);
 			case "send":
 				return this.#executeSend(registry, senderId, params, signal);
@@ -260,6 +297,56 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		}
 	}
 
+	#taskStartupRefusal(registry: AgentRegistry, senderId: string, to: string): IrcTaskStartupRefusal | undefined {
+		const scope = registry.scopeOf(senderId);
+		if (!scope) return undefined;
+		const target = registry.get(to);
+		if (
+			target &&
+			(target.kind !== "sub" ||
+				target.parentId !== senderId ||
+				target.scope !== scope ||
+				target.status !== "running" ||
+				target.session)
+		) {
+			return undefined;
+		}
+		const job = this.session.asyncJobManager?.findOwnedTask(to, senderId, scope);
+		if (!job || job.status === "completed") return undefined;
+
+		let code: IrcTaskStartupRefusal["code"];
+		if (job.status === "cancelled") code = "recipient_cancelled";
+		else if (job.status === "failed") code = "recipient_job_failed";
+		else if (target) code = "registered_no_live_session";
+		else if (job.queued) code = "queued_not_yet_on_irc";
+		else code = "starting_not_yet_on_irc";
+
+		const phase = job.startupPhase;
+		const terminalReason =
+			job.status === "failed" || job.status === "cancelled"
+				? (sanitizeTerminalReason(job.errorText) ?? job.status)
+				: undefined;
+		const detailParts = [
+			`${code}: ${TASK_STARTUP_REFUSALS[code]}`,
+			phase ? `Phase: ${phase}.` : undefined,
+			terminalReason ? `Reason: ${terminalReason}.` : undefined,
+			`Message not accepted, buffered, or delivered. Check job "${job.id}".`,
+		].filter(Boolean);
+
+		return {
+			to,
+			outcome: "failed",
+			code,
+			jobId: job.id,
+			accepted: false,
+			retained: false,
+			delivered: false,
+			...(phase ? { phase } : {}),
+			...(terminalReason ? { terminalReason } : {}),
+			error: detailParts.join(" "),
+		};
+	}
+
 	async #executeSend(
 		registry: AgentRegistry,
 		senderId: string,
@@ -307,6 +394,17 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 				op: "send",
 				from: senderId,
 				to,
+			});
+		}
+
+		// Refuse before arming a reply waiter or handing the message to the bus.
+		const refusal = isBroadcast ? undefined : this.#taskStartupRefusal(registry, senderId, to);
+		if (refusal) {
+			return errorResult(`No recipients received the message.\n- ${to}: failed — ${refusal.error}`, {
+				op: "send",
+				from: senderId,
+				to,
+				receipts: [refusal],
 			});
 		}
 
@@ -551,12 +649,80 @@ function formatSessionNoticeCapabilityError(
 	].join("\n");
 }
 
+function sanitizeTerminalReason(reason: string | undefined): string | undefined {
+	if (!reason) return undefined;
+	const singleLine = reason.replace(/\s+/g, " ").trim();
+	if (!singleLine) return undefined;
+	return singleLine.length > 240 ? `${singleLine.slice(0, 237)}...` : singleLine;
+}
+
+function collectStartingChildren(
+	registry: AgentRegistry,
+	senderId: string,
+	asyncJobManager?: AsyncJobManager,
+): IrcStartingChildInfo[] {
+	if (!asyncJobManager) return [];
+	const scope = registry.scopeOf(senderId);
+	if (!scope) return [];
+
+	const latestByAgent = new Map<string, AsyncJob>();
+	for (const job of asyncJobManager.getAllJobs({ ownerId: senderId })) {
+		if (job.type !== "task" || job.ownerId !== senderId || job.ownerScope !== scope) continue;
+		const agentId = job.agentId ?? job.id;
+		latestByAgent.set(agentId, job);
+	}
+
+	const children: IrcStartingChildInfo[] = [];
+	for (const [agentId, job] of latestByAgent) {
+		if (job.status === "completed") continue;
+		const ref = registry.get(agentId);
+		const target = ref?.kind === "sub" && ref.parentId === senderId && ref.scope === scope ? ref : undefined;
+		let state: IrcStartingChildInfo["state"];
+		if (job.status === "running") {
+			if (job.queued) {
+				state = "queued";
+			} else if (job.startupPhase !== undefined && job.startupPhase !== "ready") {
+				state = "starting";
+			} else {
+				continue;
+			}
+		} else {
+			if (job.startupPhase === "ready" || (job.startupPhase === undefined && !job.queued)) continue;
+			state = job.status;
+		}
+
+		const registered = target !== undefined;
+		const attached = Boolean(target?.session);
+		const routable = Boolean(
+			target &&
+				target.status !== "aborted" &&
+				registry.canAddress(senderId, agentId) &&
+				(target.session !== null || target.status === "idle" || target.status === "parked"),
+		);
+		const terminalReason =
+			state === "failed" || state === "cancelled" ? (sanitizeTerminalReason(job.errorText) ?? state) : undefined;
+
+		children.push({
+			state,
+			...(job.startupPhase ? { phase: job.startupPhase } : {}),
+			jobId: job.id,
+			agentId,
+			registered,
+			attached,
+			routable,
+			...(terminalReason ? { terminalReason } : {}),
+		});
+	}
+	return children;
+}
+
 function executeList(
 	registry: AgentRegistry,
 	senderId: string,
 	liveSessions: SessionNoticeOwner[] = [],
 	currentSessionId?: string,
 	activeModel: string | null = null,
+	asyncJobManager?: AsyncJobManager,
 ): AgentToolResult<IrcDetails> {
 	const bus = IrcBus.global();
 	// ONE call, and the registry owns what it means. This is the roster the
@@ -623,6 +789,20 @@ function executeList(
 			lines.push("Parked agents are revived automatically when you message them.");
 		}
 	}
+	const startingChildren = collectStartingChildren(registry, senderId, asyncJobManager);
+	if (startingChildren.length > 0) {
+		lines.push("", "Starting / pre-ready children (separate from addressable live peers):");
+		for (const child of startingChildren) {
+			const statusBits = [child.state, child.phase ? `phase ${child.phase}` : undefined].filter(Boolean).join(", ");
+			const registryBits = !child.registered
+				? "not in registry"
+				: child.routable
+					? `registered, ${child.attached ? "attached" : "revivable"}, routable on IRC; setup not ready`
+					: `registered, ${child.attached ? "attached" : "not attached"}, not routable on IRC`;
+			const reasonSuffix = child.terminalReason ? ` — ${child.terminalReason}` : "";
+			lines.push(`- ${child.agentId} (${statusBits}; job ${child.jobId}; ${registryBits})${reasonSuffix}`);
+		}
+	}
 	const sessionPeers = liveSessions
 		.filter(owner => owner.sessionId !== currentSessionId)
 		.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
@@ -643,7 +823,14 @@ function executeList(
 	}
 	return {
 		content: [{ type: "text", text: lines.join("\n") }],
-		details: { op: "list", from: senderId, peers, identity, sessionPeers },
+		details: {
+			op: "list",
+			from: senderId,
+			peers,
+			identity,
+			sessionPeers,
+			...(startingChildren.length > 0 ? { startingChildren } : {}),
+		},
 	};
 }
 

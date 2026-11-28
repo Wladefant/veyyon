@@ -235,6 +235,15 @@ export class AdvisorRoster {
 		this.#configs = scope.advisorConfigs;
 	}
 
+	/** Read live advisor state without opening its transcript or exposing its agent. */
+	*liveStates() {
+		for (const { name, slug, agent } of this.#advisors) {
+			const { model, isStreaming, messages } = agent.state;
+			const lastActivity = messages.at(-1)?.timestamp ?? null;
+			yield { name, slug, model, isStreaming, lastActivity };
+		}
+	}
+
 	// ------------------------------------------------------------ the setting
 
 	/** Whether the advisor setting is enabled for this session. */

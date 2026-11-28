@@ -439,3 +439,75 @@ test("discovery write failure keeps old token valid, leaves file unchanged, and 
 	const finalPing = await rpc(rotatedOwner, "ping");
 	expect(finalPing.response.ok).toBe(true);
 });
+
+test("a failed clientless rebind rejects stale requests and allows a later rebind", async () => {
+	let sessionId = "before";
+	let refusedWrites = 0;
+	const fix = await createFixture(
+		{ identity: () => ({ sessionId, cwd: "", sessionFile: "" }) },
+		{
+			writeOwner: async (recordPath, record) => {
+				if (record.sessionId === "unpublished") {
+					refusedWrites++;
+					throw new Error("simulated atomic discovery write failure");
+				}
+				await fs.writeFile(recordPath, JSON.stringify(record), { mode: 0o600 });
+			},
+		},
+	);
+	const original = await readOwner(fix.root);
+
+	sessionId = "unpublished";
+	await fix.close.refreshIdentity();
+	expect(refusedWrites).toBe(1);
+	expect((await readOwner(fix.root)).sessionId).toBe(original.sessionId);
+	const stale = await rpc(original, "ping");
+	expect(stale.response).toMatchObject({ ok: false, error: expect.stringContaining("session detached or changed") });
+
+	sessionId = "recovered";
+	await fix.close.refreshIdentity();
+	const recovered = await readOwner(fix.root);
+	expect(recovered.sessionId).toBe(sessionId);
+	expect(recovered.endpoint).toBe(original.endpoint);
+	const delivery = await rpc(recovered, "deliver", { text: "after-rebind", mode: "auto" });
+	expect(delivery.response.ok).toBe(true);
+	expect(fix.receivedDeliveries).toEqual([{ text: "after-rebind", mode: "auto" }]);
+});
+
+test("a clientless rebind publishes the latest session after an in-flight discovery write fails", async () => {
+	let sessionId = "before";
+	const writeStarted = Promise.withResolvers<void>();
+	const finishWrite = Promise.withResolvers<void>();
+	const writes: string[] = [];
+	const fix = await createFixture(
+		{ identity: () => ({ sessionId, cwd: "", sessionFile: "" }) },
+		{
+			writeOwner: async (recordPath, record) => {
+				writes.push(record.sessionId);
+				if (record.sessionId === "unpublished") {
+					writeStarted.resolve();
+					await finishWrite.promise;
+					throw new Error("simulated atomic discovery write failure");
+				}
+				await fs.writeFile(recordPath, JSON.stringify(record), { mode: 0o600 });
+			},
+		},
+	);
+	const original = await readOwner(fix.root);
+
+	sessionId = "unpublished";
+	const firstRefresh = fix.close.refreshIdentity();
+	await writeStarted.promise;
+	sessionId = "latest";
+	void fix.close.refreshIdentity();
+	finishWrite.resolve();
+	await firstRefresh;
+
+	const latest = await readOwner(fix.root);
+	expect(latest.sessionId).toBe("latest");
+	expect(latest.endpoint).toBe(original.endpoint);
+	expect(writes).toEqual(["before", "unpublished", "latest"]);
+	const delivery = await rpc(latest, "deliver", { text: "after-overlap", mode: "auto" });
+	expect(delivery.response.ok).toBe(true);
+	expect(fix.receivedDeliveries).toEqual([{ text: "after-overlap", mode: "auto" }]);
+});

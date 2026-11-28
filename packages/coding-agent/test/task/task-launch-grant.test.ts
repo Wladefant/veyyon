@@ -1,16 +1,16 @@
-import * as ffi from "bun:ffi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
-import * as os from "node:os";
-import { dirname } from "node:path";
+import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, mainAgentIdFor } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdk from "@veyyon/coding-agent/sdk";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discovery from "@veyyon/coding-agent/task/discovery";
+import { JobTool } from "@veyyon/coding-agent/tools/shell/job";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withJournalLock } from "@veyyon/kernel/session/session-storage";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { firstToolResultText } from "../helpers/tool-result-text";
@@ -110,119 +110,136 @@ describe("task launch grants", () => {
 		expect(await receipts(rootFile)).toEqual(persisted);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"syncs the published receipt's parent directory before child startup",
-		async () => {
-			const parent = fs.statSync(dirname(rootFile));
-			const sync = fs.fsyncSync;
-			let receiptSynced = false;
-			vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
-				const stat = fs.fstatSync(fd);
-				if (stat.isDirectory() && stat.dev === parent.dev && stat.ino === parent.ino) {
-					expect(fs.readFileSync(rootFile, "utf8")).toContain('"type":"subagent_launch_grant"');
-					sync(fd);
-					receiptSynced = true;
-				} else {
-					sync(fd);
-				}
-			});
-			const start = observeChild(async () => expect(receiptSynced).toBe(true));
-			const result = await (await tool()).execute("sync", { ...lane, grants });
-			expect(result.details?.results[0]?.exitCode).toBe(0);
-			expect(receiptSynced).toBe(true);
-			expect(start.mock.calls).toHaveLength(1);
-		},
-	);
+	it("appends durable grant receipts without rewriting the existing root journal while its lock is held", async () => {
+		root.appendCustomEntry("large-parent", { payload: "x".repeat(1024 * 1024) });
+		await root.flush();
+		const before = await readFile(rootFile);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const lock = withJournalLock(rootFile, async () => {
+			entered.resolve();
+			await release.promise;
+		});
+		await entered.promise;
+		const start = observeChild(async () => {
+			const after = await readFile(rootFile);
+			expect(after.subarray(0, before.length)).toEqual(before);
+			expect(after.length).toBeGreaterThan(before.length);
+			expect(await receipts(rootFile)).toHaveLength(1);
+		});
+		const launch = (await tool(0, true)).execute("grant-append", {
+			context: "Test appending a durable launch receipt under journal contention.",
+			tasks: [{ ...lane, grants }],
+		});
+		expect(start.mock.calls).toHaveLength(0);
+		release.resolve();
+		await lock;
+		const result = await launch;
+		expect(result.details?.results[0]?.exitCode).toBe(0);
+		expect(start.mock.calls).toHaveLength(1);
+		const after = await readFile(rootFile);
+		expect(after.subarray(0, before.length)).toEqual(before);
+		expect(await receipts(rootFile)).toHaveLength(1);
+	});
 
-	it.skipIf(process.platform === "win32")("does not start the child if the receipt directory sync fails", async () => {
-		const parent = fs.statSync(dirname(rootFile));
+	it("shows a pending grant separately while an ungranted sibling starts from the same journal", async () => {
+		root.appendCustomEntry("large-parent", { payload: "x".repeat(8 * 1024 * 1024) });
+		await root.flush();
+		const id = root.getSessionId();
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const grantStarted = Promise.withResolvers<void>();
+		const releaseGrant = Promise.withResolvers<void>();
+		const run = observeChild(async () => {});
+		const session = makeToolSession({
+			settings: Settings.isolated({ "agent.batch": true, "async.enabled": true, "agent.maxConcurrency": 2 }),
+			asyncJobManager: manager,
+			getSessionSpawns: () => "*",
+			getSessionId: () => id,
+			getAgentId: () => mainAgentIdFor(id),
+			getSessionFile: () => rootFile,
+			taskDepth: 0,
+			recordSubagentLaunchGrant: async record => {
+				grantStarted.resolve();
+				await releaseGrant.promise;
+				await root.appendSubagentLaunchGrant(record);
+			},
+		});
+		try {
+			const tool = await TaskTool.create(session);
+			const result = await tool.execute("grant-stall", {
+				context: "Test concurrent child startup.",
+				tasks: [
+					{ ...lane, grants },
+					{ ...lane, name: "UngrantLane" },
+				],
+			});
+			expect(result.isError).not.toBe(true);
+			const granted = manager.getJob(lane.name);
+			const ungranted = manager.getJob("UngrantLane");
+			if (!granted || !ungranted) throw new Error("Both children must have detached jobs");
+
+			await Promise.race([grantStarted.promise, granted.promise]);
+			await ungranted.promise;
+			const jobTool = new JobTool(session);
+			const snapshot = await jobTool.execute("inspect", { list: true });
+			expect(snapshot.details?.jobs).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ id: lane.name, status: "starting", startupPhase: "record-launch-grant" }),
+					expect.objectContaining({ id: "UngrantLane", status: "completed" }),
+				]),
+			);
+			expect(run.mock.calls).toHaveLength(1);
+			expect(root.getSubagentLaunchGrants()).toEqual([]);
+
+			releaseGrant.resolve();
+			await granted.promise;
+			expect(granted.status).toBe("completed");
+			expect(run.mock.calls).toHaveLength(2);
+			expect(await receipts(rootFile)).toHaveLength(1);
+		} finally {
+			releaseGrant.resolve();
+			await manager.dispose({ timeoutMs: 1000 });
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("syncs the published receipt before child startup", async () => {
+		let receiptSynced = false;
+		const journal = fs.statSync(rootFile);
 		const sync = fs.fsyncSync;
 		vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
-			const stat = fs.fstatSync(fd);
-			if (stat.isDirectory() && stat.dev === parent.dev && stat.ino === parent.ino) {
-				throw Object.assign(new Error("injected receipt directory sync failure"), { code: "EIO" });
+			const current = fs.fstatSync(fd);
+			if (current.dev === journal.dev && current.ino === journal.ino) {
+				expect(fs.readFileSync(rootFile, "utf8")).toContain('"type":"subagent_launch_grant"');
+				receiptSynced = true;
 			}
 			sync(fd);
 		});
-		const start = observeChild(async () => {});
-		const result = await (await tool()).execute("sync-failed", { ...lane, grants });
-		expect(firstToolResultText(result)).toContain("injected receipt directory sync failure");
-		expect(start.mock.calls).toHaveLength(0);
-		expect(root.getSubagentLaunchGrants()).toEqual([]);
+		const start = observeChild(async () => expect(receiptSynced).toBe(true));
+		const result = await (await tool()).execute("sync", { ...lane, grants });
+		expect(result.details?.results[0]?.exitCode).toBe(0);
+		expect(receiptSynced).toBe(true);
+		expect(start.mock.calls).toHaveLength(1);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"waits for the Win32 write-through replacement and rejects its failure",
-		async () => {
-			const platform = vi.spyOn(os, "platform").mockReturnValue("win32");
-			let shouldFail = true;
-			let failFileSync = false;
-			let rootMoves = 0;
-			let rootSyncs = 0;
-			const moveFileEx = vi.fn((from: Buffer, to: Buffer, flags: number) => {
-				const source = from.toString("utf16le").slice(0, -1);
-				const target = to.toString("utf16le").slice(0, -1);
-				if (target !== rootFile) {
-					fs.renameSync(source, target);
-					return 1;
-				}
-				rootMoves++;
-				expect(dirname(source)).toBe(dirname(target));
-				expect(flags).toBe(0x9); // REPLACE_EXISTING | WRITE_THROUGH, no cross-volume copy.
-				expect(fs.readFileSync(source, "utf8")).toContain('"type":"subagent_launch_grant"');
-				if (shouldFail) return 0;
-				fs.renameSync(source, target);
-				return 1;
-			});
-			// The test uses JavaScript callbacks in place of Bun-branded native functions.
-			const load = vi.spyOn(ffi, "dlopen").mockReturnValue({
-				symbols: {
-					MoveFileExW: moveFileEx,
-					GetLastError: () => 1117,
-				} as unknown as ffi.Library<ffi.Symbols>["symbols"],
-				close: () => {},
-			});
-			const sync = fs.fsyncSync;
-			vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
-				const current = fs.fstatSync(fd);
-				expect(current.isDirectory()).toBe(false);
-				const target = fs.statSync(rootFile);
-				if (target.dev === current.dev && target.ino === current.ino) {
-					if (failFileSync) throw new Error("injected published receipt file sync failure");
-					rootSyncs++;
-				}
-				sync(fd);
-			});
-			const start = observeChild(async () => {
-				expect(rootSyncs).toBe(1);
-				expect(await receipts(rootFile)).toHaveLength(1);
-			});
-			try {
-				const dispatch = await tool();
-				const failed = await dispatch.execute("write-through-failed", { ...lane, grants });
-				expect(firstToolResultText(failed)).toContain("MoveFileExW");
-				expect(firstToolResultText(failed)).toContain("1117");
-				expect(start.mock.calls).toHaveLength(0);
-				expect(root.getSubagentLaunchGrants()).toEqual([]);
-				expect(await receipts(rootFile)).toEqual([]);
-
-				shouldFail = false;
-				const success = await dispatch.execute("write-through-ok", { ...lane, name: "RetryLane", grants });
-				expect(success.details?.results[0]?.exitCode).toBe(0);
-				expect(start.mock.calls).toHaveLength(1);
-				expect(rootMoves).toBe(2);
-
-				failFileSync = true;
-				const syncFailed = await dispatch.execute("file-sync-failed", { ...lane, name: "SyncFailureLane", grants });
-				expect(firstToolResultText(syncFailed)).toContain("injected published receipt file sync failure");
-				expect(start.mock.calls).toHaveLength(1);
-				expect(root.getSubagentLaunchGrants().map(grant => grant.agentId)).toEqual(["RetryLane"]);
-			} finally {
-				load.mockRestore();
-				platform.mockRestore();
+	it.skipIf(process.platform === "win32")("does not start the child if receipt fsync fails", async () => {
+		const journal = fs.statSync(rootFile);
+		const failSync = vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
+			const current = fs.fstatSync(fd);
+			if (current.dev === journal.dev && current.ino === journal.ino) {
+				throw Object.assign(new Error("injected receipt fsync failure"), { code: "EIO" });
 			}
-		},
-	);
+		});
+		const start = observeChild(async () => {});
+		const result = await (await tool()).execute("sync-failed", { ...lane, grants });
+		expect(firstToolResultText(result)).toContain("injected receipt fsync failure");
+		expect(start.mock.calls).toHaveLength(0);
+		expect(() => root.getSubagentLaunchGrants()).toThrow("unverified");
+		failSync.mockRestore();
+		await root.close();
+		root = await SessionManager.open(rootFile);
+		expect(root.getSubagentLaunchGrants()).toHaveLength(1);
+	});
+
 
 	it("launches without granting authority from assignment text", async () => {
 		const start = observeChild(async () => expect(await receipts(rootFile)).toEqual([]));

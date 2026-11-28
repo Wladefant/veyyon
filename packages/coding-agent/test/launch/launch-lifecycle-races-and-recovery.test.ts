@@ -78,6 +78,82 @@ async function connect(projectDir: string, runtimeDir: string, idleGraceMs = 10_
 	return client;
 }
 
+async function startupFailure(outcome: "clean-exit" | "early-exit" | "no-listener"): Promise<string> {
+	const dir = await tempDir("startup-");
+	const release = path.join(dir, "release");
+	const entry = path.join(dir, "fixture.ts");
+	await fs.writeFile(
+		entry,
+		`
+import { existsSync } from "node:fs";
+import { watch, writeFile } from "node:fs/promises";
+import { declareWorkerHostEntry } from ${JSON.stringify(import.meta.resolve("@veyyon/utils/worker-host"))};
+import { createDaemonBrokerClient } from ${JSON.stringify(import.meta.resolve("../../src/launch/client"))};
+import { DAEMON_BROKER_WORKER_ARG } from ${JSON.stringify(import.meta.resolve("../../src/launch/protocol"))};
+
+if (process.argv.includes(DAEMON_BROKER_WORKER_ARG)) {
+	const outcome = ${JSON.stringify(outcome)};
+	if (outcome === "no-listener") {
+		// Stay alive without binding until the request settles. Bound cleanup if the fixture parent dies.
+		for await (const _ of watch(${JSON.stringify(dir)}, { signal: AbortSignal.timeout(20_000) })) {
+			if (existsSync(${JSON.stringify(release)})) break;
+		}
+	}
+	process.exit(outcome === "early-exit" ? 23 : 0);
+}
+
+declareWorkerHostEntry();
+const client = await createDaemonBrokerClient(${JSON.stringify(dir)}, {
+	runtimeDir: ${JSON.stringify(path.join(dir, "runtime"))},
+});
+try {
+	await client.request({ op: "ping" });
+	throw new Error("Fixture unexpectedly connected");
+} catch (error) {
+	console.log(error instanceof Error ? error.message : String(error));
+} finally {
+	client.close();
+	await writeFile(${JSON.stringify(release)}, "");
+}
+`,
+	);
+	const child = Bun.spawn([process.execPath, entry], { stdout: "pipe", stderr: "pipe", windowsHide: true });
+	const [stdout, stderr, exitCode] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+	if (exitCode !== 0) throw new Error(`Startup fixture exited ${exitCode}: ${stderr}`);
+	return stdout.trim();
+}
+
+describe("launch broker startup evidence", () => {
+	it("reports an unavailable endpoint without guessing why a candidate exited cleanly", async () => {
+		const failure = await startupFailure("clean-exit");
+		expect(failure).toContain("endpoint unavailable");
+		expect(failure).toContain("ENOENT");
+		expect(failure).toContain("candidate exited before connection (code 0)");
+		expect(failure).toContain("broker startup cause unknown");
+	}, 20_000);
+
+	it("reports the observed early candidate exit code", async () => {
+		const failure = await startupFailure("early-exit");
+		expect(failure).toContain("candidate exited before connection (code 23)");
+	}, 20_000);
+
+	it("reports the startup timeout without inventing an exit", async () => {
+		const failure = await startupFailure("no-listener");
+		expect(failure).toContain("startup timeout");
+		expect(failure).not.toContain("candidate exited");
+	}, 20_000);
+
+	it("connects to a normally starting broker and completes the ping", async () => {
+		const projectDir = await tempDir("project-startup-");
+		const client = await connect(projectDir, await tempDir("runtime-startup-"));
+		try {
+			expect(await client.request({ op: "ping" })).toMatchObject({ op: "ping" });
+		} finally {
+			await shutdown(client);
+		}
+	}, 20_000);
+});
+
 describe("launch lifecycle backoff, name reuse, and recovery", () => {
 	// POSIX signals provide the barrier. Windows termination does not run the child's SIGTERM handler.
 	it.skipIf(process.platform === "win32")("a stop queued during restart stops the replacement generation before returning", async () => {

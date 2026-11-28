@@ -6,9 +6,16 @@
   "features": {
     "irc-send-receipts": {
       "name": "IRC send receipts",
-      "description": "Report confirmed or unconfirmed peer delivery without waiting indefinitely for revival or journal persistence.",
-      "entry_files": ["packages/coding-agent/src/tools/agent/irc.ts"],
-      "tests": ["packages/coding-agent/test/tools/an-irc-send-has-a-bounded-delivery.test.ts"],
+      "description": "Report confirmed, refused, or unconfirmed peer delivery, including detached children that cannot receive IRC yet.",
+      "entry_files": [
+        "packages/coding-agent/src/async/job-manager.ts",
+        "packages/coding-agent/src/task/spawn-scheduler.ts",
+        "packages/coding-agent/src/tools/agent/irc.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/task/a-spawn-cancelled-while-it-waits-for-a-slot-frees-no-slot.test.ts",
+        "packages/coding-agent/test/tools/an-irc-send-has-a-bounded-delivery.test.ts"
+      ],
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1224",
       "risk": "high",
       "components": ["coding-agent", "IRC"],
@@ -149,6 +156,59 @@
       "owning_issue": "https://github.com/Wladefant/veyyon/issues/1157",
       "risk": "high",
       "components": ["utils", "coding-agent"]
+    },
+    "gemini-4-cloud-code-tool-replay": {
+      "name": "Gemini 4 Cloud Code Assist tool replay",
+      "description": "Preserve native tool signatures and mark a step's first tool call if it has no usable signature, including after compaction or a model switch.",
+      "entry_files": ["packages/ai/src/providers/google-shared.ts"],
+      "tests": [
+        "packages/ai/test/google-gemini3-unsigned-tool-call.test.ts",
+        "packages/coding-agent/test/session/compacted-gemini-tool-replay.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1284",
+      "risk": "medium",
+      "components": ["ai", "Cloud Code Assist"]
+    },
+    "terminal-registry-snapshot": {
+      "name": "Terminal registry snapshot",
+      "description": "Read a bounded live agent roster from the authenticated terminal owner of one session.",
+      "entry_files": [
+        "packages/coding-agent/src/launch/terminal-control.ts",
+        "packages/coding-agent/src/launch/terminal-control-session.ts",
+        "packages/coding-agent/src/launch/terminal-registry-snapshot.ts"
+      ],
+      "tests": ["packages/coding-agent/test/terminal-registry-snapshot.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/3039",
+      "risk": "high",
+      "components": ["coding-agent", "terminal-control", "agent-registry"]
+    },
+    "terminal-delivery-readback": {
+      "name": "Terminal delivery readback",
+      "description": "Report terminal queue capacity and confirm durable user entries by their stable delivery IDs.",
+      "entry_files": ["packages/coding-agent/src/launch/terminal-control.ts"],
+      "tests": [
+        "packages/coding-agent/test/a-terminal-control-acks-a-delivery-before-the-terminal-does-the-work.test.ts",
+        "packages/coding-agent/test/cli/terminal-control.test.ts",
+        "packages/coding-agent/test/a-telegram-delivery-trace-end-to-end.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/3473",
+      "risk": "high",
+      "components": ["coding-agent", "terminal-control"]
+    },
+    "session-stderr-retention": {
+      "name": "Supervised child stderr retention",
+      "description": "Bound new stderr captures across child generations without mutating live segments or recent incident evidence.",
+      "entry_files": [
+        "packages/coding-agent/src/cli/supervisor/process.ts",
+        "packages/coding-agent/src/cli/supervisor/session-stderr.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/cli/session-stderr-capture.test.ts",
+        "packages/coding-agent/test/process-supervisor-reports-unexpected-deaths.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/superboard/issues/3367",
+      "risk": "high",
+      "components": ["coding-agent", "supervisor"]
     }
   }
 }

@@ -14,10 +14,12 @@ import { isTerminalYieldToolResult } from "../session/runtime/yield-tracker";
 import { TOOL } from "../tools/core/builtin-names";
 import {
 	serveTerminalControl,
+	type TerminalControlHandle,
 	type TerminalDeliveryOptions,
 	TerminalNotReadyError,
 	type TerminalSecretRequest,
 } from "./terminal-control";
+import { observeTerminalRegistry } from "./terminal-registry-snapshot";
 
 export interface TerminalTurnProvenance {
 	hasOperatorMessage: boolean;
@@ -85,7 +87,7 @@ type TerminalTranscriptText = {
 };
 
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
-export async function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
+export async function startTerminalControl(mode: InteractiveMode): Promise<TerminalControlHandle> {
 	let revision = "";
 	let entries: TerminalTranscriptText[] = [];
 	// Cursor into the journal: how many entries were converted and the id of the last one. A leaf
@@ -154,6 +156,9 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			cwd: mode.sessionManager.getCwd(),
 			sessionFile: mode.sessionManager.getSessionFile() ?? "",
 		}),
+		registrySnapshot: mode.collabGuest
+			? undefined
+			: sessionId => (mode.collabGuest ? undefined : observeTerminalRegistry(sessionId, mode.session)),
 		history,
 		isIdle() {
 			const queued = mode.session.getQueuedMessages();

@@ -148,6 +148,67 @@ describe("job list snapshot", () => {
 		manager.cancel("AuthLoader");
 	});
 
+	test("projects startupPhase as status starting until ready, then running", async () => {
+		const manager = createManager();
+		const { promise: readyGate, resolve: markReady } = Promise.withResolvers<void>();
+		manager.register(
+			"task",
+			"AuthLoader",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("resolve-model");
+				await readyGate;
+				setStartupPhase("ready");
+				await neverResolves();
+				return "";
+			},
+			{ id: "AuthLoader", agentId: "AuthLoader", ownerId: "Main" },
+		);
+		const tool = new JobTool(createToolSession({ manager, agentId: "Main" }));
+		await Promise.resolve();
+
+		const starting = await tool.execute("call", { list: true });
+		const startingJob = starting.details?.jobs.find(job => job.id === "AuthLoader");
+		expect(startingJob?.status).toBe("starting");
+		expect(startingJob?.startupPhase).toBe("resolve-model");
+		expect(firstToolResultText(starting)).toMatch(
+			/`AuthLoader` \[task\] — AuthLoader \(starting: resolve-model, up \S+\)/,
+		);
+
+		markReady();
+		await Promise.resolve();
+		const running = await tool.execute("call", { list: true });
+		const runningJob = running.details?.jobs.find(job => job.id === "AuthLoader");
+		expect(runningJob?.status).toBe("running");
+		expect(runningJob?.startupPhase).toBeUndefined();
+		expect(firstToolResultText(running)).toMatch(/`AuthLoader` \[task\] — AuthLoader \(up \S+\)/);
+		manager.cancel("AuthLoader");
+	});
+
+	test("retains pre-ready startupPhase and errorText on terminal failure", async () => {
+		const manager = createManager();
+		manager.register(
+			"task",
+			"BrokenChild",
+			async ({ setStartupPhase }) => {
+				setStartupPhase("create-session");
+				throw new Error("model unavailable");
+			},
+			{ id: "BrokenChild", agentId: "BrokenChild", ownerId: "Main" },
+		);
+		await manager.waitForAll();
+		const tool = new JobTool(createToolSession({ manager, agentId: "Main" }));
+
+		const failed = await tool.execute("call", { list: true });
+		const failedJob = failed.details?.jobs.find(job => job.id === "BrokenChild");
+		expect(failedJob?.status).toBe("failed");
+		expect(failedJob?.startupPhase).toBe("create-session");
+		expect(failedJob?.errorText).toContain("model unavailable");
+		const text = firstToolResultText(failed);
+		expect(text).toContain("### BrokenChild [task] — failed");
+		expect(text).toContain("Startup phase: create-session");
+		expect(text).toContain("Error: model unavailable");
+	});
+
 	test("a settled job in retention does not hide its re-woken agent", async () => {
 		const manager = createManager();
 		const registry = new AgentRegistry();
