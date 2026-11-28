@@ -47,6 +47,9 @@ describe("AgentSession auto-compaction queue resume", () => {
 				"\t\tif (gate) await gate;",
 				SHORT_CIRCUIT_COMPACTION_RETURN,
 				"\t});",
+				'\tpi.on("session_before_compact", () => {',
+				`\t\tglobalThis.${runtimeSignalStoreKey}.push("before_compact:second");`,
+				"\t});",
 				'\tpi.on("auto_compaction_start", async (event) => {',
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
 				'\t\tsignals.push("compaction:start:" + event.reason);',
@@ -236,6 +239,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		// The in-flight auto pass MUST be cancelled so it cannot race the manual run
 		// and double-rewrite session history.
 		expect(autoAborted).toBe(true);
+		expect(getRuntimeSignals()).not.toContain("before_compact:second");
 		expect(appendCompactionSpy).not.toHaveBeenCalled();
 	});
 

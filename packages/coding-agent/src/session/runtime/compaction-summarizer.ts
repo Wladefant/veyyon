@@ -63,7 +63,7 @@ export interface CompactionSummarizerHost {
 	/** The session's system prompt before per-turn extension changes. */
 	baseSystemPrompt(): string[];
 	/** The active memory backend's extra summary context, or undefined. */
-	memoryBackendContext(preparation: CompactionPreparation): Promise<string | undefined>;
+	memoryBackendContext(preparation: CompactionPreparation, signal: AbortSignal): Promise<string | undefined>;
 }
 
 /** What `session_compacting` handlers and the memory backend add to a summary request. */
@@ -192,8 +192,10 @@ export class CompactionSummarizer {
 			remoteInstructions: this.#host.baseSystemPrompt().join("\n\n"),
 			codexCompaction,
 		});
+		signal.throwIfAborted();
 		if (remote) return remote;
 		await readCompactionSpanBack(preparation);
+		signal.throwIfAborted();
 		return this.#compactWithFallbackModel(
 			preparation,
 			customInstructions,
@@ -346,6 +348,7 @@ export class CompactionSummarizer {
 			return undefined;
 		}
 		const apiKey = await this.#session.modelRegistry.getApiKey(model, this.#session.sessionId);
+		signal.throwIfAborted();
 		if (!apiKey) {
 			// The loader announced a remote pass from the sync half of this gate;
 			// a missing credential must not downgrade to a local pass silently.
@@ -362,6 +365,7 @@ export class CompactionSummarizer {
 			return undefined;
 		}
 		if (!serverCompactionChainsWindow(preparation, model)) await readCompactionSpanBack(preparation);
+		signal.throwIfAborted();
 		try {
 			return await compactWithProvider(
 				this.#host.secrets().obfuscatePreparationForProvider(preparation),
@@ -439,6 +443,7 @@ export class CompactionSummarizer {
 				customInstructions,
 				candidateOptions,
 			);
+			signal.throwIfAborted();
 			const candidateWindow =
 				typeof configuredCompactionWindow === "number" && configuredCompactionWindow > 0
 					? configuredCompactionWindow
@@ -457,6 +462,7 @@ export class CompactionSummarizer {
 				continue;
 			}
 			const apiKey = await this.#session.modelRegistry.getApiKey(candidate, this.#session.sessionId);
+			signal.throwIfAborted();
 			if (!apiKey) {
 				skipReasons.set(formatModelString(candidate), "it is not authenticated");
 				continue;
@@ -510,11 +516,12 @@ export class CompactionSummarizer {
 						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					},
 				);
+				signal.throwIfAborted();
 				this.#recordSummaryStaging(candidate, compacted);
 				this.#announceCompactionFallback(candidates, candidate, skipReasons);
 				return compacted;
 			} catch (error) {
-				if (!AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
+				if (signal.aborted || !AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
 					throw error;
 				}
 				skipReasons.set(formatModelString(candidate), "its credentials were rejected");
@@ -537,6 +544,7 @@ export class CompactionSummarizer {
 	async prepareCompactionFromHooks(
 		preparation: CompactionPreparation,
 		hookCompaction: CompactionResult | undefined,
+		signal: AbortSignal,
 	): Promise<CompactionHookPreparation> {
 		let hookContext: string[] | undefined;
 		let hookPrompt: string | undefined;
@@ -544,12 +552,17 @@ export class CompactionSummarizer {
 
 		if (!hookCompaction && this.#session.extensionRunner?.hasHandlers("session_compacting")) {
 			await readCompactionSpanBack(preparation);
+			signal.throwIfAborted();
 			const compactMessages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
-			const result = (await this.#session.extensionRunner.emit({
-				type: "session_compacting",
-				sessionId: this.#session.sessionId,
-				messages: compactMessages,
-			})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
+			const result = await this.#session.extensionRunner.emit(
+				{
+					type: "session_compacting",
+					sessionId: this.#session.sessionId,
+					messages: compactMessages,
+				},
+				signal,
+			);
+			signal.throwIfAborted();
 
 			// The hook may have awaited arbitrary extension work. Sanitize its
 			// raw text as soon as control returns, before any later formatting.
@@ -560,7 +573,9 @@ export class CompactionSummarizer {
 			preserveData = result?.preserveData;
 		}
 
-		const memoryBackendContext = await this.#host.memoryBackendContext(preparation);
+		signal.throwIfAborted();
+		const memoryBackendContext = await this.#host.memoryBackendContext(preparation, signal);
+		signal.throwIfAborted();
 		if (memoryBackendContext) {
 			// Memory backends are async and can race a secret-runtime refresh.
 			// Resolve the authoritative runtime only after their await completes.
@@ -620,8 +635,10 @@ export class CompactionSummarizer {
 			initiatorOverride: "agent",
 			codexCompaction,
 		});
+		signal.throwIfAborted();
 		if (remote) return remote;
 		await readCompactionSpanBack(preparation);
+		signal.throwIfAborted();
 
 		const configuredCompactionWindow = this.#session.settings.get("compaction.modelContextWindow");
 		// Why each candidate before the one that ran was passed over, so the
@@ -631,11 +648,13 @@ export class CompactionSummarizer {
 		for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
 			const candidate = candidates[candidateIndex];
 			const apiKey = await this.#session.modelRegistry.getApiKey(candidate, this.#session.sessionId);
+			signal.throwIfAborted();
 			if (!apiKey) {
 				skipReasons.set(formatModelString(candidate), "it is not authenticated");
 				continue;
 			}
 			const cachePrefix = await this.#cacheAlignedCompactionPrefix(candidate, signal);
+			signal.throwIfAborted();
 			const candidateOptions: SummaryOptions = {
 				promptOverride: this.#host.secrets().obfuscateTextForProvider(hooks.hookPrompt),
 				extraContext: hooks.hookContext,
@@ -674,6 +693,7 @@ export class CompactionSummarizer {
 				undefined,
 				candidateOptions,
 			);
+			signal.throwIfAborted();
 			if (candidateWindow > 0 && summarizePayloadTokens > candidateWindow) {
 				logger.warn("compaction candidate skipped: summarization payload exceeds its context window", {
 					candidate: formatModelString(candidate),
@@ -708,6 +728,7 @@ export class CompactionSummarizer {
 				signal,
 				candidateIndex < candidates.length - 1,
 			);
+			signal.throwIfAborted();
 			if ("result" in attempt) {
 				this.#recordSummaryStaging(candidate, attempt.result);
 				this.#announceCompactionFallback(candidates, candidate, skipReasons);

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Reject late staged summaries after cancellation so they cannot refill shared checkpoints ([Refs #1225](https://github.com/Wladefant/veyyon/issues/1225)).
 - Let the retry ladder move past a Codex fallback when credential lookup stalls ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
 - Exclude restated session blocks from the retained-history budget so manual compaction leaves genuinely small conversations alone ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 

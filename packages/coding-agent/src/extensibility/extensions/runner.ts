@@ -789,7 +789,8 @@ export class ExtensionRunner {
 		}
 	}
 
-	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
+	async emit<TEvent extends RunnerEmitEvent>(event: TEvent, signal?: AbortSignal): Promise<RunnerEmitResult<TEvent>> {
+		const handlerSignal = event.type === "session_before_compact" ? event.signal : signal;
 		// Defer the per-event context allocation (and the Promise.race/Bun.sleep
 		// timeout machinery) to the first matching handler. Streaming sessions emit
 		// message_update / tool_execution_* per delta with usually no extension
@@ -818,6 +819,7 @@ export class ExtensionRunner {
 			ctx ??= this.createContext();
 
 			for (const handler of handlers) {
+				handlerSignal?.throwIfAborted();
 				const handlerResult = await this.#runHandlerWithTimeout(
 					handler,
 					event,
@@ -825,6 +827,7 @@ export class ExtensionRunner {
 					ext,
 					handlerTimeoutForEvent(event.type),
 				);
+				handlerSignal?.throwIfAborted();
 
 				if (isSessionBeforeEvent(event) && handlerResult) {
 					result = handlerResult as SessionBeforeEventResult;

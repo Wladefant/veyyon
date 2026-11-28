@@ -167,4 +167,26 @@ describe("a staged summary that failed part way", () => {
 
 		expect(result.summaryStages).toBe(provider.sent.length);
 	});
+
+	test("does not save late provider results as checkpoints after cancellation", async () => {
+		const checkpoints = new Map<string, string>();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const controller = new AbortController();
+		const compacting = compact(preparation(), codexModel(), "test-key", undefined, controller.signal, {
+			completeImpl: async () => {
+				entered.resolve();
+				await release.promise;
+				return response("late provider result");
+			},
+			summaryStaging: "staged",
+			stagedSummaryCheckpoints: checkpoints,
+		});
+		const result = compacting.catch((error: unknown) => error);
+		await entered.promise;
+		controller.abort();
+		release.resolve();
+		expect(await result).toMatchObject({ name: "AbortError" });
+		expect(checkpoints.size).toBe(0);
+	});
 });
