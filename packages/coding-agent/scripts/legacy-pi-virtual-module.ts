@@ -279,7 +279,15 @@ export async function resolveBundledPiExports(
 		throw: false,
 	});
 	if (!output.success || !output.metafile) {
-		throw new Error(`Bundled Pi export pass failed:\n${output.logs.map(log => log.message).join("\n")}`);
+		const diagnostics = output.logs.map(log => {
+			const { position } = log;
+			if (!position?.file) return log.message;
+			const relative = path.relative(repoRoot, position.file);
+			// On Windows, relative() returns an absolute path for files on another drive.
+			const file = path.isAbsolute(relative) ? path.basename(relative) : relative;
+			return `${file}:${position.line}:${position.column}: ${log.message}`;
+		});
+		throw new Error(`Bundled Pi export pass failed:\n${diagnostics.join("\n")}`);
 	}
 	// Metafile paths are relative to the working directory, not to `root`.
 	const exportsByFile = new Map<string, readonly string[]>();
