@@ -22,7 +22,7 @@ type DerivedGroups = Exclude<keyof GroupTypeMap, "compaction" | "retry" | "memor
 type DerivedChecks = { [K in DerivedGroups]: Equal<GroupTypeMap[K], GroupSettings<K>> };
 type _DerivedGroupsMatchSchema = Assert<Equal<DerivedChecks[DerivedGroups], true>>;
 
-type _CompactionOptional = Assert<Equal<OptionalKeys<CompactionSettings>, "model">>;
+type _CompactionOptional = Assert<Equal<OptionalKeys<CompactionSettings>, "model" | "thresholdByModel">>;
 type _CompactionThreshold = Assert<Equal<CompactionSettings["threshold"], string>>;
 type _CompactionReserve = Assert<Equal<CompactionSettings["reserveTokens"], number | undefined>>;
 type _CompactionLegacyFields = Assert<

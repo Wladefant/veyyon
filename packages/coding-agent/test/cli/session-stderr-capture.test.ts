@@ -209,7 +209,8 @@ describe("startStderrCapture", () => {
 		const options = { sessionStderrDir: dir, maxBytes: 16, maxRetainedSegments: 1, forwardStderr: false };
 		const capture = startStderrCapture(first.child, 50, options);
 		first.stderr.write("first ");
-		const [relative] = fs.readdirSync(dir, { recursive: true }).filter(name => name.endsWith(".log"));
+		const relative = fs.readdirSync(dir, { recursive: true, encoding: "utf8" }).find(name => name.endsWith(".log"));
+		if (relative === undefined) throw new Error("Expected an active stderr capture file");
 		const active = path.join(dir, relative);
 		const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
 		fs.utimesSync(active, expired, expired);

@@ -1441,7 +1441,7 @@ export class BashTool
 			// PTY output carries no cancel/timeout notice of its own; annotate so
 			// the model can tell an abort from a plain failure. Cap first so a
 			// killed command's output cannot exceed the inline budget.
-			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
+			const out = await this.#boundBashOutput(normalizeResultOutput(result), result);
 			const message =
 				isInteractiveResult(result) && out ? appendNotice(out, "[Command aborted]") : out || "Command aborted";
 			if (signal?.aborted) {
@@ -1450,7 +1450,7 @@ export class BashTool
 			throw new ToolError(`${message}${captureNotice}`);
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			const out = await this.#boundBashOutput(normalizeResultOutput(result), result.artifactId);
+			const out = await this.#boundBashOutput(normalizeResultOutput(result), result);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
 			throw new ToolError(`${out ? `${out}\n\n[${message}]` : message}${captureNotice}`);
