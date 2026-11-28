@@ -1,37 +1,10 @@
-/**
- * WHY: a Gemini body that ends without `finishReason` was refused outright.
- *
- * Both Google decoders — `consumeGoogleStream` for the public and Vertex
- * dialects, and the Cloud Code Assist loop in `google-gemini-cli.ts` — treated a
- * missing terminal marker as a truncated response and threw
- * `incomplete-stream`, whatever had already arrived. `utils/terminalless-eof.ts`
- * exists precisely because that decision has two wrong answers and one right
- * one, and its header names this arm: several compatible servers never send the
- * marker, so refusing every marker-less EOF fails turns that were complete. The
- * other four dialects (completions, responses, Bedrock, Ollama) already read the
- * owner; Google held the fifth and sixth copies of the judgement, both stuck on
- * "reject".
- *
- * THE CLASS. One concept — "what does an EOF without a marker mean" — decided
- * per provider. It closes by every producer calling
- * `stopReasonForTerminallessEof`, so a turn that carried usable content settles
- * on its accumulated shape and one that carried nothing is still refused. Both
- * Google dialects are swept here, and the refusal arm is asserted alongside the
- * acceptance arm so routing through the owner cannot be mistaken for
- * accepting everything.
- *
- * WHAT THIS DOES NOT CATCH. The sweep is over the two Google dialects, not over
- * every api; the empty-stream half of the class is
- * `a-stream-that-stops-mid-turn-is-never-reported-as-a-finished-one.test.ts`,
- * which pins all fourteen. A dialect that stops calling the owner and hardcodes
- * `"stop"` would pass the acceptance tests here and fail the refusal ones, which
- * is why both arms are present. Nothing here proves the marker-less body is
- * common in the field: it was observed on Cloud Code Assist, and the fixtures
- * below are hand-built wire frames, not a capture.
- */
+// Gemini Developer API and Cloud Code Assist require a finish reason before
+// accepting output. Vertex-compatible endpoints keep the legacy EOF policy.
+// These wrapper tests do not exercise the agent tool dispatcher.
 import { describe, expect, it } from "bun:test";
 import { streamGoogle } from "@veyyon/ai/providers/google";
 import { streamGoogleGeminiCli } from "@veyyon/ai/providers/google-gemini-cli";
+import { streamGoogleVertex } from "@veyyon/ai/providers/google-vertex";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { stopReasonForTerminallessEof } from "@veyyon/ai/utils/terminalless-eof";
 import { buildModel } from "@veyyon/catalog/build";
@@ -61,6 +34,7 @@ const genaiModel: Model<"google-generative-ai"> = buildModel({
 	contextWindow: 200_000,
 	maxTokens: 32_000,
 });
+const vertexModel = buildModel({ ...genaiModel, api: "google-vertex" });
 
 const cliModel: Model<"google-gemini-cli"> = buildModel({
 	id: "gemini-3-flash",
@@ -86,9 +60,9 @@ const always = (response: () => Response): FetchImpl => {
 	return async () => response();
 };
 
-describe("a Google turn that arrived whole is not refused for a missing marker", () => {
-	it("settles a text-only body with no finishReason as a finished turn", async () => {
-		const stream = streamGoogle(genaiModel, context, {
+describe("Google streams without a finish reason", () => {
+	it("preserves marker-less text completion for Vertex-compatible endpoints", async () => {
+		const stream = streamGoogleVertex(vertexModel, context, {
 			apiKey: "k",
 			fetch: always(() => sseResponse([genaiParts({ text: "Hello!" })])),
 		});
@@ -99,15 +73,15 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 		expect(result.errorMessage).toBeUndefined();
 	});
 
-	it("settles a complete function call with no finishReason as a tool-use turn", async () => {
+	it("rejects a complete-looking Gemini function call with no finishReason", async () => {
 		const stream = streamGoogle(genaiModel, context, {
 			apiKey: "k",
 			fetch: always(() => sseResponse([genaiParts({ functionCall: { name: "read", args: { path: "a.ts" } } })])),
 		});
 		const result = await stream.result();
 
-		expect(result.stopReason).toBe("toolUse");
-		expect(result.content.filter(block => block.type === "toolCall")).toHaveLength(1);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("without a finish reason");
 	});
 
 	/**
@@ -127,14 +101,15 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 		expect(result.errorMessage).toContain("without a finish reason");
 	});
 
-	it("settles a Cloud Code Assist body with no finishReason as a finished turn", async () => {
+	it("retains partial Cloud Code Assist text without marking the turn complete", async () => {
 		const stream = streamGoogleGeminiCli(cliModel, context, {
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
 			fetch: always(() => sseResponse([ccaParts({ text: "From CCA" })])),
 		});
 		const result = await stream.result();
 
-		expect(result.stopReason).toBe("stop");
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("without a finish reason");
 		expect(textOf(result)).toBe("From CCA");
 	});
 
@@ -149,12 +124,7 @@ describe("a Google turn that arrived whole is not refused for a missing marker",
 		expect(result.errorMessage).toContain("without a finish reason");
 	});
 
-	/**
-	 * The owner's own contract, pinned beside its callers. Both Google decoders
-	 * compute `toolBatchIsComplete` the same way — every tool block carries a
-	 * name — so the judgement the providers delegate is the judgement asserted.
-	 */
-	it("delegates to the shared judgement rather than a per-provider guess", () => {
+	it("leaves the shared compatibility judgement intact", () => {
 		const text = [{ type: "text" as const, text: "answer" }];
 		const namedCall = [{ type: "toolCall" as const, id: "1", name: "read", arguments: {} }];
 

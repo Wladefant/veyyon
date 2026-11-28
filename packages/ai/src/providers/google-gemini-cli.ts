@@ -63,9 +63,10 @@ import {
 	isThinkingPart,
 	MAX_EMPTY_STREAM_RETRIES,
 	mapStopReasonString,
+	observeGoogleModelVersion,
 	resetGoogleStreamOutputForRetry,
 	retainThoughtSignature,
-	settleGoogleTerminallessEof,
+	throwGoogleIncompleteStream,
 	throwIfGooglePromptBlocked,
 } from "./google-shared";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
@@ -544,6 +545,7 @@ class CloudCodeAssistResponseDecoder {
 	 */
 	#heldSignature: string | undefined;
 	#sawLeak = false;
+	#reportedModel: string | undefined;
 	sawFinishReason = false;
 	/** The response id, committed as the next request's `last_execution_id` on success. */
 	responseId: string | undefined;
@@ -552,6 +554,8 @@ class CloudCodeAssistResponseDecoder {
 
 	constructor(
 		readonly model: Model<"google-gemini-cli">,
+		readonly requestModelId: string,
+		readonly canonicalModelId: string | undefined,
 		readonly output: AssistantMessage,
 		stream: AssistantMessageEventStream,
 		readonly toolNames: Set<string>,
@@ -573,6 +577,13 @@ class CloudCodeAssistResponseDecoder {
 		if (!response) return;
 		if (response.responseId) this.responseId = response.responseId;
 		throwIfGooglePromptBlocked(response, this.model.provider);
+		this.#reportedModel = observeGoogleModelVersion(
+			response.modelVersion,
+			this.#reportedModel,
+			this.requestModelId,
+			this.model.provider,
+			this.canonicalModelId,
+		);
 
 		const candidate = response.candidates?.[0];
 		const parts = candidate?.content?.parts;
@@ -660,6 +671,8 @@ interface CloudCodeAssistPlan {
 	readonly endpoints: readonly string[];
 	readonly headers: Record<string, string>;
 	readonly bodyJson: string;
+	readonly requestModelId: string;
+	readonly canonicalModelId: string | undefined;
 	readonly providerState: AntigravityProviderSessionState | undefined;
 	/** The signed-in account, named in a validation-required error. */
 	readonly email: string | undefined;
@@ -810,6 +823,13 @@ class GeminiCliStreamRun {
 			endpoints,
 			headers,
 			bodyJson,
+			requestModelId: requestBody.model,
+			canonicalModelId:
+				isAntigravity && requestBody.model === "gemini-4-hydrogen-xhigh"
+					? "gemini-4-hydrogen"
+					: requestBody.model === model.requestModelId
+						? model.id
+						: undefined,
 			providerState,
 			email: credentials.email,
 			// Direct callers that skip `register-builtins` (which installs the iterator-level
@@ -881,7 +901,6 @@ class GeminiCliStreamRun {
 		if (this.options?.signal?.aborted) {
 			throw new AIError.RequestAbortError("Request was aborted");
 		}
-		if (!decoder.sawFinishReason) settleGoogleTerminallessEof(this.#output, this.model.provider, "Cloud Code Assist");
 
 		const state = plan.providerState;
 		if (state) {
@@ -932,7 +951,7 @@ class GeminiCliStreamRun {
 				throw new AIError.RequestAbortError("Request was aborted");
 			}
 			if (emptyAttempt > 0) current = await this.#resend(plan, requestUrl, emptyAttempt);
-			const decoder = await this.#decode(current, plan.toolNames);
+			const decoder = await this.#decode(current, plan);
 			if (this.#output.stopReason !== "stop" || decoder.receivedContent) return decoder;
 			// A thought-only STOP is a complete provider response, not a
 			// transiently empty transport. Replaying the identical request
@@ -977,7 +996,7 @@ class GeminiCliStreamRun {
 		return response;
 	}
 
-	async #decode(response: Response, toolNames: Set<string>): Promise<CloudCodeAssistResponseDecoder> {
+	async #decode(response: Response, plan: CloudCodeAssistPlan): Promise<CloudCodeAssistResponseDecoder> {
 		const body = response.body;
 		if (!body) {
 			throw new AIError.ProviderResponseError("No response body", {
@@ -988,9 +1007,11 @@ class GeminiCliStreamRun {
 		const { model, options } = this;
 		const decoder = new CloudCodeAssistResponseDecoder(
 			model,
+			plan.requestModelId,
+			plan.canonicalModelId,
 			this.#output,
 			this.stream,
-			toolNames,
+			plan.toolNames,
 			this.#ensureStarted,
 		);
 		const events = eventStreamBody(response, body, response.url);
@@ -1000,6 +1021,7 @@ class GeminiCliStreamRun {
 			decoder.apply(chunk);
 		}
 		decoder.finish();
+		if (!decoder.sawFinishReason) throwGoogleIncompleteStream(model.provider, "Cloud Code Assist");
 		return decoder;
 	}
 
@@ -1257,7 +1279,6 @@ export function buildRequest(
 			},
 		};
 	}
-
 
 	if (isAntigravity) {
 		// The real client sends a fixed per-model output cap independent of the
