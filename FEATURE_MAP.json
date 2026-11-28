@@ -202,6 +202,23 @@
       "owning_issue": "https://github.com/Wladefant/superboard/issues/3367",
       "risk": "high",
       "components": ["coding-agent", "supervisor"]
-    }
+    },
+      "read-url-lists": {
+        "name": "Read lists with web URLs",
+        "description": "Read semicolon-delimited targets separately without splitting semicolons inside a URL.",
+        "entry_files": [
+          "packages/coding-agent/src/tools/fs/read.ts",
+          "packages/coding-agent/src/tools/fs/read-paths.ts"
+        ],
+        "tests": [
+          "packages/coding-agent/test/tools/a-url-read-degrades-on-a-payload-or-link-it-cannot-use.test.ts",
+          "packages/coding-agent/test/tools/a-read-of-a-semicolon-list-reaches-every-target.test.ts"
+        ],
+        "owning_issue": "https://github.com/Wladefant/veyyon/issues/1104",
+        "risk": "low",
+        "docs": [
+          "docs/handbook/src/context/reads-search.md"
+        ]
+      }
   }
 }
