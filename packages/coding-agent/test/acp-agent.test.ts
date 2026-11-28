@@ -1703,39 +1703,59 @@ describe("ACP agent", () => {
 		}
 	}
 
-	it("replays the full transcript after loading a compacted session from disk", async () => {
+	it.each(["live", "cold"] as const)("replays displayable messages from a %s compacted session", async mode => {
 		const harness = await createHarness();
-		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const { sessionId } = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.sessions.at(-1)!;
-		session.sessionManager.appendMessage({ role: "user", content: "EARLY-USER-ORIGINAL", timestamp: Date.now() });
-		session.sessionManager.appendMessage(makeAssistantMessage("EARLY-ASSISTANT-ORIGINAL"));
-		const tailUserId = session.sessionManager.appendMessage({
-			role: "user",
-			content: "TAIL-USER-ORIGINAL",
-			timestamp: Date.now(),
-		});
-		session.sessionManager.appendMessage(makeAssistantMessage("TAIL-ASSISTANT-ORIGINAL"));
-		session.sessionManager.appendCompaction("COMPACTION-SUMMARY", undefined, tailUserId, 1000);
-		await session.sessionManager.ensureOnDisk();
-		await session.sessionManager.flush();
-		const file = session.sessionManager.getSessionFile();
-		if (!file) throw new Error("ACP session has no transcript file");
-		harness.updates.length = 0;
-		await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
-		const replay = harness.updates.flatMap(({ update }) =>
-			(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
-			update.content.type === "text"
-				? [update.content.text]
-				: [],
-		);
-		expect(replay).toContain("EARLY-USER-ORIGINAL");
-		expect(replay).toContain("EARLY-ASSISTANT-ORIGINAL");
-		expect(replay).toContain("TAIL-USER-ORIGINAL");
-		expect(replay).toContain("TAIL-ASSISTANT-ORIGINAL");
-		expect(session.sessionId).toBe(created.sessionId);
-		expect(session.sessionManager.getSessionFile()).toBe(file);
-		await harness.agent.closeSession({ sessionId: created.sessionId });
-		harness.abortController.abort();
+		const manager = session.sessionManager;
+		try {
+			manager.appendMessage({ role: "user", content: "EARLY-USER-ORIGINAL", timestamp: Date.now() });
+			manager.appendMessage(makeAssistantMessage("EARLY-ASSISTANT-ORIGINAL"));
+			manager.appendCustomMessageEntry("early-visible", "EARLY-VISIBLE-CUSTOM", true);
+			manager.appendCustomMessageEntry("early-hidden", "EARLY-HIDDEN-CUSTOM", false);
+			const tailUserId = manager.appendMessage({
+				role: "user",
+				content: "TAIL-USER-ORIGINAL",
+				timestamp: Date.now(),
+			});
+			manager.appendMessage(makeAssistantMessage("TAIL-ASSISTANT-ORIGINAL"));
+			manager.appendCompaction("COMPACTION-SUMMARY", undefined, tailUserId, 1000);
+			manager.appendCustomMessageEntry("late-visible", "LATE-VISIBLE-CUSTOM", true);
+			manager.appendCustomMessageEntry("late-hidden", "LATE-HIDDEN-CUSTOM", false);
+			manager.appendCustomMessageEntry("late-default", "LATE-DEFAULT-CUSTOM", undefined);
+			await manager.ensureOnDisk();
+			await manager.flush();
+			const file = manager.getSessionFile();
+			if (!file) throw new Error("ACP session has no transcript file");
+			if (mode === "cold") {
+				await harness.agent.closeSession({ sessionId });
+				expect(session.disposed).toBe(true);
+			}
+
+			harness.updates.length = 0;
+			await harness.agent.loadSession({ sessionId, cwd: harness.cwdA, mcpServers: [] });
+			const loaded = harness.sessions.at(-1)!;
+			expect(loaded.sessionId).toBe(sessionId);
+			expect(loaded.sessionManager.getSessionFile()).toBe(file);
+			expect(loaded === session).toBe(mode === "live");
+			const replay = harness.updates.flatMap(({ update }) =>
+				(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
+				update.content.type === "text"
+					? [update.content.text]
+					: [],
+			);
+			expect(replay).toEqual([
+				"EARLY-USER-ORIGINAL",
+				"EARLY-ASSISTANT-ORIGINAL",
+				"EARLY-VISIBLE-CUSTOM",
+				"TAIL-USER-ORIGINAL",
+				"TAIL-ASSISTANT-ORIGINAL",
+				"LATE-VISIBLE-CUSTOM",
+			]);
+		} finally {
+			await harness.agent.closeSession({ sessionId });
+			harness.abortController.abort();
+		}
 	});
 
 	it("loads a stored session by ID when the client cwd has changed", async () => {

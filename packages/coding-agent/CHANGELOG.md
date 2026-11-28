@@ -34,6 +34,7 @@
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Omit non-display custom messages when ACP replays history on `session/load` ([#990](https://github.com/Wladefant/veyyon/issues/990)).
 - Stage Windows WriteTool edits and archive rewrites with the existing file's DACL. Write archive bytes through the staging handle instead of reopening the temp path ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
 - Fence synchronized sessions after an invalid initial lease, and wait for queued message writes before deduplicating results ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
