@@ -4,6 +4,22 @@
   "repository": "Wladefant/veyyon",
   "description": "Feature map for Veyyon coding-agent capabilities.",
   "features": {
+    "irc-artifact-links": {
+      "name": "IRC artifact links",
+      "description": "Bind local IRC links to the artifact store that issued them.",
+      "entry_files": [
+        "packages/coding-agent/src/task/irc-bus.ts",
+        "packages/coding-agent/src/internal-urls/artifact-protocol.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/tools/irc-artifact-link.test.ts",
+        "packages/coding-agent/src/internal-urls/__tests__/artifact-recovery-stays-with-its-session.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/1080",
+      "risk": "low",
+      "components": ["coding-agent", "IRC"],
+      "docs": ["docs/tools/irc.md"]
+    },
     "irc-send-receipts": {
       "name": "IRC send receipts",
       "description": "Report confirmed, refused, or unconfirmed peer delivery, including detached children that cannot receive IRC yet.",
@@ -219,6 +235,22 @@
         "docs": [
           "docs/handbook/src/context/reads-search.md"
         ]
-      }
+      },
+    "eval-status-sanitization": {
+      "name": "Eval tool status sanitization",
+      "description": "Filter credential data from tool status before publishing live events or retaining results.",
+      "entry_files": [
+        "packages/coding-agent/src/eval/agent-bridge.ts",
+        "packages/coding-agent/src/eval/js/context-manager.ts",
+        "packages/coding-agent/src/eval/js/executor.ts",
+        "packages/coding-agent/src/eval/js/tool-bridge.ts",
+        "packages/coding-agent/src/secrets/producer-output.ts"
+      ],
+      "tests": ["packages/coding-agent/test/eval/an-eval-status-withholds-credential-data.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/939",
+      "risk": "medium",
+      "components": ["coding-agent", "eval"],
+      "docs": ["docs/tools/eval.md"]
+    }
   }
 }

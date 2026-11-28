@@ -15,6 +15,12 @@
   - `packages/coding-agent/src/config/settings-domains/tools.ts`: `irc.timeoutMs`.
   - `packages/coding-agent/src/modes/terminal/controllers/event-controller.ts`: renders IRC events into chat UI.
 
+## Artifact links
+
+A local IRC send adds the source session to numeric `artifact://` links. The recipient reads the source store, even if its own store has the same numeric ID. Line selectors and links that already name a session stay intact. A bare numeric link still reads from the current session when used directly.
+
+Use an absolute artifact file path for a durable `session:` notice. Those notices can cross processes, where the source store may not be registered.
+
 ## Cross-session notices
 
 Use `irc({ op: "list" })` to see same-conversation agents **and** registered live sessions. For a session on the same host, send `{ op: "send", to: "session:project=polysimulator", message: "..." }` when the terminal owner publishes a workspace ending in `polysimulator`. The project label is the last component of its reported absolute cwd, case-insensitive for project matching; it is not verified Git project identity. For multiple worktrees or a differently named cwd, use the exact id from the roster or `session:cwd=<absolute path>`.

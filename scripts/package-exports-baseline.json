@@ -2149,7 +2149,7 @@
 			"loadSessionCustomTools",
 			"loadSessionExtensions",
 			"loadSessionFile",
-			"loadSessionMessagesReadOnly",
+			"loadSessionHistoryReadOnly",
 			"loadSkills",
 			"loadSkillsFromDir",
 			"loadSshTool",
