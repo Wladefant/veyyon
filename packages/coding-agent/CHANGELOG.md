@@ -43,6 +43,7 @@
 - Retry assistant drafts interrupted by a socket reset when their text can be retracted, without replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
 - Keep Windows release preparation running by leaving Rust checks to release CI ([Refs #728](https://github.com/Wladefant/veyyon/issues/728)).
 - Raise `TimeoutError` when a delegated Python eval `read()` stalls on the tool bridge. Keep `local://` reads on disk ([Refs #1086](https://github.com/Wladefant/veyyon/issues/1086)).
+- Keep saved output links tied to the sender's artifact store when agents share them over local IRC ([Refs #1080](https://github.com/Wladefant/veyyon/issues/1080)).
 
 ## [1.12.3] - 2026-11-21
 
