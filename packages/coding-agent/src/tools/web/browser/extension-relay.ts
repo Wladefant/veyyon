@@ -32,6 +32,8 @@ import {
 } from "./extension-policy";
 
 const EXTENSION_CALL_TIMEOUT_MS = 15_000;
+// A busy Chrome can reply late without losing the connection.
+const FORWARDED_CDP_TIMEOUT_MS = 30_000;
 const DETACH_TIMEOUT_MS = 2_000;
 const CDP_ERROR_CODE = -32000;
 const METHOD_NOT_FOUND_CODE = -32601;
@@ -1029,7 +1031,11 @@ export class ExtensionRelay {
 				throw new Error("That isolated world could not be guarded and is refused.");
 			}
 		}
-		const result = await this.#call("chrome.debugger.sendCommand", [debuggee, method, params]);
+		const result = await this.#call(
+			"chrome.debugger.sendCommand",
+			[debuggee, method, params],
+			FORWARDED_CDP_TIMEOUT_MS,
+		);
 		return result ?? {};
 	}
 
