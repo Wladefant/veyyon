@@ -72,6 +72,7 @@
 
 ### Fixed
 
+- Prune cold-restored agent history without reporting a false stalled assignment.
 - Keep admission limits read-only during ordinary calls, add explicit host-cap updates, and bound failed release attempts with fenced reconciliation.
 - Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Give every native result wake one durable continuation phase. Keep pending tool results ahead of completion notices and prevent reuse of an earlier phase's terminal result ([Refs #1159](https://github.com/Wladefant/veyyon/issues/1159)).

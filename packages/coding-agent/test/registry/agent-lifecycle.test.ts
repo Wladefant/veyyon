@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { readFile } from "node:fs/promises";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -816,6 +817,64 @@ describe("AgentLifecycleManager", () => {
 			await transcript.close();
 			temp.removeSync();
 		}
+	});
+	it("prunes cold-restored scoped history without a stalled notice", async () => {
+		const temp = TempDir.createSync("cold-restored-history-");
+		registry.register({ id: "Parent", displayName: "parent", kind: "main", session: null });
+		const transcript = SessionManager.create(temp.path(), temp.path());
+		try {
+			transcript.appendMessage({ role: "user", content: "cold history", timestamp: 1 });
+			await transcript.flush();
+			await transcript.ensureOnDisk();
+			const sessionFile = transcript.getSessionFile();
+			if (!sessionFile) throw new Error("Missing cold history transcript");
+			await transcript.close();
+			const originalTranscript = await readFile(sessionFile);
+			const ref = registry.register({
+				id: "ColdHistory",
+				displayName: "child",
+				kind: "sub",
+				parentId: "Parent",
+				session: null,
+				sessionFile,
+				status: "parked",
+				coldRestoredFromDisk: true,
+				scope: "session-a",
+			});
+			await lifecycle.prune(ref.id);
+
+			expect(ref.terminalOutcome).toBeUndefined();
+			expect(registry.get(ref.id)).toBeUndefined();
+			const reopened = await SessionManager.open(sessionFile);
+			try {
+				expect(reopened.getEntries()).not.toContainEqual(
+					expect.objectContaining({ customType: "agent-terminal-outcome" }),
+				);
+				expect(await readFile(sessionFile)).toEqual(originalTranscript);
+			} finally {
+				await reopened.close();
+			}
+		} finally {
+			await transcript.close();
+			temp.removeSync();
+		}
+	});
+
+	it("does not drop a cold-restored parked ref during the orphan sweep when its parent is absent", async () => {
+		const ref = registry.register({
+			id: "ColdOrphan",
+			displayName: "child",
+			kind: "sub",
+			parentId: "AbsentParent",
+			session: null,
+			sessionFile: "/tmp/ColdOrphan.jsonl",
+			status: "parked",
+			coldRestoredFromDisk: true,
+			scope: "session-a",
+		});
+		await lifecycle.cleanupParkedOrphans();
+		expect(registry.get(ref.id)).toBe(ref);
+		expect(ref.terminalOutcome).toBeUndefined();
 	});
 
 	it("does not classify root sessions without a parent as missing-parent orphans", async () => {

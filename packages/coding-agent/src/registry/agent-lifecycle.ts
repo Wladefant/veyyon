@@ -532,6 +532,7 @@ export class AgentLifecycleManager {
 				ref.kind !== "sub" ||
 				ref.status !== "parked" ||
 				!ref.parentId ||
+				ref.coldRestoredFromDisk ||
 				this.#registry.get(ref.parentId) ||
 				this.#parking.has(ref.id) ||
 				this.#revivals.has(ref.id) ||
@@ -561,7 +562,9 @@ export class AgentLifecycleManager {
 			) {
 				continue;
 			}
-			if (!ref.terminalOutcome) this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
+			if (!ref.terminalOutcome) {
+				this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
+			}
 			await this.release(ref.id);
 		}
 	}
@@ -715,8 +718,8 @@ export class AgentLifecycleManager {
 			waitingOnPeer: ref.waitingOnPeer === true,
 			parkedForMs: Date.now() - ref.lastActivity,
 		});
-		if (!ref.terminalOutcome) {
-			const reason = "Assignment was pruned before reporting a terminal outcome.";
+		const reason = "Assignment was pruned before reporting a terminal outcome.";
+		if (!ref.terminalOutcome && !ref.coldRestoredFromDisk && ref.kind === "sub") {
 			this.#stalling.add(id);
 			let reported = false;
 			try {

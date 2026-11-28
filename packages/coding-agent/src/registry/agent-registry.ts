@@ -162,6 +162,8 @@ export interface AgentRef {
 	 * filter can only hide an agent both sides positively agree belongs elsewhere.
 	 */
 	scope?: string;
+	/** True only for a disk-restored ref until its first actual running turn. */
+	coldRestoredFromDisk?: boolean;
 	/** Short gist of what the agent is currently doing (latest intent or tool), for the work-aware roster. Display-only. */
 	activity?: string;
 	/** Model the agent runs on, as a `provider/id` string. Display-only; undefined when not known at registration. */
@@ -245,6 +247,7 @@ export interface RegisterInput {
 	 */
 	createdAt?: number;
 	lastActivity?: number;
+	coldRestoredFromDisk?: boolean;
 }
 
 export class AgentRegistry {
@@ -335,6 +338,7 @@ export class AgentRegistry {
 			lastActivity: input.lastActivity ?? now,
 			model: input.model,
 			scope: input.scope ?? this.#deriveScope(input),
+			coldRestoredFromDisk: input.coldRestoredFromDisk,
 		};
 		if (input.session) {
 			this.#captureIdentity(ref, input.session, true);
@@ -438,6 +442,8 @@ export class AgentRegistry {
 		ref.status = status;
 		if (status === "running") {
 			ref.turnSeq = (ref.turnSeq ?? 0) + 1;
+			// Cold transcript history is not evidence of an unfinished live assignment.
+			ref.coldRestoredFromDisk = false;
 			// A new turn is a new assignment; retain the prior outcome only until
 			// activity resumes, then accept the new run's terminal report.
 			ref.terminalOutcome = undefined;
