@@ -270,6 +270,26 @@ export class IrcBus {
 		this.#instrumentationLevel = instrumentationLevel;
 	}
 
+	#bindArtifactLinks(body: string, from: string): string {
+		if (!body.includes("artifact://")) return body;
+		const sender = this.#registry.get(from);
+		const manager = sender?.session?.sessionManager;
+		if (!manager) return body;
+
+		// Native children share the root's artifact store. Name the root in
+		// that case so links still work after the sending child is released.
+		const dir = manager.getArtifactsDir();
+		const root = this.#registry.mainInScope(sender?.scope)?.session?.sessionManager;
+		const owner = root && dir && root.getArtifactsDir() === dir ? root : manager;
+		const session = encodeURIComponent(owner.getSessionId());
+		// Bind only unscoped numeric links. Keep existing owners, line selectors,
+		// and prose punctuation intact when a recipient forwards a link.
+		return body.replace(
+			/\bartifact:\/\/\d+(?:\?view=metadata)?(?=$|[\s`"'<>()[\]{},;!:]|\.(?![\w./]))/g,
+			link => `${link}${link.includes("?") ? "&" : "?"}session=${session}`,
+		);
+	}
+
 	/**
 	 * Fire-and-forget delivery. Never blocks on the recipient generating
 	 * anything: the receipt reports how the message reached the recipient
@@ -304,6 +324,7 @@ export class IrcBus {
 		// each of them is how a log silently loses the cases nobody tested.
 		const message: IrcMessage = {
 			...msg,
+			body: this.#bindArtifactLinks(msg.body, msg.from),
 			id: Snowflake.next(),
 			ts: Date.now(),
 			actor: {

@@ -13,7 +13,7 @@ An ancestor is not a competing writer. Coordinate peer writes. Parent IRC may am
 - A local `send` without `await` waits briefly for a receipt, not a reply. Do not resend an unconfirmed send.
 - A queued or starting child can refuse a send before delivery. The refusal names the job and confirms that no message was buffered. Retry only after that child joins IRC.
 - A message WAKES an `idle` or `parked` peer and costs a turn. `to: "all"` charges every peer.
-- NEVER send JSON status objects. Use short prose and link payloads with `local://` or `artifact://`.
+- NEVER send JSON status objects. Use short prose and link payloads with `local://` or `artifact://` for local sends. For a durable `session:` notice, use the absolute artifact file path.
 - Answer first without quoting the question, and set `replyTo`.
 
 # Waiting
