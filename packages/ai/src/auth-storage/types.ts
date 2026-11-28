@@ -382,8 +382,13 @@ export interface AuthCredentialStore {
 	/** Drop all cache rows whose keys start with the supplied prefix. */
 	deleteCachePrefix?(prefix: string): void;
 	cleanExpiredCache(): void;
-	/** Non-expired block for one (credential, providerKey, scope) key, or undefined. */
-	getCredentialBlock?(credentialId: number, providerKey: string, blockScope: string): number | undefined;
+	/** Non-expired exact block. A timestamp cutoff ignores only rows known to predate it. */
+	getCredentialBlock?(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+		ignoreWritesBeforeMs?: number,
+	): number | undefined;
 	/** Earliest time a shared-store block should be eligible for live-usage reconciliation. */
 	getCredentialBlockReconcileAfter?(credentialId: number, providerKey: string, blockScope: string): number | undefined;
 	/** Upsert with MAX semantics: keep the later blockedUntilMs on conflict. */

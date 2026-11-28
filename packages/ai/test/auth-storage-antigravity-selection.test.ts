@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthBrokerClient } from "@veyyon/ai/auth-broker/client";
+import { RemoteAuthCredentialStore } from "@veyyon/ai/auth-broker/remote-store";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
@@ -27,20 +29,22 @@ type AntigravityWindowSpec = {
 	counter: "google" | "claude-gpt" | "anthropic" | "openai" | "default";
 	usedFraction: number;
 	resetInMs: number;
+	windowId?: string;
 };
 
 function createAntigravityLimit(spec: AntigravityWindowSpec, projectId: string): UsageLimit {
 	const used = Math.min(Math.max(spec.usedFraction, 0), 1);
+	const windowId = spec.windowId ?? "WINDOW_DAILY";
 	return {
-		id: `google-antigravity:${spec.counter}:default:WINDOW_DAILY`,
+		id: `google-antigravity:${spec.counter}:default:${windowId}`,
 		label: `Usage (${spec.counter})`,
 		scope: {
 			provider: "google-antigravity",
 			projectId,
-			windowId: "WINDOW_DAILY",
+			windowId,
 		},
 		window: {
-			id: "WINDOW_DAILY",
+			id: windowId,
 			label: "Default",
 			resetsAt: Date.now() + spec.resetInMs,
 		},
@@ -406,6 +410,135 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		const unpinnedSessionId = "session-unpinned-different";
 		expect(await storageX.getApiKey(provider, unpinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
 		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+	});
+
+	test.each([
+		["fresh exact summary", "api-acct-a"],
+		["fallback listing", "api-acct-b"],
+		["header overlay", "api-acct-b"],
+		["different counter", "api-acct-b"],
+		["same counter, different authoritative window", "api-acct-b"],
+		["old summary", "api-acct-b"],
+		["confirmed 429", "api-acct-b"],
+		["legacy block", "api-acct-b"],
+		["unscoped block", "api-acct-b"],
+	])("rechecks an old Antigravity prediction with a %s", async (evidence, expected) => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		const modelId = "gemini-3.8-flash";
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		await authStorage.set(provider, [
+			{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+		]);
+		const report = (accountId: string, usedFraction: number) =>
+			createAntigravityReport({
+				accountId,
+				projectId: `proj-${accountId}`,
+				windows: [{ counter: "google", usedFraction, resetInMs: 8 * HOUR_MS, windowId: "5h" }],
+			});
+		usageByAccount.set("acct-a", report("acct-a", 1));
+		usageByAccount.set("acct-b", report("acct-b", 0));
+		expect(await authStorage.getApiKey(provider, "before-reset", { modelId })).toBe("api-acct-b");
+		const credentialId = authStorage.listStoredCredentials(provider)[0]!.id;
+		if (evidence === "confirmed 429") {
+			await authStorage.markUsageLimitReached(provider, "confirmed-refusal", {
+				credentialId,
+				modelId,
+				retryAfterMs: 8 * HOUR_MS,
+			});
+		}
+		const providerKey = `${provider}:oauth`;
+		const unrelatedScopes = ["counter:claude-gpt", "model-not-in-plan:gemini-test"];
+		if (evidence === "legacy block" || evidence === "unscoped block") {
+			store.upsertCredentialBlock?.({
+				credentialId,
+				providerKey,
+				blockScope: evidence === "legacy block" ? "counter:google" : "",
+				blockedUntilMs: now + HOUR_MS,
+			});
+		}
+		for (const blockScope of unrelatedScopes) {
+			store.upsertCredentialBlock?.({ credentialId, providerKey, blockScope, blockedUntilMs: now + HOUR_MS });
+		}
+
+		now += 10 * 60 * 1000;
+		const healthy = report("acct-a", 0);
+		const authoritative =
+			evidence === "same counter, different authoritative window"
+				? createAntigravityLimit(
+						{ counter: "google", usedFraction: 0, resetInMs: HOUR_MS, windowId: "weekly" },
+						"proj-acct-a",
+					)
+				: healthy.limits[0]!;
+		if (authoritative !== healthy.limits[0]) healthy.limits.push(authoritative);
+		if (evidence !== "fallback listing") {
+			healthy.metadata = {
+				...healthy.metadata,
+				authoritativeLimitIds: [
+					evidence === "different counter"
+						? authoritative.id.replace(":google:", ":claude-gpt:")
+						: authoritative.id,
+				],
+				...(evidence === "header overlay" ? { headersUpdatedAt: now } : {}),
+			};
+		}
+		if (evidence === "old summary") healthy.fetchedAt -= 7 * 60 * 1000;
+		usageByAccount.set("acct-a", healthy);
+		usageByAccount.set("acct-b", report("acct-b", 0.4));
+		const peer = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: p => (p === provider ? usageProvider : undefined),
+			rankingStrategyResolver: p => (p === provider ? antigravityRankingStrategy : undefined),
+		});
+		await peer.reload();
+		expect(await peer.getApiKey(provider, "after-reset", { modelId })).toBe(expected);
+		for (const blockScope of unrelatedScopes) {
+			expect(store.getCredentialBlock?.(credentialId, providerKey, blockScope)).toBeDefined();
+		}
+	});
+
+	test("an older quota proof cannot hide a newer pending broker prediction", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const provider = "google-antigravity";
+		await authStorage.set(provider, [{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") }]);
+		const initial = authStorage.exportSnapshot();
+		const entry = initial.credentials[0]!;
+		const now = Date.now();
+		const block = {
+			providerKey: `${provider}:oauth`,
+			blockScope: "predicted:counter:google:5h",
+			blockedUntilMs: now + 60_000,
+			updatedAtMs: now - 600_000,
+		};
+		const snapshot = {
+			...initial,
+			serverNowMs: now,
+			refresher: { enabled: false, intervalMs: 0, skewMs: 0, nextSweepInMs: 0 },
+			credentials: [{ ...entry, rotatesInMs: null, blocks: [block] }],
+		};
+		const client = new AuthBrokerClient({ url: "http://127.0.0.1:1", token: "fixture" });
+		const pending = Promise.withResolvers<{ ok: boolean }>();
+		vi.spyOn(client, "upsertCredentialBlock").mockReturnValue(pending.promise);
+		vi.spyOn(client, "fetchSnapshot").mockResolvedValue({
+			status: 200,
+			generation: snapshot.generation + 1,
+			snapshot: { ...snapshot, generation: snapshot.generation + 1 },
+		});
+		const remote = new RemoteAuthCredentialStore({ client, initialSnapshot: snapshot, streamSnapshots: false });
+		try {
+			const { providerKey, blockScope, blockedUntilMs } = block;
+			const cutoff = now - 300_000;
+			expect(remote.getCredentialBlock(entry.id, providerKey, blockScope, cutoff)).toBeUndefined();
+			expect(remote.getCredentialBlock(entry.id, providerKey, blockScope)).toBe(blockedUntilMs);
+			remote.upsertCredentialBlock({ ...block, credentialId: entry.id, updatedAtMs: now });
+			await remote.refreshSnapshot();
+			expect(remote.getCredentialBlock(entry.id, providerKey, blockScope, cutoff)).toBe(blockedUntilMs);
+		} finally {
+			pending.resolve({ ok: true });
+			remote.close();
+		}
 	});
 
 	test("expired confirmation does not promote a later peer prediction", async () => {

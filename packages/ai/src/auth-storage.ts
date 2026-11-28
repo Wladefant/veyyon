@@ -110,6 +110,7 @@ import { CredentialRanking, isAllowanceSpent, leadWithChosenAccount } from "./au
 import { UsageReporting } from "./auth-storage/usage-reporting";
 import {
 	getScopedUsageLimits,
+	getUsagePredictionWindow,
 	getUsageReportMetadataValue,
 	getUsageReportScopeAccountId,
 	getUsageResetAtMs,
@@ -3245,6 +3246,7 @@ export class AuthStorage {
 				gate.selection.index,
 				resetAtMs ?? Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS,
 				gate.blockScope,
+				gate.provider === "google-antigravity" ? getUsagePredictionWindow(scopedLimits) : undefined,
 			);
 			return true;
 		}

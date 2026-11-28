@@ -291,7 +291,7 @@ function buildReportFromQuotaSummary(
 		provider: params.provider,
 		fetchedAt: nowMs,
 		limits,
-		metadata: reportMetadata(endpoint, credential),
+		metadata: { ...reportMetadata(endpoint, credential), authoritativeLimitIds: limits.map(limit => limit.id) },
 		raw: data,
 	};
 }
