@@ -96,7 +96,10 @@ describe("provider context image budgets", () => {
 		const clamped = clampProviderContextImages(context, UMANS_MODEL);
 
 		expect(imageData(clamped)).toEqual(Array.from({ length: 10 }, (_, index) => `image-${index + 21}`));
-		expect(textData(clamped)).toEqual(Array.from({ length: 31 }, (_, index) => `text-${index}`));
+		expect(textData(clamped).filter(value => value !== "[image omitted: provider image limit]")).toEqual(
+			Array.from({ length: 31 }, (_, index) => `text-${index}`),
+		);
+		expect(textData(clamped).filter(value => value === "[image omitted: provider image limit]")).toHaveLength(21);
 		expect(clamped).not.toBe(context);
 		expect(imageData(context)).toEqual(Array.from({ length: 31 }, (_, index) => `image-${index}`));
 	});
