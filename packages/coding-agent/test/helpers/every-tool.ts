@@ -8,20 +8,17 @@
  * and `debug` its adapters from `dap.json`, both in the profile directory the caller supplies.
  */
 import "../../../utils/test/helpers/real-data-tripwire";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { SecretRequestTool } from "@veyyon/coding-agent/tools/agent/secret-request";
-import {
-	BUILTIN_TOOLS,
-	HIDDEN_TOOLS,
-	type Tool,
-	type ToolFactory,
-	type ToolSession,
-} from "@veyyon/coding-agent/tools/index";
-import { GithubTool } from "@veyyon/coding-agent/tools/web/gh";
-import { ArgotSession } from "argot";
+import type { Tool, ToolFactory, ToolSession } from "@veyyon/coding-agent/tools/index";
 import { makeToolSession } from "./tool-session";
+
+// Link the filesystem and production imports after the tripwire runs.
+const fs = await import("node:fs/promises");
+const { AgentRegistry } = await import("@veyyon/coding-agent/registry/agent-registry");
+const { SecretRequestTool } = await import("@veyyon/coding-agent/tools/agent/secret-request");
+const { BUILTIN_TOOLS, HIDDEN_TOOLS } = await import("@veyyon/coding-agent/tools/index");
+const { GithubTool } = await import("@veyyon/coding-agent/tools/web/gh");
+const { ArgotSession } = await import("argot");
 
 /**
  * Settings the sweep session answers, so a tool gated behind a feature flag is swept rather than
