@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { normalizeSchemaForGoogle, toolWireSchema } from "@veyyon/ai";
+import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createTools, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
+import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 
 /**
  * Problematic JSON Schema features that cause issues with various providers.
@@ -114,6 +116,15 @@ function createTestSession(): ToolSession {
 		settings: Settings.isolated(),
 	};
 }
+
+it("preserves browser app routing fields and rejects unknown selectors", () => {
+	const tool = new BrowserTool(createTestSession());
+	const app = { path: "/fixture/browser", target: "fixture window" };
+	const call = { type: "toolCall", id: "c", name: tool.name, arguments: { action: "open", app } } as const;
+	expect(validateToolArguments(tool, call)).toEqual(call.arguments);
+	const invalid = { ...call, arguments: { action: "open", app: { ...app, window: "typo" } } };
+	expect(() => validateToolArguments(tool, invalid)).toThrow(/app\/window:/);
+});
 
 describe("normalizeSchemaForGoogle", () => {
 	it("converts const to enum", () => {

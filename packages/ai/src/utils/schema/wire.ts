@@ -612,16 +612,21 @@ export function installZodCoreConverter(convert: ZodCoreToJSONSchema): void {
  * its own `toJSONSchema` method, which the Zod copy that built the schema bound to the same
  * converter; a mini schema has no such method.
  */
-function zodJsonSchema(schema: ZodType): Record<string, unknown> {
+function zodJsonSchema(schema: ZodType, io: "input" | "output" = "output"): Record<string, unknown> {
 	// `target: "draft-2020-12"` matches what Anthropic's `input_schema` validator
 	// requires out of the box; our other provider sanitizers (OpenAI strict,
 	// Google, Anthropic CCA) already handle the superset structurally.
-	const params = { target: "draft-2020-12" } as const;
+	const params = { target: "draft-2020-12", io } as const;
 	if (zodCoreToJSONSchema) return zodCoreToJSONSchema(schema, params) as Record<string, unknown>;
 	if (typeof schema.toJSONSchema === "function") return schema.toJSONSchema(params) as Record<string, unknown>;
 	throw new Error(
 		"Cannot convert a Zod schema that has no toJSONSchema method (zod/mini): Zod's core converter is not installed. Import @veyyon/ai or @veyyon/ai/utils/schema/zod-core before converting it.",
 	);
+}
+
+/** Input conversion does not close ordinary Zod objects as the wire schema does. */
+export function zodToInputSchema(schema: ZodType): Record<string, unknown> {
+	return postProcess(zodJsonSchema(schema, "input"));
 }
 
 /** Convert a Zod schema into the JSON Schema shape providers consume. */
@@ -731,13 +736,22 @@ function pruneUnconstrainedBranches(obj: Record<string, unknown>, unionKey: "any
  */
 export function arkToWireSchema(schema: Type): Record<string, unknown> {
 	return stamp(schema, kArkWireSchema, s => {
-		const raw = s.toJsonSchema({ target: "draft-2020-12", fallback: ctx => ctx.base }) as Record<string, unknown>;
-		delete raw.$schema;
-		pruneArkUndefinedUnionBranches(raw);
-		const upgraded = postProcessJsonSchema(upgradeJsonSchemaTo202012(raw) as Record<string, unknown>);
-		closeDeclaredObjects(upgraded);
-		return upgraded;
+		const json = arkJsonSchema(s);
+		closeDeclaredObjects(json);
+		return json;
 	});
+}
+
+/** Use the input side so ArkType's delete-on-success rule is not mistaken for rejection. */
+export function arkToInputSchema(schema: Type): Record<string, unknown> {
+	return arkJsonSchema(schema.in);
+}
+
+function arkJsonSchema(schema: Type): Record<string, unknown> {
+	const raw = schema.toJsonSchema({ target: "draft-2020-12", fallback: ctx => ctx.base }) as Record<string, unknown>;
+	delete raw.$schema;
+	pruneArkUndefinedUnionBranches(raw);
+	return postProcessJsonSchema(upgradeJsonSchemaTo202012(raw) as Record<string, unknown>);
 }
 
 /**

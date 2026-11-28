@@ -60,6 +60,64 @@ function issuesOf(message: string, toolName: string): string {
 	);
 }
 
+describe("closed JSON Schema objects", () => {
+	const selector = {
+		type: "object",
+		properties: { application: { type: "string" } },
+		required: ["application"],
+		additionalProperties: false,
+	};
+	const tool: Tool = {
+		name: "select",
+		description: "",
+		parameters: {
+			...selector,
+			properties: { ...selector.properties, selectors: { type: "array", items: selector } },
+		},
+	};
+
+	it.each([
+		["root extra", { application: "fixture", unexpected: true }, "unexpected"],
+		[
+			"nested null extra",
+			{ application: "fixture", selectors: [{ application: "fixture", unexpected: null }] },
+			"selectors/0/unexpected",
+		],
+		[
+			"nested encoded selector name",
+			{ application: "fixture", selectors: [{ [JSON.stringify("application")]: "fixture" }] },
+			"selectors/0/",
+		],
+		["encoded selector name", { [JSON.stringify("application")]: "fixture" }, '"application"'],
+	] as const)("rejects %s without hiding the unknown key", (_label, args, key) => {
+		expect(issuesOf(failureFor(tool, args), tool.name)).toContain(key);
+	});
+
+	it("rejects an inferred selector name on a closed single-field object", () => {
+		const single = { ...tool, parameters: selector };
+		expect(issuesOf(failureFor(single, { app: "fixture" }), single.name)).toContain("app:");
+	});
+
+	it("does not rename keys to make a later closed union branch pass", () => {
+		const union = { ...tool, parameters: { anyOf: [{ type: "null" }, selector] } } as Tool;
+		expect(failureFor(union, { [JSON.stringify("application")]: "fixture" })).toContain(
+			'Validation failed for tool "select"',
+		);
+	});
+
+	it("preserves declared selectors and extras on open objects", () => {
+		const args = { application: "fixture", extra: true };
+		const open = { ...tool, parameters: { ...selector, additionalProperties: true } };
+		expect(validateToolArguments(open, { type: "toolCall", id: "c", name: open.name, arguments: args })).toEqual(
+			args,
+		);
+		const declared = { application: "fixture", selectors: [{ application: "child" }] };
+		expect(validateToolArguments(tool, { type: "toolCall", id: "c", name: tool.name, arguments: declared })).toEqual(
+			declared,
+		);
+	});
+});
+
 /** How many times each todo op appears as a standalone token in the issue lines. */
 function opMentions(message: string): string[] {
 	const tokens = issuesOf(message, "todo").split(/[^A-Za-z0-9_$-]+/);

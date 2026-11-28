@@ -1530,7 +1530,7 @@ describe("Tool argument coercion", () => {
 		});
 	});
 
-	it("tolerates extra keys on .strict() Zod object schemas (loose-recursive)", () => {
+	it("rejects extra keys on .strict() Zod object schemas", () => {
 		const tool: Tool = {
 			name: "t-strict-root",
 			description: "",
@@ -1548,15 +1548,10 @@ describe("Tool argument coercion", () => {
 			arguments: { op: "fix", timeout: "300" },
 		};
 
-		// Extras on strict schemas are dropped during validation rather than
-		// surfaced as a hard error — equivalent to converting every object to
-		// loose semantics for the purposes of tool dispatch.
-		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
-		expect(result.op).toBe("fix");
-		expect(result.timeout).toBeUndefined();
+		expect(() => validateToolArguments(tool, toolCall)).toThrow(/Unrecognized key.*timeout/);
 	});
 
-	it("tolerates extra keys on nested .strict() Zod object schemas", () => {
+	it("rejects extra keys on nested .strict() Zod object schemas", () => {
 		const tool: Tool = {
 			name: "t-strict-nested",
 			description: "",
@@ -1578,13 +1573,10 @@ describe("Tool argument coercion", () => {
 			arguments: { config: { host: "example.com", port: 443 } },
 		};
 
-		// Nested strict objects also tolerate extras; the inner key is stripped
-		// so validation succeeds against the schema's declared shape.
-		const result = validateToolArguments(tool, toolCall) as { config: Record<string, unknown> };
-		expect(result.config.host).toBe("example.com");
+		expect(() => validateToolArguments(tool, toolCall)).toThrow(/config: Unrecognized key.*port/);
 	});
 
-	it("tolerates extras on JSON Schema parameters with additionalProperties: false", () => {
+	it("rejects extras on JSON Schema parameters with additionalProperties: false", () => {
 		const tool: Tool = {
 			name: "t-json-strict",
 			description: "",
@@ -1605,8 +1597,7 @@ describe("Tool argument coercion", () => {
 			arguments: { op: "fix", timeout: 300 },
 		};
 
-		const result = validateToolArguments(tool, toolCall) as Record<string, unknown>;
-		expect(result.op).toBe("fix");
+		expect(() => validateToolArguments(tool, toolCall)).toThrow(/timeout:/);
 	});
 
 	describe("string|array union (regression: #1788)", () => {

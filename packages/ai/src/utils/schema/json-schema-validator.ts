@@ -56,6 +56,7 @@ interface ValidationContext {
 	objectIds: WeakMap<object, number>;
 	nextObjectId: number;
 	refDepth: number;
+	includeBranchExtraKeys?: boolean;
 }
 
 /** The instance path of the node being validated; a step pushes a key before descending and pops it after. */
@@ -367,7 +368,11 @@ function validateUnion(
 	let branchIssues: JsonSchemaValidationIssue[] = [];
 	for (const branch of branches) {
 		if (validateSchemaNode(branch, value, path, ctx, branchIssues)) matches += 1;
-		else if (!firstIssues) {
+		else if (ctx.includeBranchExtraKeys && firstIssues) {
+			for (const issue of branchIssues) {
+				if (issue.keyword === "additionalProperties") firstIssues.push(issue);
+			}
+		} else if (!firstIssues) {
 			firstIssues = branchIssues;
 			branchIssues = [];
 			continue;
@@ -848,7 +853,11 @@ function validateNumberKeywords(
 	return valid;
 }
 
-export function validateJsonSchemaValue(schema: unknown, value: unknown): JsonSchemaValidationResult {
+export function validateJsonSchemaValue(
+	schema: unknown,
+	value: unknown,
+	includeBranchExtraKeys = false,
+): JsonSchemaValidationResult {
 	const issues: JsonSchemaValidationIssue[] = [];
 	const ctx: ValidationContext = {
 		root: schema,
@@ -856,6 +865,7 @@ export function validateJsonSchemaValue(schema: unknown, value: unknown): JsonSc
 		objectIds: new WeakMap(),
 		nextObjectId: 0,
 		refDepth: 0,
+		includeBranchExtraKeys,
 	};
 	const success = validateSchemaNode(schema, value, [], ctx, issues);
 	return { success, issues };

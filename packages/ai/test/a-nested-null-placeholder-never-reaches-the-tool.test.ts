@@ -1,12 +1,10 @@
 /**
- * An undeclared key holding a null or `"null"` placeholder inside a nested object that forbids
- * extra keys never reaches the tool, whichever way the tool declares its parameters: plain JSON
- * Schema, Zod, or ArkType, open or closed.
+ * A closed nested object rejects undeclared null placeholders. Open native
+ * fixtures retain their existing behavior: Zod strips the extra during parse,
+ * and the ArkType pipeline omits the placeholder before validation.
  *
- * The class this closes: a placeholder strip that relied on the validator rejecting the extra
- * key. ArkType's default undeclared-key behavior accepts and keeps nested extras while the wire
- * schema still declares `additionalProperties: false`, so without the pre-validation strip the
- * placeholder reached the tool as a real value.
+ * ArkType's default permits nested extras even when the emitted wire schema is
+ * closed. Runtime rejection depends on the input schema, not the wire schema.
  *
  * Not covered: the root object, where an undeclared key is kept on purpose so the caller can
  * reject a hallucinated field (tool-argument-coercion.test.ts covers that), and an undeclared key
@@ -40,13 +38,15 @@ const PARAMETERS: Record<string, Tool["parameters"]> = {
 const PLACEHOLDERS: readonly unknown[] = [null, "null"];
 
 for (const [style, parameters] of Object.entries(PARAMETERS)) {
+	const strict = style !== "Zod" && style !== "ArkType";
 	describe(`a nested null placeholder under ${style} parameters`, () => {
 		const tool: Tool = { name: "nested", description: "", parameters };
 		for (const placeholder of PLACEHOLDERS) {
-			it(`strips an undeclared ${JSON.stringify(placeholder)} placeholder`, () => {
+			it(`${strict ? "rejects" : "strips"} an undeclared ${JSON.stringify(placeholder)} placeholder`, () => {
 				const args = { opts: { inner: "v", junk: placeholder } };
 				const toolCall: ToolCall = { type: "toolCall", id: "c", name: "nested", arguments: args };
-				expect(validateToolArguments(tool, toolCall)).toEqual({ opts: { inner: "v" } });
+				if (strict) expect(() => validateToolArguments(tool, toolCall)).toThrow(/junk/);
+				else expect(validateToolArguments(tool, toolCall)).toEqual({ opts: { inner: "v" } });
 				expect(args).toEqual({ opts: { inner: "v", junk: placeholder } });
 			});
 		}
