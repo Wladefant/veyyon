@@ -428,7 +428,7 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		usageByAccount.set("acct-b", report("acct-b", 0));
 		expect(await authStorage.getApiKey(provider, "before-reset", { modelId })).toBe("api-acct-b");
 
-		now += HOUR_MS;
+		now += 10 * 60 * 1000;
 		const healthy = report("acct-a", 0);
 		healthy.metadata = { ...healthy.metadata, authoritativeCounters: ["google"] };
 		usageByAccount.set("acct-a", healthy);
