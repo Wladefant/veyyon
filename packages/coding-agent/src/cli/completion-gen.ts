@@ -16,6 +16,7 @@
  */
 import { APP_ALIAS, collapseWhitespace } from "@veyyon/utils";
 import type { ArgDescriptor, CliConfig, CommandCtor, FlagDescriptor } from "@veyyon/utils/cli";
+import { KNOWLEDGE_CATEGORIES } from "../shared-knowledge/types";
 import { BUILTIN_TOOL_NAMES } from "../tools/core/builtin-names";
 
 export type Shell = "bash" | "zsh" | "fish" | "powershell";
@@ -103,19 +104,35 @@ const DIR_FLAGS: Record<string, true> = {
 	"agent-dir": true,
 	cwd: true,
 	dir: true,
+	folder: true,
+	output: true,
 };
 /** Flags whose value is a file path. */
 const FILE_FLAGS: Record<string, true> = {
 	"append-system-prompt": true,
+	baseline: true,
 	config: true,
+	"device-tokens-file": true,
 	export: true,
 	extension: true,
 	file: true,
 	hook: true,
 	key: true,
+	"mcp-config": true,
 	out: true,
 	path: true,
+	"reviewed-plan": true,
 	rule: true,
+	workspace: true,
+};
+/**
+ * Flags whose meaning depends on the command, keyed `<command>.<flag>`. Checked before the bare-name
+ * tables so a name two commands spell differently keeps its own source: `profile --from` names a seed,
+ * while `knowledge --from` names a directory.
+ */
+const COMMAND_FLAGS: Record<string, ValueSource> = {
+	"knowledge.categories": { kind: "list", values: KNOWLEDGE_CATEGORIES },
+	"knowledge.from": { kind: "dir" },
 };
 
 /**
@@ -130,12 +147,15 @@ const FILE_FLAGS: Record<string, true> = {
  *
  * Flags are keyed by bare name because a flag spelled the same way means the
  * same thing wherever it appears (`--out` is a path under both `gallery` and
- * `say`). Positional names are not that stable, so those are qualified by
+ * `say`). A flag whose meaning differs by command is keyed in COMMAND_FLAGS
+ * instead. Positional names are not that stable, so those are qualified by
  * command below.
  */
-function flagValue(name: string, desc: FlagDescriptor): ValueSource {
+function flagValue(command: string, name: string, desc: FlagDescriptor): ValueSource {
 	if (desc.kind === "boolean") return { kind: "flag" };
 	if (desc.options && desc.options.length > 0) return { kind: "enum", values: desc.options };
+	const qualified = COMMAND_FLAGS[`${command}.${name}`];
+	if (qualified) return qualified;
 	if (MODEL_FLAGS[name]) return { kind: "models", multiple: false };
 	if (name === "models") return { kind: "models", multiple: true };
 	if (SESSION_FLAGS[name]) return { kind: "sessions" };
@@ -195,7 +215,7 @@ function argValue(command: string, name: string, desc: ArgDescriptor): ValueSour
 	return { kind: "value" };
 }
 
-function buildFlags(Cmd: CommandCtor): CompletionFlag[] {
+function buildFlags(command: string, Cmd: CommandCtor): CompletionFlag[] {
 	const out: CompletionFlag[] = [];
 	const flags = Cmd.flags ?? {};
 	for (const name in flags) {
@@ -204,7 +224,7 @@ function buildFlags(Cmd: CommandCtor): CompletionFlag[] {
 			name,
 			char: desc.char,
 			description: desc.description ?? "",
-			value: flagValue(name, desc),
+			value: flagValue(command, name, desc),
 			repeatable: Boolean(desc.multiple),
 		});
 		// An alias gets its OWN completion entry, unlike in `--help` where it
@@ -216,7 +236,7 @@ function buildFlags(Cmd: CommandCtor): CompletionFlag[] {
 			out.push({
 				name: alias,
 				description: desc.description ?? "",
-				value: flagValue(alias, desc),
+				value: flagValue(command, alias, desc),
 				repeatable: Boolean(desc.multiple),
 			});
 		}
@@ -253,7 +273,7 @@ export function buildSpec(
 	const commands: CompletionCommand[] = [];
 	let root: CompletionSpec["root"] = { flags: [], args: [] };
 	for (const [name, Cmd] of config.commands) {
-		const flags = buildFlags(Cmd);
+		const flags = buildFlags(name, Cmd);
 		const args = buildArgs(name, Cmd);
 		if (name === rootName) {
 			root = { flags, args };

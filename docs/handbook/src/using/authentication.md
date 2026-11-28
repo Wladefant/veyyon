@@ -62,10 +62,13 @@ then whether the provider accepted the login, and updates the usage bars from th
 `/account manager` opens the same card.
 
 When `accounts.loadBalancing` is on, pressing `enter` on an account row or running
-`/account use <provider> <account>` selects that account for your current session only. Global provider
-selection stays empty so other sessions and profiles continue to balance across your accounts. When
-load balancing is off, selecting an account saves it machine-wide as the default choice across all
-profiles and sessions on this machine.
+`/account use <provider> <account>` selects that account for your current session only. This does
+not change the machine-wide choice. When load balancing is off, selecting an account saves it
+machine-wide across all profiles and sessions on this machine.
+
+With load balancing on, a saved machine-wide Codex login is a preference, not a session pin.
+Veyyon tries it first when eligible and can use another enabled login while it is blocked.
+An explicit session pin still takes precedence.
 
 The last row of the list is `+ add another … account`. It is a position in the list like any other:
 arrow down past your last account to land on it, and press `enter` there to start a login. A

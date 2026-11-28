@@ -69,6 +69,8 @@ import type {
 import type { CompactOptions } from "../../extensibility/extensions/types";
 import type { Skill } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
+import type { TerminalControlHandle } from "../../launch/terminal-control";
+import { startTerminalControl } from "../../launch/terminal-control-session";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../../lsp/startup-events";
 import type { MCPManager } from "../../mcp";
 import {
@@ -176,7 +178,6 @@ import { countRunningAgentBadgeAgents, getRunningAgentBadgeRegistry } from "./ru
 import { SessionObserverRegistry } from "./session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
-import { startTerminalControl } from "./terminal-control";
 import { consumeRelaunchMarker, flushPendingTtyInput, RELAUNCH_MARKER } from "./tty-input-flush";
 import type {
 	CompactionQueuedMessage,
@@ -408,7 +409,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
 	readonly #herdrReporter = new HerdrReporter();
-	#closeTerminalControl?: () => void;
+	#closeTerminalControl?: TerminalControlHandle;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	readonly #planMode: PlanModeController;
@@ -1364,6 +1365,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.editor.hasEarlyActions()) await this.#selectors().catch(() => undefined);
 		this.#inputController.drainEarlySubmissions();
 		this.#closeTerminalControl = await startTerminalControl(this);
+		// Early input can attach a new session while the first owner record is being written.
+		void this.#closeTerminalControl.refreshIdentity();
 	}
 
 	/** Themes already warned about an unhonored `always`, so the log is not repeated. */
@@ -3240,6 +3243,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#goalMode.unsubscribeFromSession();
 		this.session = next;
 		this.sessionManager = next.sessionManager;
+		void this.#closeTerminalControl?.refreshIdentity();
 		this.settings = next.settings;
 		this.agent = next.agent;
 		this.#eventController.resetTranscriptAnchors();

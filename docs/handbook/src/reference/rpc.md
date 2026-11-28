@@ -103,6 +103,15 @@ Edge behavior from runtime:
 - `{ id?, type: "get_subagents" }`
 - `{ id?, type: "get_subagent_messages", agentId?: string, sessionFile?: string, fromByte?: number }`
 
+### Secret intake
+
+- `{ id?, type: "secret_request", action: "get" | "decline" | "cancel", requestId: string }`
+- Submit with `type: "secret_request"`, `action: "submit"`, `requestId`, optional `id`, and a `SecretSubmission` envelope.
+
+Secret intake requires an authenticated native host binding. RPC fields cannot establish that binding.
+Submit only the encrypted envelope defined by `SecretSubmission`, never plaintext. A successful
+response contains `data.request`, the request metadata.
+
 ### Model
 
 - `{ id?, type: "set_model", provider: string, modelId: string }`

@@ -1098,6 +1098,168 @@ function YieldBody({ args, result }: ToolRenderProps): ReactNode {
 }
 
 // ============================================================================
+// secret_request
+// ============================================================================
+
+interface SecretRequestView {
+	requestId: string | null;
+	purpose: string | null;
+	label: string | null;
+	provider: string | null;
+	vaultCollection: string | null;
+	deliveryPolicy: string | null;
+	expiresAt: string | null;
+	status: string | null;
+}
+
+function secretRequestOf(details: Record<string, unknown> | null): SecretRequestView | null {
+	if (!details || !isRecord(details.request)) return null;
+	const req = details.request;
+	return {
+		requestId: str(req.requestId),
+		purpose: str(req.purpose),
+		label: str(req.label),
+		provider: str(req.provider),
+		vaultCollection: str(req.vaultCollection),
+		deliveryPolicy: str(req.deliveryPolicy),
+		expiresAt: str(req.expiresAt),
+		status: str(req.status),
+	};
+}
+
+function secretRequestStatusTone(status: string): Tone | undefined {
+	switch (status) {
+		case "saved":
+		case "consumed":
+			return "ok";
+		case "pending":
+		case "saving":
+			return "accent";
+		case "declined":
+		case "cancelled":
+		case "expired":
+			return "warn";
+		case "failed":
+			return "err";
+		default:
+			return undefined;
+	}
+}
+
+function SecretRequestSummary({ args, result }: ToolRenderProps): ReactNode {
+	const details = detailsRecord(result);
+	const req = secretRequestOf(details);
+	const action = str(args.action);
+	const status = req?.status ?? null;
+	const label = req?.label ?? str(args.label);
+	const provider = req?.provider ?? str(args.provider);
+	const purpose = req?.purpose ?? str(args.purpose);
+	const tool = str(args.approvedTool) ?? str(args.tool);
+	const requestId = req?.requestId ?? str(args.requestId);
+	const identifier = !label && !provider ? requestId : null;
+	return (
+		<>
+			{action === null && args.action !== undefined ? (
+				<InvalidArg what="action" />
+			) : (
+				action && <Badge tone="accent">{action}</Badge>
+			)}
+			{status && (
+				<>
+					{" "}
+					<Badge tone={secretRequestStatusTone(status)}>{status}</Badge>
+				</>
+			)}
+			{result?.isError && !status && (
+				<>
+					{" "}
+					<Badge tone="err">refused</Badge>
+				</>
+			)}
+			{label && (
+				<>
+					{" "}
+					<span>{truncate(normalizeWs(label), 48)}</span>
+				</>
+			)}
+			{provider && (
+				<>
+					{" "}
+					<span className="tv-muted">{truncate(normalizeWs(provider), 32)}</span>
+				</>
+			)}
+			{identifier && (
+				<>
+					{" "}
+					<span className="tv-faint">{truncate(identifier, 24)}</span>
+				</>
+			)}
+			{purpose && (
+				<>
+					{" "}
+					<span className="tv-faint">{truncate(normalizeWs(purpose), 48)}</span>
+				</>
+			)}
+			{tool && (
+				<>
+					{" "}
+					<span className="tv-faint">{truncate(normalizeWs(tool), 24)}</span>
+				</>
+			)}
+		</>
+	);
+}
+
+function SecretRequestBody({ args, result }: ToolRenderProps): ReactNode {
+	const details = detailsRecord(result);
+	const req = secretRequestOf(details);
+	const action = str(args.action);
+	const status = req?.status ?? null;
+	const label = req?.label ?? str(args.label);
+	const provider = req?.provider ?? str(args.provider);
+	const purpose = req?.purpose ?? str(args.purpose);
+	const tool = str(args.approvedTool) ?? str(args.tool);
+	const requestId = req?.requestId ?? str(args.requestId);
+	const policy = req?.deliveryPolicy ?? null;
+	const vault = req?.vaultCollection ?? null;
+	const expiresAt = req?.expiresAt ?? null;
+	const hasFields =
+		action !== null ||
+		status !== null ||
+		label !== null ||
+		provider !== null ||
+		purpose !== null ||
+		tool !== null ||
+		requestId !== null ||
+		policy !== null ||
+		vault !== null ||
+		expiresAt !== null;
+	return (
+		<>
+			{hasFields && (
+				<KvGrid>
+					{action !== null && <Kv k="action">{action}</Kv>}
+					{status !== null && (
+						<Kv k="status">
+							<Badge tone={secretRequestStatusTone(status)}>{status}</Badge>
+						</Kv>
+					)}
+					{label !== null && <Kv k="label">{label}</Kv>}
+					{provider !== null && <Kv k="provider">{provider}</Kv>}
+					{purpose !== null && <Kv k="purpose">{purpose}</Kv>}
+					{tool !== null && <Kv k="tool">{tool}</Kv>}
+					{requestId !== null && <Kv k="request">{requestId}</Kv>}
+					{policy !== null && <Kv k="policy">{policy}</Kv>}
+					{vault !== null && <Kv k="vault">{vault}</Kv>}
+					{expiresAt !== null && <Kv k="expires">{expiresAt}</Kv>}
+				</KvGrid>
+			)}
+			{result?.isError && <Note tone="err">Secret request refused</Note>}
+		</>
+	);
+}
+
+// ============================================================================
 // Exports
 // ============================================================================
 
@@ -1112,4 +1274,5 @@ export const agentDescriptors: readonly ToolDescriptor[] = [
 	{ name: "vibe_list", Summary: VibeSummary, Body: VibeBody },
 	{ name: "goal", Summary: GoalSummary, Body: GoalBody },
 	{ name: "yield", Summary: YieldSummary, Body: YieldBody },
+	{ name: "secret_request", Summary: SecretRequestSummary, Body: SecretRequestBody },
 ];

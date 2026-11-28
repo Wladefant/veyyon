@@ -35,6 +35,8 @@ function recordingBlocks(
 			until.delete(index);
 		},
 		getCredentialBlockedUntil: (_provider, _key, index) => until.get(index),
+		predictionProbeCredentialId: () => undefined,
+		reconcilePrediction: () => {},
 		markCredentialBlocked: (_provider, _key, index, blockedUntilMs) => {
 			until.set(index, blockedUntilMs);
 			marked.push([index, blockedUntilMs]);

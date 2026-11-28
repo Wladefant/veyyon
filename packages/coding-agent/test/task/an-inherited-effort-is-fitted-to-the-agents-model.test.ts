@@ -62,6 +62,7 @@ function registryFor(model: Model<Api>): ModelRegistry {
 		authStorage: {},
 		refresh: async () => {},
 		getAvailable: () => [model],
+		getAll: () => [model],
 		getApiKey: async () => "test-key",
 	} as unknown as ModelRegistry;
 }
@@ -105,7 +106,9 @@ async function spawnAt(
 	});
 	const childOptions = spy.mock.calls.at(-1)?.[0];
 	spy.mockRestore();
-	if (!childOptions) throw new Error(`no child session was created for ${selector}`);
+	if (!childOptions) throw new Error(`no child session was created for ${selector}: ${result.stderr}`);
+	// The fake session does not own or close the real transcript opened by the executor.
+	await childOptions.sessionManager?.close();
 	return { result, childOptions };
 }
 
@@ -130,6 +133,8 @@ describe("an agent's effort is fitted to the agent's own model", () => {
 		).toBe(true);
 	});
 
+	// Each request represents a new child with its own durable transcript.
+	let nextChild = 0;
 	for (const [channel, place] of [
 		[
 			"inherited from the parent",
@@ -146,8 +151,8 @@ describe("an agent's effort is fitted to the agent's own model", () => {
 		it(`runs a level ${channel} at what the agent's model accepts, and the badge states it`, async () => {
 			for (const model of models) {
 				const selector = formatModelStringWithRouting(model);
-				for (const [index, requested] of REQUESTS.entries()) {
-					const { result, childOptions } = await spawnAt(model, place(requested), `fit-${index}`);
+				for (const requested of REQUESTS) {
+					const { result, childOptions } = await spawnAt(model, place(requested), `fit-${nextChild++}`);
 					const expected = expectedLevel(model, requested);
 					const label = `${selector} asked for ${requested ?? "nothing"} (${channel})`;
 					expect(childOptions.thinkingLevel, label).toBe(expected);

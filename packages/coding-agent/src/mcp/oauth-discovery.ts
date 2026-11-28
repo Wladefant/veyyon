@@ -8,6 +8,7 @@
 import * as AIError from "@veyyon/ai/error";
 import type { FetchImpl } from "@veyyon/ai/types";
 import { errorMessage, logger, trimTrailingSlashes } from "@veyyon/utils";
+import { MCPHttpFailure } from "./transports/http-failure";
 
 export interface OAuthEndpoints {
 	authorizationUrl: string;
@@ -50,11 +51,14 @@ export interface AuthDetectionResult {
 }
 
 export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): string | undefined {
-	const match = error.message.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i);
-	if (!match?.[1]) return undefined;
+	const value =
+		error instanceof MCPHttpFailure
+			? error.mcpAuthServer
+			: error.message.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i)?.[1];
+	if (!value) return undefined;
 
 	try {
-		return new URL(match[1], serverUrl).toString();
+		return new URL(value, serverUrl).toString();
 	} catch {
 		// The server sent an `Mcp-Auth-Server` value that is not a URL, so there is no auth server to
 		// point at. Discovery continues with its well-known probes and reports if none of them work.
@@ -62,23 +66,105 @@ export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): strin
 	}
 }
 
-/**
- * Pull the `scope`/`scopes` parameter out of a `WWW-Authenticate` challenge
- * embedded in the error message. RFC 6750 lets servers advertise the missing
- * scopes when they reject a bearer token with `insufficient_scope`, and RFC
- * 8414-adjacent MCP gateways sometimes list the required scopes there rather
- * than in `scopes_supported`. Returns the raw space-separated value, or
- * `undefined` when the challenge does not carry one.
- */
-export function extractOAuthChallengeScopes(error: Error): string | undefined {
-	const entries = error.message.matchAll(/([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]+)"/g);
-	for (const [, rawKey, value] of entries) {
-		const key = rawKey.toLowerCase();
-		if ((key === "scope" || key === "scopes") && value.trim() !== "") {
-			return value;
+function leadingAuthChallenge(message: string): string | undefined {
+	// Some callers pass a standalone challenge with an optional HTTP prefix.
+	const prefix =
+		/^(?:(?:HTTP )?(?:401|403)(?: Unauthorized| Forbidden)?:[ \t]*)?(?:WWW-Authenticate:[ \t]*|(?=Bearer(?:[ \t,]|$)))/i.exec(
+			message,
+		);
+	return prefix ? message.slice(prefix[0].length) : undefined;
+}
+
+function readAuthChallenges(header: string): { scheme: string; params: ReadonlyMap<string, string> }[] {
+	const challenges: { scheme: string; params: ReadonlyMap<string, string> }[] = [];
+
+	// RFC 9110 sections 5.6 and 11: consume tokens at the current position.
+	// After a comma, a token without '=' starts a new challenge.
+	const scheme = /[!#$%&'*+\-.^_`|~0-9A-Za-z]+(?=[ \t,]|$)/y;
+	const param =
+		/([!#$%&'*+\-.^_`|~0-9A-Za-z]+)[ \t]*=[ \t]*(?:"((?:[^"\\\r\n]|\\[^\r\n])*)"|([!#$%&'*+\-.^_`|~0-9A-Za-z]+))(?=[ \t,;]|$)/y;
+	const token68 = /[a-zA-Z0-9\-._~+/]+=*(?=[ \t,]|$)/y;
+	const separator = /[ \t,]*/y;
+	let pos = 0;
+	while (pos < header.length) {
+		separator.lastIndex = pos;
+		separator.exec(header);
+		pos = separator.lastIndex;
+		scheme.lastIndex = pos;
+		const challenge = scheme.exec(header);
+		if (!challenge) break;
+		const params = new Map<string, string>();
+		challenges.push({ scheme: challenge[0].toLowerCase(), params });
+		pos = scheme.lastIndex;
+		let first = true;
+		while (pos < header.length) {
+			separator.lastIndex = pos;
+			const gap = separator.exec(header)?.[0] ?? "";
+			pos = separator.lastIndex;
+			if (!gap) return challenges;
+
+			param.lastIndex = pos;
+			const entry = param.exec(header);
+			if (entry) {
+				const key = entry[1].toLowerCase();
+				const value = entry[2]?.replace(/\\([^\r\n])/g, "$1") ?? entry[3];
+				if (value.trim() && !params.has(key)) params.set(key, value);
+				pos = param.lastIndex;
+				first = false;
+			} else if (gap.includes(",")) {
+				break;
+			} else {
+				token68.lastIndex = pos;
+				if (!first || !token68.test(header)) return challenges;
+				separator.lastIndex = token68.lastIndex;
+				if (!separator.exec(header)?.[0].includes(",")) return challenges;
+				pos = separator.lastIndex;
+				break;
+			}
 		}
 	}
-	return undefined;
+	return challenges;
+}
+
+function isHttpUrl(value: string | undefined): value is string {
+	return value !== undefined && /^https?:/i.test(value) && URL.canParse(value);
+}
+
+function challengeEndpoints(params: ReadonlyMap<string, string>) {
+	const authorizationUrl =
+		params.get("authorization_uri") ??
+		params.get("authorization_url") ??
+		params.get("authorization_endpoint") ??
+		params.get("authorize_url") ??
+		params.get("realm");
+	const tokenUrl = params.get("token_url") ?? params.get("token_uri") ?? params.get("token_endpoint");
+	return isHttpUrl(authorizationUrl) && isHttpUrl(tokenUrl) ? { authorizationUrl, tokenUrl } : undefined;
+}
+
+function challengeResourceMetadata(params: ReadonlyMap<string, string>): string | undefined {
+	const url = params.get("resource_metadata");
+	return isHttpUrl(url) ? url : undefined;
+}
+
+function readBearerParams(error: Error): ReadonlyMap<string, string> {
+	const header = error instanceof MCPHttpFailure ? error.wwwAuthenticate : leadingAuthChallenge(error.message);
+	let metadataChallenge: ReadonlyMap<string, string> | undefined;
+	let scopeChallenge: ReadonlyMap<string, string> | undefined;
+	for (const { scheme, params } of header ? readAuthChallenges(header) : []) {
+		if (scheme !== "bearer") continue;
+		if (challengeEndpoints(params)) return params;
+		// Prefer complete endpoints, then a discovery URL, then scopes alone.
+		// Within a tier, keep the first challenge in the header.
+		if (!metadataChallenge && challengeResourceMetadata(params)) metadataChallenge = params;
+		if (!scopeChallenge && (params.has("scope") || params.has("scopes"))) scopeChallenge = params;
+	}
+	return metadataChallenge ?? scopeChallenge ?? new Map();
+}
+
+/** Read the OAuth scope requested by a Bearer challenge, not the response body. */
+export function extractOAuthChallengeScopes(error: Error): string | undefined {
+	const params = readBearerParams(error);
+	return params.get("scope") ?? params.get("scopes");
 }
 
 /**
@@ -86,6 +172,10 @@ export function extractOAuthChallengeScopes(error: Error): string | undefined {
  * Looks for WWW-Authenticate header format or JSON error bodies.
  */
 export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
+	return readOAuthEndpoints(error, readBearerParams(error));
+}
+
+function readOAuthEndpoints(error: Error, challengeValues: ReadonlyMap<string, string>): OAuthEndpoints | null {
 	const errorMsg = error.message;
 
 	const readEndpointsFromObject = (obj: Record<string, unknown>): OAuthEndpoints | null => {
@@ -141,16 +231,6 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 		}
 	};
 
-	const scopeFromAuthUrl = (authorizationUrl: string): string | undefined => {
-		try {
-			return new URL(authorizationUrl).searchParams.get("scope") ?? undefined;
-		} catch {
-			// Same as `clientIdFromAuthUrl`: an optional hint, and undefined is indistinguishable from
-			// absent on purpose, because the grant carries whatever scopes the metadata advertises instead.
-			return undefined;
-		}
-	};
-
 	try {
 		// Try to parse as JSON error response
 		// Many MCP servers return JSON with OAuth endpoints in error body
@@ -184,7 +264,6 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 				return {
 					...topLevelEndpoints,
 					clientId: topLevelEndpoints.clientId || clientIdFromAuthUrl(topLevelEndpoints.authorizationUrl),
-					scopes: topLevelEndpoints.scopes || scopeFromAuthUrl(topLevelEndpoints.authorizationUrl),
 				};
 			}
 		}
@@ -192,54 +271,24 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 		// Not JSON, continue with other detection methods
 	}
 
-	const challengeEntries = Array.from(errorMsg.matchAll(/([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]+)"/g));
-	if (challengeEntries.length > 0) {
-		const challengeValues = new Map<string, string>();
-		for (const [, rawKey, value] of challengeEntries) {
-			challengeValues.set(rawKey.toLowerCase(), value);
-		}
-
-		const authorizationUrl =
-			challengeValues.get("authorization_uri") ||
-			challengeValues.get("authorization_url") ||
-			challengeValues.get("authorization_endpoint") ||
-			challengeValues.get("authorize_url") ||
-			challengeValues.get("realm");
-		const tokenUrl =
-			challengeValues.get("token_url") || challengeValues.get("token_uri") || challengeValues.get("token_endpoint");
-		const resource = challengeValues.get("resource") || challengeValues.get("resource_uri");
-
-		if (authorizationUrl && tokenUrl) {
-			return {
-				authorizationUrl,
-				tokenUrl,
-				registrationUrl:
-					challengeValues.get("registration_endpoint") ||
-					challengeValues.get("registration_url") ||
-					challengeValues.get("registration_uri"),
-				clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
-				scopes: mergeRequestedScopes(
-					challengeValues.get("scope") || challengeValues.get("scopes"),
-					scopeFromAuthUrl(authorizationUrl),
-				),
-				explicitScopes: Boolean(
-					challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
-				),
-				resource,
-			};
-		}
-	}
-
-	// Try to extract from WWW-Authenticate header format
-	// Example: Bearer realm="https://auth.example.com/oauth/authorize" token_url="https://auth.example.com/oauth/token"
-	const wwwAuthMatch = errorMsg.match(/realm="([^"]+)".*token_url="([^"]+)"/);
-	if (wwwAuthMatch) {
+	const endpoints = challengeEndpoints(challengeValues);
+	if (endpoints) {
+		const { authorizationUrl, tokenUrl } = endpoints;
+		const scope = mergeRequestedScopes(
+			challengeValues.get("scope") ?? challengeValues.get("scopes"),
+			scopeFromAuthUrl(authorizationUrl),
+		);
 		return {
-			authorizationUrl: wwwAuthMatch[1],
-			tokenUrl: wwwAuthMatch[2],
-			clientId: clientIdFromAuthUrl(wwwAuthMatch[1]),
-			scopes: scopeFromAuthUrl(wwwAuthMatch[1]),
-			explicitScopes: scopeFromAuthUrl(wwwAuthMatch[1]) !== undefined,
+			authorizationUrl,
+			tokenUrl,
+			registrationUrl:
+				challengeValues.get("registration_endpoint") ||
+				challengeValues.get("registration_url") ||
+				challengeValues.get("registration_uri"),
+			clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
+			scopes: scope,
+			explicitScopes: scope !== undefined,
+			resource: challengeValues.get("resource") || challengeValues.get("resource_uri"),
 		};
 	}
 
@@ -257,13 +306,10 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 	}
 
 	const authServerUrl = extractMcpAuthServerUrl(error, serverUrl);
-	// Extract resource_metadata URL from challenge entries in error message
-	const resourceMetaMatch = error.message.match(/resource_metadata\s*=\s*"([^"]+)"/i);
-	const resourceMetadataUrl = resourceMetaMatch?.[1];
-
-	// Try to extract OAuth endpoints
-	const oauth = extractOAuthEndpoints(error);
-	const challengeScopes = extractOAuthChallengeScopes(error);
+	const challengeValues = readBearerParams(error);
+	const resourceMetadataUrl = challengeResourceMetadata(challengeValues);
+	const oauth = readOAuthEndpoints(error, challengeValues);
+	const challengeScopes = challengeValues.get("scope") ?? challengeValues.get("scopes");
 
 	if (oauth) {
 		const mergedScopes = oauth.explicitScopes
@@ -367,6 +413,34 @@ function issuerMatchesBase(metadataIssuer: unknown, baseUrl: string): boolean {
 	return normalizedIssuer === normalizedBase;
 }
 
+function normalizeOAuthScopes(value: unknown): string | undefined {
+	return (typeof value === "string" && value.trim()) || undefined;
+}
+
+/** Choose configured scopes, explicit requests, resource scopes, then authorization-server scopes. */
+export function resolveOAuthScopes(
+	configured: string | undefined,
+	explicit: string | undefined,
+	resource?: string,
+	supported?: string,
+): Pick<OAuthEndpoints, "scopes" | "explicitScopes"> {
+	const requested = normalizeOAuthScopes(configured) ?? normalizeOAuthScopes(explicit);
+	return {
+		scopes: requested ?? normalizeOAuthScopes(resource) ?? normalizeOAuthScopes(supported),
+		explicitScopes: requested !== undefined,
+	};
+}
+
+function scopeFromAuthUrl(authorizationUrl: string): string | undefined {
+	try {
+		const params = new URL(authorizationUrl).searchParams;
+		return normalizeOAuthScopes(params.get("scope")) ?? normalizeOAuthScopes(params.get("scopes"));
+	} catch {
+		// Endpoint validation owns invalid URLs.
+		return undefined;
+	}
+}
+
 /** Combine explicit requests only; supported sets must never widen a requested grant. */
 function mergeRequestedScopes(challenge: string | undefined, provider: string | undefined): string | undefined {
 	if (!challenge) return provider;
@@ -375,18 +449,11 @@ function mergeRequestedScopes(challenge: string | undefined, provider: string | 
 }
 
 function readExplicitScopes(metadata: Record<string, unknown>, authorizationUrl?: string): string | undefined {
-	for (const value of [metadata.scope, metadata.scopes]) {
-		if (typeof value === "string" && value.trim() !== "") return value;
-	}
-	if (authorizationUrl) {
-		try {
-			const params = new URL(authorizationUrl).searchParams;
-			return params.get("scope") ?? params.get("scopes") ?? undefined;
-		} catch {
-			// An invalid endpoint has no usable scope hint; endpoint validation owns the error.
-		}
-	}
-	return undefined;
+	return (
+		normalizeOAuthScopes(metadata.scope) ??
+		normalizeOAuthScopes(metadata.scopes) ??
+		(authorizationUrl ? scopeFromAuthUrl(authorizationUrl) : undefined)
+	);
 }
 
 /**
@@ -399,7 +466,9 @@ function readMetadataScopes(metadata: Record<string, unknown>): string | undefin
 	const explicit = readExplicitScopes(metadata);
 	if (explicit !== undefined) return explicit;
 	if (Array.isArray(metadata.scopes_supported)) {
-		const joined = metadata.scopes_supported.filter((scope): scope is string => typeof scope === "string").join(" ");
+		const joined = metadata.scopes_supported
+			.filter((scope): scope is string => normalizeOAuthScopes(scope) !== undefined)
+			.join(" ");
 		if (joined) return joined;
 	}
 	return undefined;
@@ -424,9 +493,10 @@ export async function fetchResourceMetadataScopes(
 			method: "GET",
 			headers: { Accept: "application/json" },
 			redirect: "follow",
+			signal: AbortSignal.timeout(5_000),
 		});
 		if (!resp.ok) {
-			logger.warn("Protected-resource metadata could not be fetched; the grant will carry no advertised scopes", {
+			logger.warn("Protected-resource scopes could not be fetched", {
 				url: resourceMetadataUrl,
 				status: resp.status,
 			});
@@ -435,10 +505,7 @@ export async function fetchResourceMetadataScopes(
 		const meta = (await resp.json()) as Record<string, unknown>;
 		return readMetadataScopes(meta);
 	} catch (error) {
-		// Undefined also means "this document advertises no scopes", which is normal, so a FAILURE to read
-		// it has to say so: the authorization request then goes out without the scopes the server expects
-		// and comes back as an opaque `invalid_scope` or `server_error` with nothing pointing here.
-		logger.warn("Protected-resource metadata could not be read; the grant will carry no advertised scopes", {
+		logger.warn("Protected-resource scopes could not be read", {
 			url: resourceMetadataUrl,
 			error: errorMessage(error),
 		});
@@ -517,6 +584,10 @@ export async function discoverOAuthEndpoints(
 	const findEndpoints = (metadata: Record<string, unknown>): OAuthEndpoints | null => {
 		if (metadata.authorization_endpoint && metadata.token_endpoint) {
 			const resource = typeof metadata.resource === "string" ? metadata.resource : protectedResource;
+			const requestedScopes = mergeRequestedScopes(
+				opts?.protectedScopes,
+				readExplicitScopes(metadata, String(metadata.authorization_endpoint)),
+			);
 
 			return {
 				authorizationUrl: String(metadata.authorization_endpoint),
@@ -532,18 +603,7 @@ export async function discoverOAuthEndpoints(
 								: typeof metadata.public_client_id === "string"
 									? metadata.public_client_id
 									: undefined,
-				scopes:
-					opts?.scopes ??
-					mergeRequestedScopes(
-						opts?.protectedScopes,
-						readExplicitScopes(metadata, String(metadata.authorization_endpoint)),
-					) ??
-					protectedScopes ??
-					readMetadataScopes(metadata),
-				explicitScopes:
-					opts?.scopes !== undefined ||
-					opts?.protectedScopes !== undefined ||
-					readExplicitScopes(metadata, String(metadata.authorization_endpoint)) !== undefined,
+				...resolveOAuthScopes(opts?.scopes, requestedScopes, protectedScopes, readMetadataScopes(metadata)),
 				resource,
 			};
 		}
@@ -552,6 +612,10 @@ export async function discoverOAuthEndpoints(
 			const oauthData = (metadata.oauth || metadata.authorization || metadata.auth) as Record<string, unknown>;
 			if (typeof oauthData.authorization_url === "string" && typeof oauthData.token_url === "string") {
 				const resource = typeof oauthData.resource === "string" ? oauthData.resource : protectedResource;
+				const requestedScopes = mergeRequestedScopes(
+					opts?.protectedScopes,
+					readExplicitScopes(oauthData, oauthData.authorization_url) ?? readExplicitScopes(metadata),
+				);
 
 				return {
 					authorizationUrl: oauthData.authorization_url || String(oauthData.authorizationUrl),
@@ -567,19 +631,7 @@ export async function discoverOAuthEndpoints(
 									: typeof oauthData.public_client_id === "string"
 										? oauthData.public_client_id
 										: undefined,
-					scopes:
-						opts?.scopes ??
-						mergeRequestedScopes(
-							opts?.protectedScopes,
-							readExplicitScopes(oauthData, oauthData.authorization_url) ?? readExplicitScopes(metadata),
-						) ??
-						protectedScopes ??
-						readMetadataScopes(oauthData),
-					explicitScopes:
-						opts?.scopes !== undefined ||
-						opts?.protectedScopes !== undefined ||
-						readExplicitScopes(oauthData, oauthData.authorization_url) !== undefined ||
-						readExplicitScopes(metadata) !== undefined,
+					...resolveOAuthScopes(opts?.scopes, requestedScopes, protectedScopes, readMetadataScopes(oauthData)),
 					resource,
 				};
 			}

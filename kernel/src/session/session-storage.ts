@@ -11,7 +11,7 @@ import { type PathState, pathStateSync } from "@veyyon/utils/fs-optional";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { peekFileEnds } from "@veyyon/utils/peek-file";
-import { sessionBackupName, sessionFileStem } from "@veyyon/utils/session-file";
+import { isSessionFileName, sessionBackupName, sessionFileStem } from "@veyyon/utils/session-file";
 import { Snowflake } from "@veyyon/utils/snowflake";
 import { toError } from "@veyyon/utils/type-guards";
 import { SESSION_TITLE_SLOT_ENTRY_TYPE } from "./session-entries";
@@ -1243,7 +1243,7 @@ export class FileSessionStorage implements SessionStorage {
 		tempPath: string,
 		sourceSnapshot: JournalSnapshot | null | undefined,
 	): StagedPublishScope | undefined {
-		if (!targetPath.endsWith(".jsonl")) return undefined;
+		if (!isSessionFileName(targetPath)) return undefined;
 		const snapshot = sourceSnapshot === undefined ? this.snapshotJournal(targetPath) : sourceSnapshot;
 		return {
 			tempPath,

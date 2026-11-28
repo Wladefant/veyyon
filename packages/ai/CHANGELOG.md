@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recheck old Antigravity quota predictions against the same window in a fresh summary. Keep confirmed rate-limit holds in force ([Superboard #2679](https://github.com/Wladefant/superboard/issues/2679)).
+- Keep Gemini 4 tool history valid on Cloud Code Assist after a model switch or compaction ([#1284](https://github.com/Wladefant/veyyon/issues/1284)).
+- Cap new HTTP 400 and 413 request dumps at 256 files or 64 MiB per profile. Keep recent dumps for seven days and leave legacy files untouched ([Superboard #3367](https://github.com/Wladefant/superboard/issues/3367)).
+- Time out stalled Codex request setup without cutting off active thinking or tool responses ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
+- Defer ArkType schema creation until the first OpenAI transcription response needs validation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Retry empty provider responses without treating them as account plan denials ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- With load balancing on, a saved Codex account leads when eligible and yields to another enabled login when blocked.
+
 ## [1.12.2] - 2026-11-21
 
 ### Fixed

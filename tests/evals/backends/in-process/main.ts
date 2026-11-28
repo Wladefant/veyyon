@@ -231,11 +231,12 @@ export class InProcessBackend implements ExecutionBackend {
 
 		const { promise: deadlinePromise, reject: rejectDeadline } = Promise.withResolvers<never>();
 		const interrupt = (reason: string): void => {
-			timeoutAbort.abort();
+			const error = new Error(reason);
+			timeoutAbort.abort(error);
 			try {
 				client.abort?.();
 			} catch {}
-			rejectDeadline(new Error(reason));
+			rejectDeadline(error);
 		};
 		const timeoutTimer = setTimeout(() => {
 			timedOut = true;
@@ -248,6 +249,7 @@ export class InProcessBackend implements ExecutionBackend {
 			cancelled = true;
 			interrupt("Trial aborted by context signal");
 		};
+		context.signal?.addEventListener("abort", onCancel);
 		if (context.signal?.aborted) onCancel();
 
 		const runClient = async (): Promise<{
@@ -255,9 +257,12 @@ export class InProcessBackend implements ExecutionBackend {
 			text: string | null;
 			sessionState: InProcessSessionState | undefined;
 		}> => {
+			timeoutAbort.signal.throwIfAborted();
 			await client.start();
+			timeoutAbort.signal.throwIfAborted();
 			if (typeof client.getState === "function") {
 				state = await client.getState();
+				timeoutAbort.signal.throwIfAborted();
 			}
 			if (instruction) {
 				await client.prompt(instruction);

@@ -90,10 +90,10 @@ function assistantMessage(text: string, stopReason: StopReason): AssistantMessag
  * cut short or failed ends on `error`, which is the only event that carries
  * those two reasons.
  */
-function endedStream(text: string, reason: StopReason): AssistantMessageEventStream {
+function endedStream(text: string, reason: StopReason, release?: Promise<void>): AssistantMessageEventStream {
 	const stream = new AssistantMessageEventStream();
 	const message = assistantMessage(text, reason);
-	queueMicrotask(() => {
+	const reply = () => {
 		stream.push({ type: "start", partial: { ...message, content: [] } });
 		stream.push({
 			type: "text_start",
@@ -107,7 +107,9 @@ function endedStream(text: string, reason: StopReason): AssistantMessageEventStr
 			return;
 		}
 		stream.push({ type: "done", reason, message });
-	});
+	};
+	if (release) void release.then(reply);
+	else queueMicrotask(reply);
 	return stream;
 }
 
@@ -150,6 +152,7 @@ describe("a turn that ends stops being listed as running", () => {
 	let callsATool: boolean;
 	/** How many requests this suite's provider answered for a turn, not a title. */
 	let turnRequests: number;
+	let releaseTurn: PromiseWithResolvers<void> | undefined;
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-turn-index-"));
@@ -166,11 +169,12 @@ describe("a turn that ends stops being listed as running", () => {
 		replyEnding = "stop";
 		callsATool = false;
 		turnRequests = 0;
+		releaseTurn = undefined;
 		vi.spyOn(ai, "streamSimple").mockImplementation((_model, context) => {
 			if (isTitleRequest(context)) return endedStream(`<title>${TITLE}</title>`, "stop");
 			turnRequests += 1;
 			if (callsATool && turnRequests === 1) return toolCallStream();
-			return endedStream("Hello from engine!", replyEnding);
+			return endedStream("Hello from engine!", replyEnding, releaseTurn?.promise);
 		});
 		server = await startGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
@@ -184,6 +188,7 @@ describe("a turn that ends stops being listed as running", () => {
 	});
 
 	afterEach(async () => {
+		releaseTurn?.resolve();
 		vi.restoreAllMocks();
 		client.destroy();
 		if (server) {
@@ -216,11 +221,14 @@ describe("a turn that ends stops being listed as running", () => {
 	 * rather than as a read that never returns — which is the shape of the
 	 * defect: the row waits for a listing forever, counting up.
 	 */
-	async function listedStatusesUntilSettled(session: string): Promise<{ statuses: string[]; cleared: boolean }> {
+	async function listedStatusesUntilSettled(
+		session: string,
+		initialFrames: RequestFrame[] = [],
+	): Promise<{ statuses: string[]; cleared: boolean }> {
 		const statuses: string[] = [];
 		let cleared = false;
 		for (let read = 0; read < 400; read++) {
-			const frame = (await client.nextFrame()) as RequestFrame;
+			const frame = initialFrames[read] ?? ((await client.nextFrame()) as RequestFrame);
 			if (frame.RequestFailed) throw new Error(`Unexpected RequestFailed: ${JSON.stringify(frame.RequestFailed)}`);
 			const event = frame as HostEvent;
 			if ("StreamingChanged" in event && event.StreamingChanged === null) cleared = true;
@@ -255,10 +263,23 @@ describe("a turn that ends stops being listed as running", () => {
 		// carrying that title is written while the turn is still owed a reply and
 		// reports the session as pending.
 		const session = await createSession(1);
+		releaseTurn = Promise.withResolvers<void>();
 		const submitted = await client.request(2, { SubmitPrompt: { session, text: TASK_PROMPT } });
 		expect(submitted.outcome).toEqual({ RequestSucceeded: { request: 2 } });
 
-		const { statuses, cleared } = await listedStatusesUntilSettled(session);
+		const beforeReply = [...submitted.frames];
+		let named = false;
+		for (let read = 0; read < 400; read++) {
+			if (rowIn(beforeReply, session)?.title === TITLE) {
+				expect(rowIn(beforeReply, session)?.status).toBe("Pending");
+				named = true;
+				break;
+			}
+			beforeReply.push((await client.nextFrame()) as RequestFrame);
+		}
+		expect(named).toBe(true);
+		releaseTurn.resolve();
+		const { statuses, cleared } = await listedStatusesUntilSettled(session, beforeReply);
 		expect(statuses.at(-1)).toBe("Complete");
 		// The settled listing follows the reply, so nothing after it can put the
 		// row back on a status read from a file that was still being written.

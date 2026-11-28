@@ -10,28 +10,35 @@ import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 useIsolatedGlobalSettings();
 const tempDir = useTrackedTempDirs("bash-timeout-killguard-");
 
+function shellQuote(file: string): string {
+	return `'${file.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`;
+}
+
 it("bash timeout kills its sleeping child without killing the host", async () => {
 	// Native deadlines and OS process exit use the real platform clock; fake JS
 	// timers cannot exercise the cancellation bridge or prove the child was reaped.
 	const dir = tempDir();
 	const pidFile = path.join(dir, "child.pid");
-	const script = path.join(dir, "sleeper.js");
+	// The runner already supplies Bun. Node on the host's PATH may not be visible inside the sandbox.
+	const script = path.join(dir, "sleeper.cjs");
 	await writeFile(
 		script,
 		`require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60000);`,
 	);
 	const hostPid = process.pid;
 	const tool = new BashTool(makeToolSession({ cwd: dir }));
-	let failure: unknown;
-	try {
-		await tool.execute("killguard-timeout", {
-			command: `node "${script.replaceAll("\\", "/")}"`,
+	const failure: unknown = await tool
+		.execute("killguard-timeout", {
+			command: `${shellQuote(process.execPath)} ${shellQuote(script)}`,
 			timeout: 2,
 			backgroundAfter: 30,
-		});
-	} catch (error) {
-		failure = error;
-	}
+		})
+		.then(
+			result => {
+				throw new Error(`Sleeper returned before the timeout: ${JSON.stringify(result.content)}`);
+			},
+			(error: unknown) => error,
+		);
 	expect(failure).toBeInstanceOf(Error);
 	expect((failure as Error).message).toContain("timed out");
 	const childPid = Number(await readFile(pidFile, "utf8"));
@@ -41,7 +48,8 @@ it("bash timeout kills its sleeping child without killing the host", async () =>
 	for (let attempt = 0; attempt < 100 && alive; attempt++) {
 		try {
 			process.kill(childPid, 0);
-		} catch {
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 			alive = false;
 		}
 		if (alive) await delay(50);

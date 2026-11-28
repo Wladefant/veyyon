@@ -33,6 +33,13 @@ interface Listing {
 }
 
 const LISTINGS: Record<string, Listing> = {
+	listEvents: {
+		method: "events/list",
+		capabilities: { events: {} },
+		key: "name",
+		list: connection => client.listEvents(connection),
+		page: (index, nextCursor) => ({ events: [{ name: `event-${index}`, delivery: ["poll"] }], nextCursor }),
+	},
 	listTools: {
 		method: "tools/list",
 		capabilities: { tools: {} },

@@ -201,8 +201,9 @@ describe("cross-provider terminal and transient error conditions", () => {
 			model: { api: "anthropic-messages", provider: "anthropic" },
 			settings: { "retry.maxRetries": 2, "retry.baseDelayMs": 1, "retry.maxDelayMs": 2 },
 			script: scriptTurns(
+				// No visible text before the drop. Visible text is replay-unsafe (5d3b3d1d, failed-turn.ts),
+				// so the recoverable fault must carry none to be retried.
 				turn => {
-					turn.text("partial text before drop");
 					turn.fail(incompleteError.message, errorId);
 				},
 				turn => {

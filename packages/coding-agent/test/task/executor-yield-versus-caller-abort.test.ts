@@ -74,8 +74,7 @@ describe("terminal provider error notification", () => {
 		const report = vi.spyOn(reporter, "reportProviderError").mockImplementation(() => {});
 		const result = await runSubprocess({ ...baseOptions, id: "terminal-provider-error" });
 		expect(result.exitCode).toBe(1);
-		expect(report).toHaveBeenCalledTimes(1);
-		expect(report).toHaveBeenCalledWith("openai-codex/gpt-5.6-sol", body);
+		expect(report.mock.calls).toEqual([["openai-codex/gpt-5.6-sol", body]]);
 	});
 });
 

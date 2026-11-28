@@ -2,6 +2,7 @@
  * WHY: A trusted profile config must activate the real session's secret_request tool before any
  * actor binds, while an unconfigured session must not expose it. This closes startup wiring gaps;
  * it does not test Bitwarden actor registration or any real vault operation.
+ * The config is read by secrets/intake-host (`prepareSecretIntakeHost`), which sdk.ts calls for the root session. The cases below run through that call.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -37,16 +38,23 @@ async function startSession(configured: boolean): Promise<AgentSession> {
 	await fs.mkdir(agentDir, { recursive: true });
 	await fs.mkdir(cwd, { recursive: true });
 	if (configured) {
-		await fs.writeFile(path.join(agentDir, "secret-intake.json"), JSON.stringify({
-			version: 1,
-			projects: [{
-				projectRoot: cwd,
-				organizationId: "synthetic-organization",
-				collectionId: "synthetic-collection-id",
-				vaultCollection: "synthetic-collection",
-				operations: [{ tool: "bash", purpose: "synthetic-check", command: "true", envKey: "SYNTHETIC_SECRET" }],
-			}],
-		}));
+		await fs.writeFile(
+			path.join(agentDir, "secret-intake.json"),
+			JSON.stringify({
+				version: 1,
+				projects: [
+					{
+						projectRoot: cwd,
+						organizationId: "synthetic-organization",
+						collectionId: "synthetic-collection-id",
+						vaultCollection: "synthetic-collection",
+						operations: [
+							{ tool: "bash", purpose: "synthetic-check", command: "true", envKey: "SYNTHETIC_SECRET" },
+						],
+					},
+				],
+			}),
+		);
 	}
 	const authStorage = await AuthStorage.create(root.join("auth.db"));
 	const { session } = await createAgentSession({

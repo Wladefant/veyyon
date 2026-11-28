@@ -985,13 +985,19 @@ export async function writeArchive(
 	format: ArchiveFormat,
 	entries: Iterable<readonly [string, ArchiveMemberContent]>,
 ): Promise<void> {
+	await writeFileCreatingParents(destPath, await serializeArchive(format, entries));
+}
+
+export async function serializeArchive(
+	format: ArchiveFormat,
+	entries: Iterable<readonly [string, ArchiveMemberContent]>,
+): Promise<Uint8Array> {
 	if (format === "zip") {
 		const record: Unzipped = Object.create(null);
 		for (const [name, content] of entries) {
 			record[name.replace(/\\/g, "/")] = await memberToBytes(content);
 		}
-		await writeFileCreatingParents(destPath, zip(record));
-		return;
+		return zip(record);
 	}
 
 	const record: Record<string, ArchiveMemberContent> = Object.create(null);
@@ -999,7 +1005,7 @@ export async function writeArchive(
 		record[name.replace(/\\/g, "/")] = content;
 	}
 	const archive = new Bun.Archive(record, format === "tar.gz" ? { compress: "gzip" } : undefined);
-	await writeFileCreatingParents(destPath, await archive.bytes());
+	return archive.bytes();
 }
 
 /**

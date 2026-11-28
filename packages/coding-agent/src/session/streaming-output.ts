@@ -8,7 +8,7 @@ export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from 
 
 import { formatBytes } from "@veyyon/utils/format";
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
-import { ProducerOutputGuard } from "../secrets/producer-output";
+import { hasOversizedLine, ProducerOutputGuard } from "../secrets/producer-output";
 import { currentProducerSecretOwner } from "../secrets/producer-owner";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 
@@ -83,6 +83,8 @@ export interface OutputSummary {
 	columnMax?: number;
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
+	/** The guarded capture saw a line above the normal producer record limit. */
+	wideRecord?: boolean;
 	/**
 	 * Bytes elided from the middle of the on-disk artifact when the artifact
 	 * cap was exceeded. Present only when artifact truncation occurred.
@@ -101,6 +103,8 @@ export interface OutputSinkOptions {
 	outputGuard?: ProducerOutputGuard;
 	artifactPath?: string;
 	artifactId?: string;
+	/** Spill approved wide lines even when the inline window could hold them. */
+	spillWideRecords?: boolean;
 	/** Tail buffer budget (bytes). Default DEFAULT_MAX_BYTES. */
 	spillThreshold?: number;
 	/**
@@ -904,11 +908,12 @@ export class OutputSink {
 	readonly #chunkThrottleMs: number;
 	readonly #maxColumns: number;
 	readonly #outputGuard?: ProducerOutputGuard;
+	readonly #spillWideRecords: boolean;
+	#wideRecord = false;
 
 	// Optional artifact-on-disk cap. When `#artifactMaxBytes > 0` the file sink
 	// owns a head budget + a rolling tail buffer; once the head is closed,
-	// subsequent chunks are diverted into `#artifactTailRing` (bounded by
-	// `#artifactTailBudget`). On `dump()` the tail is flushed back to the sink
+	// subsequent chunks are diverted into the rolling tail. On `dump()` it is flushed to the sink
 	// behind a `[ARTIFACT TRUNCATED: …]` notice. The default cap is 16 MiB;
 	// set `artifactMaxBytes` to zero for a lossless artifact capture.
 	readonly #artifactMaxBytes: number;
@@ -916,7 +921,7 @@ export class OutputSink {
 	readonly #artifactTailBudget: number;
 	#artifactHeadBytesWritten = 0;
 	#artifactHeadClosed = false;
-	#artifactTailRing = "";
+	#artifactTail: TailBuffer | undefined;
 	#artifactTailRingBytes = 0;
 	#artifactTailIncomingBytes = 0;
 
@@ -929,6 +934,7 @@ export class OutputSink {
 			artifactPath,
 			artifactId,
 			spillThreshold = DEFAULT_MAX_BYTES,
+			spillWideRecords = false,
 			headBytes = 0,
 			maxColumns = 0,
 			onChunk,
@@ -941,6 +947,7 @@ export class OutputSink {
 		this.#outputGuard =
 			options?.outputGuard ?? (producerOwner ? new ProducerOutputGuard(producerOwner.redact) : undefined);
 		this.#artifactId = artifactId;
+		this.#spillWideRecords = spillWideRecords;
 		this.#spillThreshold = spillThreshold;
 		this.#headLimit = Math.max(0, headBytes);
 		this.#maxColumns = Math.max(0, maxColumns);
@@ -986,6 +993,8 @@ export class OutputSink {
 		this.#partialEscape = partial;
 		if (head.length === 0) return;
 		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
+		const wideRecord = this.#spillWideRecords && hasOversizedLine(chunk);
+		this.#wideRecord ||= wideRecord;
 		const inline =
 			options?.inline === undefined ? undefined : (this.#outputGuard?.sanitize(options.inline) ?? options.inline);
 		const substituted = inline !== undefined;
@@ -1028,7 +1037,7 @@ export class OutputSink {
 		// prior chunk already opened the artifact.
 		if (
 			this.#artifactPath &&
-			(this.#file != null || substituted || cappedThisChunk || this.#willOverflow(cappedBytes))
+			(this.#file != null || wideRecord || substituted || cappedThisChunk || this.#willOverflow(cappedBytes))
 		) {
 			this.#writeToFile(chunk);
 		}
@@ -1073,50 +1082,63 @@ export class OutputSink {
 	#applyColumnCap(chunk: string): string {
 		if (chunk.length === 0) return chunk;
 		const max = this.#maxColumns;
-		const parts: string[] = [];
+		let parts: string[] | undefined;
 		let cursor = 0;
 		while (cursor < chunk.length) {
 			const nlIdx = chunk.indexOf(NL, cursor);
 			const segEnd = nlIdx === -1 ? chunk.length : nlIdx;
 			if (segEnd > cursor) {
-				const segment = chunk.substring(cursor, segEnd);
 				if (this.#columnEllipsisAdded) {
 					// Past the cap; drop until newline.
+					if (!parts) parts = cursor > 0 ? [chunk.slice(0, cursor)] : [];
+					const segment = cursor === 0 && segEnd === chunk.length ? chunk : chunk.slice(cursor, segEnd);
 					this.#columnDroppedBytes += Buffer.byteLength(segment, "utf-8");
 				} else {
-					const segBytes = Buffer.byteLength(segment, "utf-8");
+					const segLen = segEnd - cursor;
 					const remaining = max - this.#currentLineBytes;
-					if (segBytes <= remaining) {
-						parts.push(segment);
-						this.#currentLineBytes += segBytes;
-					} else {
-						// First overflow on this line: keep what fits, append ellipsis,
-						// arm the skip-until-newline flag.
-						const ellipsisBytes = 3; // "…" in UTF-8
-						const headRoom = Math.max(0, remaining - ellipsisBytes);
-						let kept = "";
-						let keptBytes = 0;
-						if (headRoom > 0) {
-							const sliced = truncateHeadBytes(segment, headRoom);
-							kept = sliced.text;
-							keptBytes = sliced.bytes;
-							parts.push(kept);
+					// Each UTF-16 code unit encodes to at most 3 UTF-8 bytes (a 2-unit surrogate pair is 4 bytes).
+					if (segLen * 3 <= remaining) {
+						if (parts) parts.push(chunk.slice(cursor, segEnd));
+						if (nlIdx === -1) {
+							const segment = cursor === 0 && segEnd === chunk.length ? chunk : chunk.slice(cursor, segEnd);
+							this.#currentLineBytes += Buffer.byteLength(segment, "utf-8");
 						}
-						parts.push(ELLIPSIS);
-						this.#columnDroppedBytes += segBytes - keptBytes;
-						this.#columnTruncatedLines++;
-						this.#currentLineBytes += keptBytes + ellipsisBytes;
-						this.#columnEllipsisAdded = true;
+					} else {
+						const segment = cursor === 0 && segEnd === chunk.length ? chunk : chunk.slice(cursor, segEnd);
+						const segBytes = Buffer.byteLength(segment, "utf-8");
+						if (segBytes <= remaining) {
+							if (parts) parts.push(segment);
+							if (nlIdx === -1) this.#currentLineBytes += segBytes;
+						} else {
+							// First overflow on this line: keep what fits, append ellipsis,
+							// arm the skip-until-newline flag.
+							if (!parts) parts = cursor > 0 ? [chunk.slice(0, cursor)] : [];
+							const ellipsisBytes = 3; // "…" in UTF-8
+							const headRoom = Math.max(0, remaining - ellipsisBytes);
+							let kept = "";
+							let keptBytes = 0;
+							if (headRoom > 0) {
+								const sliced = truncateHeadBytes(segment, headRoom);
+								kept = sliced.text;
+								keptBytes = sliced.bytes;
+								parts.push(kept);
+							}
+							parts.push(ELLIPSIS);
+							this.#columnDroppedBytes += segBytes - keptBytes;
+							this.#columnTruncatedLines++;
+							this.#currentLineBytes += keptBytes + ellipsisBytes;
+							this.#columnEllipsisAdded = true;
+						}
 					}
 				}
 			}
 			if (nlIdx === -1) break;
-			parts.push(NL);
+			if (parts) parts.push(NL);
 			this.#currentLineBytes = 0;
 			this.#columnEllipsisAdded = false;
 			cursor = nlIdx + 1;
 		}
-		return parts.join("");
+		return parts ? parts.join("") : chunk;
 	}
 
 	#willOverflow(dataBytes: number): boolean {
@@ -1272,23 +1294,9 @@ export class OutputSink {
 	}
 
 	#pushArtifactTail(chunk: string): void {
-		const chunkBytes = Buffer.byteLength(chunk, "utf-8");
-		this.#artifactTailIncomingBytes += chunkBytes;
-		const budget = this.#artifactTailBudget;
-		if (chunkBytes >= budget) {
-			// Chunk alone dominates — keep only its tail slice.
-			const { text, bytes } = truncateTailBytes(chunk, budget);
-			this.#artifactTailRing = text;
-			this.#artifactTailRingBytes = bytes;
-			return;
-		}
-		this.#artifactTailRing += chunk;
-		this.#artifactTailRingBytes += chunkBytes;
-		if (this.#artifactTailRingBytes > budget) {
-			const { text, bytes } = truncateTailBytes(this.#artifactTailRing, budget);
-			this.#artifactTailRing = text;
-			this.#artifactTailRingBytes = bytes;
-		}
+		this.#artifactTailIncomingBytes += Buffer.byteLength(chunk, "utf-8");
+		this.#artifactTail ??= new TailBuffer(this.#artifactTailBudget);
+		this.#artifactTail.append(chunk);
 	}
 
 	async #createFileSink(): Promise<void> {
@@ -1430,7 +1438,10 @@ export class OutputSink {
 	#flushArtifactTailIfCapped(): void {
 		if (!this.#file) return;
 		if (this.#artifactMaxBytes === 0) return;
-		const tailBytes = this.#artifactTailRingBytes;
+		const tail = this.#artifactTail?.text() ?? "";
+		const tailBytes = Buffer.byteLength(tail, "utf-8");
+		this.#artifactTail = undefined;
+		this.#artifactTailRingBytes = tailBytes;
 		const droppedBytes = Math.max(0, this.#artifactTailIncomingBytes - tailBytes);
 		if (tailBytes === 0 && droppedBytes === 0) return;
 
@@ -1438,14 +1449,14 @@ export class OutputSink {
 			const headWritten = this.#artifactHeadBytesWritten;
 			const totalCapped = headWritten + this.#artifactTailIncomingBytes;
 			const headSep = headWritten > 0 ? "\n" : "";
-			const tailSep = tailBytes > 0 && !this.#artifactTailRing.startsWith("\n") ? "\n" : "";
+			const tailSep = tailBytes > 0 && !tail.startsWith("\n") ? "\n" : "";
 			const notice =
 				`${headSep}[ARTIFACT TRUNCATED: kept first ${formatBytes(headWritten)} + last ${formatBytes(tailBytes)} ` +
 				`of ${formatBytes(totalCapped)}; ${formatBytes(droppedBytes)} elided from the middle]${tailSep}`;
 			this.#writeArtifactChunk(notice, "flush");
 		}
 		if (tailBytes > 0) {
-			this.#writeArtifactChunk(this.#artifactTailRing, "flush");
+			this.#writeArtifactChunk(tail, "flush");
 		}
 	}
 
@@ -1626,6 +1637,7 @@ export class OutputSink {
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
 			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,
 			artifactId: hasArtifactError ? undefined : this.#file?.artifactId,
+			...(this.#wideRecord ? { wideRecord: true } : {}),
 			artifactElidedBytes: artifactElidedBytes && artifactElidedBytes > 0 ? artifactElidedBytes : undefined,
 			artifactError: this.#artifactError,
 		};

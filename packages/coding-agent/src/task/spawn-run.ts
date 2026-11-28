@@ -74,6 +74,7 @@ export interface SpawnRequest {
 	detached: boolean;
 	/** Epochs bracketing the spawn semaphore wait; see `ExecutorOptions.invokedAt`. */
 	launchTiming?: { invokedAt: number; acquiredAt: number };
+	onStartupPhase?: ExecutorOptions["onStartupPhase"];
 }
 
 /** The isolation an isolated spawn runs in. */
@@ -658,6 +659,7 @@ async function runPreparedSpawn(
 		artifactsDir: spawn.artifacts.dir,
 		localProtocolOptions: spawn.localProtocolOptions,
 		signal: request.signal,
+		onStartupPhase: request.onStartupPhase,
 		onProgress: progress => {
 			// Shallow snapshot; recentTools is mutated in place by the executor, the rest is reassigned or
 			// immutable. A deep clone here cost O(extractedToolData) per progress event.

@@ -116,7 +116,7 @@ describe("a click on an agent HUD row focuses that agent", () => {
 	});
 
 	/** Spawn `count` detached agents and let the coalesced HUD rebuild land. */
-	async function spawn(count: number): Promise<string[]> {
+	async function publishAgents(count: number): Promise<string[]> {
 		vi.useFakeTimers();
 		const ids = Array.from({ length: count }, (_, i) => `HudAgent${i}`);
 		ids.forEach((id, i) => {
@@ -136,7 +136,7 @@ describe("a click on an agent HUD row focuses that agent", () => {
 
 	it("focuses exactly the agent on the clicked row, and nothing from any other line", async () => {
 		// One past the cap, so the overflow count row is drawn and swept too.
-		const ids = await spawn(AGENT_HUD_VISIBLE_LIMIT + 1);
+		const ids = await publishAgents(AGENT_HUD_VISIBLE_LIMIT + 1);
 		const focus = vi.spyOn(mode, "focusAgentSession").mockResolvedValue();
 		const lines = drawn();
 		expect(lines.some(line => line.includes("more running"))).toBe(true);
@@ -157,7 +157,7 @@ describe("a click on an agent HUD row focuses that agent", () => {
 	});
 
 	it("acts on the press only, so a release on the same row does not focus twice", async () => {
-		const [id] = await spawn(1);
+		const [id] = await publishAgents(1);
 		const focus = vi.spyOn(mode, "focusAgentSession").mockResolvedValue();
 		const line = drawn().findIndex(row => row.includes(id!));
 		mode.agentContainer.routeMouse(LEFT_PRESS, line, 4);
@@ -169,12 +169,12 @@ describe("a click on an agent HUD row focuses that agent", () => {
 		const container: Component & Partial<MouseRoutable> = mode.agentContainer;
 		const pointer = () => container.wantsPointer?.() === true;
 		expect(pointer()).toBe(false);
-		await spawn(1);
+		await publishAgents(1);
 		expect(pointer()).toBe(true);
 	});
 
 	it("reports a refused focus instead of dropping it", async () => {
-		const [id] = await spawn(1);
+		const [id] = await publishAgents(1);
 		vi.spyOn(mode, "focusAgentSession").mockRejectedValue(new Error(`Agent "${id}" was terminated`));
 		const shown = vi.spyOn(mode, "showError").mockImplementation(() => {});
 		mode.agentContainer.routeMouse(
@@ -184,11 +184,11 @@ describe("a click on an agent HUD row focuses that agent", () => {
 		);
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(shown).toHaveBeenCalledWith(`Agent "${id}" was terminated`);
+		expect(shown.mock.calls).toContainEqual([`Agent "${id}" was terminated`]);
 	});
 
 	it("keeps one drawn row per mapped line after the terminal narrows", async () => {
-		const ids = await spawn(3);
+		const ids = await publishAgents(3);
 		const focus = vi.spyOn(mode, "focusAgentSession").mockResolvedValue();
 		const wide = drawn();
 		// A width far narrower than the rows the block was built for.
@@ -208,11 +208,11 @@ describe("a click on an agent HUD row focuses that agent", () => {
 	});
 
 	it("ignores the right and middle buttons", async () => {
-		const [id] = await spawn(1);
+		const [id] = await publishAgents(1);
 		const focus = vi.spyOn(mode, "focusAgentSession").mockResolvedValue();
 		const line = drawn().findIndex(row => row.includes(id!));
 		mode.agentContainer.routeMouse(sgr("\x1b[<2;5;1M"), line, 4);
 		mode.agentContainer.routeMouse(sgr("\x1b[<1;5;1M"), line, 4);
-		expect(focus).not.toHaveBeenCalled();
+		expect(focus.mock.calls).toHaveLength(0);
 	});
 });

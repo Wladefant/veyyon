@@ -680,7 +680,7 @@ describe("process supervisor", () => {
 			const activeContent = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
 			expect(activeContent).toBe(chunk2);
 
-			const rotatedFile = path.join(ctx.sessionStderrDir, `${pid}.stderr.1.log`);
+			const rotatedFile = result.report!.stderrFiles[1];
 			expect(fs.existsSync(rotatedFile)).toBe(true);
 			expect(fs.readFileSync(rotatedFile, "utf8")).toBe(chunk1);
 
@@ -746,7 +746,7 @@ describe("process supervisor", () => {
 		}
 	});
 
-	test("stderr rotation with maxFiles=1 truncates single log file at rotate", async () => {
+	test("stderr capture with maxFiles=1 preserves the first segment and reports the limit", async () => {
 		const ctx = createTestContext();
 		try {
 			const pid = 5559;
@@ -766,12 +766,11 @@ describe("process supervisor", () => {
 				forwardStderr: false,
 			});
 
-			expect(result.reported).toBe(true);
-			expect(result.report?.stderrStatus).toBe("captured");
-			expect(result.report?.stderrFiles.length).toBe(1);
-			expect(fs.existsSync(path.join(ctx.sessionStderrDir, `${pid}.stderr.1.log`))).toBe(false);
+			expect(result.report?.stderrStatus).toBe("error");
+			expect(result.report?.stderrError).toContain("segment limit");
+			expect(result.report?.stderrFiles).toEqual([result.report?.stderrLogPath]);
 			const activeContent = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
-			expect(activeContent).toBe(chunk2);
+			expect(activeContent).toBe(chunk1);
 			expect(activeContent.length).toBeLessThanOrEqual(50);
 		} finally {
 			ctx.cleanup();
@@ -803,8 +802,8 @@ describe("process supervisor", () => {
 			expect(result.report?.stderrFiles.length).toBe(3);
 
 			const active = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
-			const rot1 = fs.readFileSync(path.join(ctx.sessionStderrDir, `${pid}.stderr.1.log`), "utf8");
-			const rot2 = fs.readFileSync(path.join(ctx.sessionStderrDir, `${pid}.stderr.2.log`), "utf8");
+			const rot1 = fs.readFileSync(result.report!.stderrFiles[1], "utf8");
+			const rot2 = fs.readFileSync(result.report!.stderrFiles[2], "utf8");
 
 			expect(active).toBe("C".repeat(20));
 			expect(rot1).toBe("B".repeat(50));
@@ -866,13 +865,18 @@ describe("process supervisor", () => {
 				killerPid: null,
 			});
 			expect("terminatorAttributionReason" in (report ?? {})).toBe(false);
-			expect(report.stderrStatus).toBe("captured");
-			expect(report.stderrBytes).toBe(2500);
+			expect(report.stderrStatus).toBe("error");
+			expect(report.stderrError).toContain("segment limit");
 			expect(report.stderrFiles.length).toBe(3);
+			let retainedBytes = 0;
 			for (const f of report.stderrFiles) {
 				const stat = fs.statSync(f);
+				retainedBytes += stat.size;
 				expect(stat.size).toBeLessThanOrEqual(500);
 			}
+			expect(retainedBytes).toBe(report.stderrBytes);
+			expect(retainedBytes).toBeGreaterThan(0);
+			expect(retainedBytes).toBeLessThanOrEqual(1500);
 
 			expect(ctx.logs.length).toBe(1);
 			const loggedCtx = ctx.logs[0].context;

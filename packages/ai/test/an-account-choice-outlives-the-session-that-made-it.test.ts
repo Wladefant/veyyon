@@ -28,10 +28,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
+import { codexRankingStrategy } from "../src/usage/openai-codex";
 
 const PROVIDER = "unit-durable-selection";
 const OTHER_PROVIDER = "unit-durable-selection-sibling";
@@ -42,7 +43,7 @@ const OTHER_SESSION_ID = "some-other-session";
 describe("an account choice outlives the session that made it", () => {
 	let tempDir = "";
 	let dbPath = "";
-	let store: AuthCredentialStore | null = null;
+	let store: SqliteAuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
 
 	beforeEach(async () => {
@@ -286,6 +287,62 @@ describe("an account choice outlives the session that made it", () => {
 		const reopenedGlobal = new AuthStorage(store, { loadBalancing: false });
 		await reopenedGlobal.reload();
 		expect(reopenedGlobal.selectedProviderCredentialId(PROVIDER)).toBe(chosenId);
+	});
+
+	test("a balanced Codex provider selection leads when usable without bypassing a quota block", async () => {
+		if (!store || !authStorage) throw new Error("test setup failed");
+		const provider = "openai-codex";
+		await authStorage.set(provider, [
+			oauthRow("fallback", "access-fallback"),
+			oauthRow("preferred", "access-preferred"),
+			oauthRow("disabled", "access-disabled"),
+		]);
+		const [fallback, preferred, disabled] = authStorage.listStoredCredentials(provider);
+		store.deleteAuthCredential(disabled!.id, "disabled for test");
+		expect(authStorage.selectProviderCredential(provider, preferred!.id)).toBe(true);
+
+		store.close();
+		store = await SqliteAuthCredentialStore.open(dbPath);
+		const balanced = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: () => undefined,
+			rankingStrategyResolver: name => (name === provider ? codexRankingStrategy : undefined),
+		});
+		await balanced.reload();
+
+		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-preferred");
+		expect(await balanced.getApiKey(provider)).toBe("access-preferred");
+		expect(await balanced.peekApiKey(provider)).toBe("access-preferred");
+		expect(balanced.pinSessionCredential(provider, "fallback-pinned-session", fallback!.id)).toBe(true);
+		expect(await balanced.getApiKey(provider, "fallback-pinned-session")).toBe("access-fallback");
+		expect(
+			(await balanced.markUsageLimitReached(provider, SESSION_ID, { credentialId: preferred!.id })).switched,
+		).toBe(true);
+		expect(store.listCredentialBlocks([preferred!.id])).toContainEqual(
+			expect.objectContaining({ blockScope: "shared" }),
+		);
+		expect(await balanced.peekApiKey(provider)).toBe("access-fallback");
+		expect(balanced.sessionCredentialRouting(provider, SESSION_ID)).toMatchObject({
+			selectedCredentialId: preferred!.id,
+			selectedBlockedUntilMs: expect.any(Number),
+			activeCredentialId: fallback!.id,
+		});
+		expect(balanced.sessionCredentialRouting(provider, undefined)?.activeCredentialId).toBe(fallback!.id);
+		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-fallback");
+		expect(await balanced.getApiKey(provider, OTHER_SESSION_ID)).toBe("access-fallback");
+		expect(await balanced.getApiKey(provider)).toBe("access-fallback");
+		expect(await balanced.peekApiKey(provider)).toBe("access-fallback");
+		expect(balanced.getOAuthAccountIdentity(provider, SESSION_ID)?.accountId).toBe("account-fallback");
+		expect(balanced.sessionCredentialRouting(provider, SESSION_ID)).toMatchObject({
+			selectedCredentialId: preferred!.id,
+			activeCredentialId: fallback!.id,
+		});
+		expect(store.listAuthCredentials(provider).map(row => row.id)).toEqual([fallback!.id, preferred!.id]);
+
+		expect(balanced.pinSessionCredential(provider, OTHER_SESSION_ID, preferred!.id)).toBe(true);
+		expect(await balanced.getApiKey(provider, OTHER_SESSION_ID)).toBe("access-preferred");
+		balanced.clearCredentialBlocks(provider, preferred!.id);
+		expect(await balanced.getApiKey(provider, SESSION_ID)).toBe("access-preferred");
 	});
 
 	/**

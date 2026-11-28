@@ -76,7 +76,7 @@ interface FallbackRun {
 	readonly applied: string[];
 	/** `selector@role` for every model change the transcript recorded. */
 	readonly changes: string[];
-	readonly primarySuppressed: boolean;
+	readonly primaryGloballySuppressed: boolean;
 	readonly modelNow: string | undefined;
 }
 
@@ -121,7 +121,7 @@ async function runFallback(options: {
 				const change = entry as { model?: string; role?: string };
 				return `${change.model ?? "none"}@${change.role ?? "none"}`;
 			}),
-		primarySuppressed: sim.modelRegistry.isSelectorSuppressed(PRIMARY_SELECTOR),
+		primaryGloballySuppressed: sim.modelRegistry.isSelectorSuppressed(PRIMARY_SELECTOR),
 		modelNow: sim.session.model?.id,
 	};
 }
@@ -156,7 +156,7 @@ describe("a retry fallback chain moves the turn and the cooldown decides the way
 		expect(run.served).toEqual([`1:${PRIMARY}`, `2:${FALLBACK}`, `3:${PRIMARY}`]);
 		expect(run.applied.length).toBe(1);
 		expect(run.changes).toEqual([`${FALLBACK_SELECTOR}@fallback`, `${PRIMARY_SELECTOR}@fallback`]);
-		expect(run.primarySuppressed).toBe(false);
+		expect(run.primaryGloballySuppressed).toBe(false);
 		expect(run.modelNow).toBe(PRIMARY);
 	});
 
@@ -172,7 +172,9 @@ describe("a retry fallback chain moves the turn and the cooldown decides the way
 		// retry-after here, so the primary carries the server-error backoff and the
 		// next turn is still the fallback's.
 		expect(run.served).toEqual([`1:${PRIMARY}`, `2:${FALLBACK}`, `3:${FALLBACK}`]);
-		expect(run.primarySuppressed).toBe(true);
+		// A non-UsageLimit cooldown is session-local (325d903f), so the global registry must not hold the primary.
+		// The routing above is the proof that the cooldown held.
+		expect(run.primaryGloballySuppressed).toBe(false);
 		expect(run.changes).toEqual([`${FALLBACK_SELECTOR}@fallback`]);
 		expect(run.modelNow).toBe(FALLBACK);
 	});
@@ -188,7 +190,7 @@ describe("a retry fallback chain moves the turn and the cooldown decides the way
 		// Nothing is holding the primary back except the policy: its cooldown has
 		// expired, so a build that ignored the setting would have returned to it on
 		// the second turn.
-		expect(run.primarySuppressed).toBe(false);
+		expect(run.primaryGloballySuppressed).toBe(false);
 		expect(run.applied.length).toBe(1);
 		expect(run.changes).toEqual([`${FALLBACK_SELECTOR}@fallback`]);
 		expect(run.modelNow).toBe(FALLBACK);

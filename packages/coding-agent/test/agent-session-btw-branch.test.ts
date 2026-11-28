@@ -17,7 +17,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Container, type TUI } from "@veyyon/tui";
-import { Snowflake } from "@veyyon/utils";
+import { Snowflake, withTimeout } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -379,6 +379,51 @@ describe("AgentSession.branchFromBtw", () => {
 			"Cannot branch /btw while session maintenance or user work is still running",
 		);
 		expect(activeSession.sessionFile).toBe(originalFile);
+	});
+
+	it("does not promote an aside while a steer starts a turn during the transcript flush", async () => {
+		const providerStarted = Promise.withResolvers<void>();
+		const activeSession = await createSession({
+			handler: () => {
+				providerStarted.resolve();
+				return { content: ["answer to the steer"], delayMs: 60_000 };
+			},
+		});
+		const manager = activeSession.sessionManager;
+		const seed = { role: "user" as const, content: "seed", timestamp: Date.now() };
+		manager.appendMessage(seed);
+		activeSession.agent.replaceMessages([seed]);
+		await manager.ensureOnDisk();
+		const originalFile = activeSession.sessionFile;
+		const flushStarted = Promise.withResolvers<void>();
+		const flushRelease = Promise.withResolvers<void>();
+		const flush = manager.flush.bind(manager);
+		vi.spyOn(manager, "flush").mockImplementationOnce(async () => {
+			flushStarted.resolve();
+			await flushRelease.promise;
+			await flush();
+		});
+
+		const branch = activeSession.branchFromBtw(
+			"question",
+			createBtwAssistant(),
+			requiredLeafId(activeSession),
+			manager.getSessionId(),
+		);
+		try {
+			await withTimeout(flushStarted.promise, 10_000, "Branch never reached the pending flush");
+			await activeSession.steer("new user work");
+			await withTimeout(providerStarted.promise, 10_000, "Queued steer never started a provider turn");
+			flushRelease.resolve();
+
+			await expect(branch).rejects.toThrow("Cannot branch /btw");
+			expect(activeSession.sessionFile).toBe(originalFile);
+			expect(activeSession.isStreaming).toBe(true);
+		} finally {
+			flushRelease.resolve();
+			await activeSession.abort({ goalReason: "internal", reason: "test cleanup" });
+			await branch.catch(() => {});
+		}
 	});
 
 	// WHY: a post-prompt task that never settles (a hung provider stream) must not park a /btw

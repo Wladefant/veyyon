@@ -2,11 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- Expose a bounded live agent roster through the session owner's authenticated terminal control endpoint ([Refs Wladefant/superboard#3039](https://github.com/Wladefant/superboard/issues/3039)).
+
 ### Fixed
 
 - Return the exit code and available output when a launched child exits before readiness ([#1094](https://github.com/Wladefant/veyyon/issues/1094)).
+- Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
+- Bound stderr history across supervised child runs. Keep active files and seven days of sealed evidence when the profile reaches the cap ([Refs Wladefant/superboard#3367](https://github.com/Wladefant/superboard/issues/3367)).
+- Keep scanned long Bash output lines in a readable artifact without losing the command's exit status ([Refs Wladefant/superboard#2616](https://github.com/Wladefant/superboard/issues/2616)).
+- Report terminal queue capacity while delivery is blocked. Keep durable Telegram input IDs separate from confirmed journal entries ([Refs Wladefant/superboard#3473](https://github.com/Wladefant/superboard/issues/3473)).
+- Show detached child startup phases in `job list` and `irc list`, even before the child registers. Measure transcript open and launch-grant publication separately ([Refs Wladefant/superboard#3081](https://github.com/Wladefant/superboard/issues/3081)).
+- Report when a detached child cannot receive IRC yet, with its job ID and confirmation that no message was buffered ([Refs Wladefant/superboard#3110](https://github.com/Wladefant/superboard/issues/3110)).
+- Retry known provider DNS failures on the current model before trying a fallback, and keep the remaining retry budget for retryable errors when no fallback can switch ([Refs #1274](https://github.com/Wladefant/veyyon/issues/1274)).
+- Settle failed turns when the scheduler skips their automatic retry continuation ([Refs #1273](https://github.com/Wladefant/veyyon/issues/1273)).
+- Report cancelled children separately from failures in inline task batches ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Honor configured OAuth scopes when reauthorizing MCP servers and prefer protected-resource scopes over a general supported scope list ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Stop MCP HTTP responses from starting a JSON body read after cancellation ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Reject invalid browser app routes before launch, cache IRC schemas across launches, and repair tool and trust regression coverage ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep the default and allowed agent types in the shorter task prompt ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Return promptly when a Python eval cell does not acknowledge cancellation. Report that the cell may still be running without stopping the kernel ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore idle queue delivery, bounded `/btw` promotion, terminal error records, raw SSE capture access, and TTSR rules from approved plugins. Let print mode exit past untimed bash jobs and log failed extension aborts in spawned agents ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep MCP authentication refresh within the request deadline ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Stage Windows WriteTool edits and archive rewrites with the existing file's DACL. Write archive bytes through the staging handle instead of reopening the temp path ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
+- Fence synchronized sessions after an invalid initial lease, and wait for queued message writes before deduplicating results ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep large bash output streams draining while retaining bounded inline and artifact output ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Keep long streamed tool previews current without repeatedly parsing the whole call. ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Match CLI help and completion to command metadata, including the terminal-control summary. Separate MCP event wiring from startup and account for more session subprocesses in the CPU budget ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Track refusal fence installation sites after the session split ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore the raw SSE debug viewer and tell agents to use verified IRC names ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
+- Retry assistant drafts interrupted by a socket reset when their text can be retracted, without replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
+
 ## [1.12.3] - 2026-11-21
 
 ### Added

@@ -112,24 +112,42 @@ export async function discoverSharedInfra(_options: DiscoverSharedInfraOptions =
 	}
 }
 
+type SessionResources = Pick<CreateAgentSessionResult, "session" | "mcpManager">;
+type SessionFactory = (options: Parameters<typeof createAgentSession>[0]) => Promise<SessionResources>;
+
 /**
  * In-process client that wraps AgentSession with the same interface
  * that the benchmark runner expects from RpcClient.
  */
 export class InProcessClient {
 	#session: AgentSession | null = null;
-	#sessionResult: CreateAgentSessionResult | null = null;
+	#sessionResult: SessionResources | null = null;
 	#eventListeners: InProcessEventListener[] = [];
 	#unsubscribe: (() => void) | null = null;
 	#skillSnapshotDir: string | null = null;
 	#editableCanary: EditableCanaryReceipt | undefined;
+	#starting = false;
+	#disposed = false;
 	#options: InProcessClientOptions;
+	#createSession: SessionFactory;
 
-	constructor(options: InProcessClientOptions) {
+	constructor(options: InProcessClientOptions, createSession: SessionFactory = createAgentSession) {
 		this.#options = options;
+		this.#createSession = createSession;
 	}
 
 	async start(): Promise<void> {
+		if (this.#disposed) return;
+		this.#starting = true;
+		try {
+			await this.#start();
+		} finally {
+			this.#starting = false;
+			if (this.#disposed) await this.dispose();
+		}
+	}
+
+	async #start(): Promise<void> {
 		// Build settings instance with config overlay and edit overrides if applicable
 		let sessionSettings = this.#options.settings;
 		if (!sessionSettings) {
@@ -178,7 +196,8 @@ export class InProcessClient {
 			});
 		}
 
-		const result = await createAgentSession({
+		if (this.#disposed) return;
+		const result = await this.#createSession({
 			cwd: this.#options.cwd,
 			modelPattern: this.#options.model,
 			authStorage: this.#options.shared?.authStorage,
@@ -207,7 +226,9 @@ export class InProcessClient {
 
 		this.#sessionResult = result;
 		this.#session = result.session;
+		if (this.#disposed) return;
 		if (skillArm) this.#editableCanary = await verifyEditableCanary(this.#session, this.#options.cwd);
+		if (this.#disposed) return;
 		if (this.#options.skillArm) {
 			const requestedModel = parseModelId(this.#options.model);
 			const resolvedModel = this.#session.model;
@@ -221,6 +242,7 @@ export class InProcessClient {
 		// Freeze the actual resource before adding its existing autoload representation to history.
 		if (skillArm && skillArm.content !== null) {
 			await appendFrozenSkillPrompt(this.#session, skillArm);
+			if (this.#disposed) return;
 		}
 
 		// Subscribe to events and forward to listeners
@@ -319,20 +341,25 @@ export class InProcessClient {
 	
 
 	async dispose(): Promise<void> {
+		this.#disposed = true;
+		const session = this.#session;
+		const result = this.#sessionResult;
+		// Startup may still be writing or reading the snapshot. Its finally block removes it.
+		const skillSnapshotDir = this.#starting ? null : this.#skillSnapshotDir;
+		if (skillSnapshotDir) this.#skillSnapshotDir = null;
+		this.#session = null;
+		this.#sessionResult = null;
 		this.#unsubscribe?.();
 		this.#unsubscribe = null;
-		if (this.#session) {
-			await this.#session.dispose();
-			this.#session = null;
-		}
-		if (this.#sessionResult?.mcpManager) {
-			await (this.#sessionResult.mcpManager as { dispose?: () => Promise<void> }).dispose?.();
-		}
-		this.#sessionResult = null;
 		this.#eventListeners = [];
-		if (this.#skillSnapshotDir) {
-			await fs.rm(this.#skillSnapshotDir, { recursive: true, force: true });
-			this.#skillSnapshotDir = null;
+		try {
+			await session?.dispose();
+		} finally {
+			try {
+				await (result?.mcpManager as { dispose?: () => Promise<void> } | undefined)?.dispose?.();
+			} finally {
+				if (skillSnapshotDir) await fs.rm(skillSnapshotDir, { recursive: true, force: true });
+			}
 		}
 	}
 

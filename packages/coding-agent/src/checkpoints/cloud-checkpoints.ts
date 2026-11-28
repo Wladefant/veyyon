@@ -1,7 +1,7 @@
-import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
 import { createHash, randomUUID } from "node:crypto";
-import { raceWithTimeout, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
+import { raceWithTimeout, withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type { NativeCheckpointBundle } from "./native-recovery";
 
 export type CheckpointBundle = NativeCheckpointBundle;
@@ -24,6 +24,9 @@ export interface CheckpointLease {
 	targetNode?: string;
 	transferId?: string;
 }
+
+/** The authority returned a grant without a live fence. A guard must not retry that grant. */
+export class CheckpointAuthorityFenceError extends Error {}
 function hasLiveLeaseFence(lease: CheckpointLease | null | undefined): lease is CheckpointLease {
 	if (!lease || !Number.isSafeInteger(lease.epoch) || lease.epoch < 0) return false;
 	const expiresAt = typeof lease.expiresAt === "string" ? Date.parse(lease.expiresAt) : Number.NaN;
@@ -96,7 +99,10 @@ export class CheckpointClient {
 	#transferClaimsInFlight = new Set<string>();
 	#lost = new Set<string>();
 	#pendingCommits = new Map<string, { ciphertext: Uint8Array; payloadHash: string; idempotencyKey: string }>();
-	#activeCommits = new Map<string, { payloadHash: string; ownerNode: string; epoch: number; promise: Promise<unknown> }>();
+	#activeCommits = new Map<
+		string,
+		{ payloadHash: string; ownerNode: string; epoch: number; promise: Promise<unknown> }
+	>();
 	constructor(readonly options: CheckpointClientOptions) {
 		this.enabled = Boolean(options.baseUrl && options.token && options.key?.byteLength === 32);
 		this.#fetch = options.fetch ?? fetch;
@@ -171,12 +177,10 @@ export class CheckpointClient {
 		return attempt;
 	}
 	#assertLeaseAdmissionCurrent(sessionId: string, attempt: symbol): void {
-		if (this.#leaseAdmissions.get(sessionId) !== attempt)
-			throw new Error("Checkpoint lease admission superseded");
+		if (this.#leaseAdmissions.get(sessionId) !== attempt) throw new Error("Checkpoint lease admission superseded");
 	}
 	#finishLeaseAdmission(sessionId: string, attempt: symbol): void {
-		if (this.#leaseAdmissions.get(sessionId) === attempt)
-			this.#leaseAdmissions.delete(sessionId);
+		if (this.#leaseAdmissions.get(sessionId) === attempt) this.#leaseAdmissions.delete(sessionId);
 	}
 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
@@ -198,7 +202,7 @@ export class CheckpointClient {
 			}
 			if (!hasLiveLeaseFence(lease)) {
 				this.loseLease(sessionId);
-				throw new Error("Checkpoint authority lease fence invalid");
+				throw new CheckpointAuthorityFenceError("Checkpoint authority lease fence invalid");
 			}
 			this.#leases.set(sessionId, lease);
 			this.#lost.delete(sessionId);
@@ -219,11 +223,7 @@ export class CheckpointClient {
 			throw new Error("A valid checkpoint node label is required");
 		// Match the authority's transfer-identity grammar before sending a
 		// potentially one-use claim or resume capability over the network.
-		if (
-			!Number.isSafeInteger(transferEpoch) ||
-			transferEpoch < 1 ||
-			!/^[A-Za-z0-9_-]{1,128}$/.test(transferId)
-		)
+		if (!Number.isSafeInteger(transferEpoch) || transferEpoch < 1 || !/^[A-Za-z0-9_-]{1,128}$/.test(transferId))
 			throw new Error("Invalid checkpoint transfer identity");
 		const capability = "claimToken" in credential ? credential.claimToken : credential.resumeToken;
 		if (typeof capability !== "string" || capability.length < 16 || capability.length > 128)
@@ -322,18 +322,21 @@ export class CheckpointClient {
 		const lease = this.#leases.get(sessionId);
 		if (!lease || this.#lost.has(sessionId) || lease.epoch !== leaseEpoch)
 			throw new Error("Checkpoint lease required to finalize resume capability");
-		const confirmation = await this.#request<{ ok?: unknown }>(`/v1/sessions/${encodeURIComponent(sessionId)}/finalize`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				ownerNode: lease.ownerNode,
-				targetNode,
-				transferId,
-				epoch: transferEpoch,
-				leaseEpoch,
-				resumeToken,
-			}),
-		});
+		const confirmation = await this.#request<{ ok?: unknown }>(
+			`/v1/sessions/${encodeURIComponent(sessionId)}/finalize`,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					ownerNode: lease.ownerNode,
+					targetNode,
+					transferId,
+					epoch: transferEpoch,
+					leaseEpoch,
+					resumeToken,
+				}),
+			},
+		);
 		// The pinned authority returns {ok:true} only after persisting the
 		// rotated resume capability. A 2xx status alone is not confirmation.
 		if (!confirmation || confirmation.ok !== true)
@@ -358,7 +361,8 @@ export class CheckpointClient {
 		const ownerNode = active ? active.ownerNode : source!.ownerNode;
 		const epoch = active ? active.epoch : source!.epoch;
 		if (!isCheckpointNodeLabel(targetNode)) throw new Error("A valid target node is required");
-		if (!claimToken || claimToken.length < 16 || claimToken.length > 128) throw new Error("A valid transfer claim token is required");
+		if (!claimToken || claimToken.length < 16 || claimToken.length > 128)
+			throw new Error("A valid transfer claim token is required");
 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid source node is required");
 		const path = `/v1/sessions/${encodeURIComponent(sessionId)}/transfer`;
 		const init: RequestInit = {
@@ -383,11 +387,9 @@ export class CheckpointClient {
 		} catch (firstError) {
 			// An explicit 4xx refusal (except 408/429) is not an uncertain
 			// transport result. Never replay a one-use transfer after a known 409.
-			const status = firstError instanceof Error
-				? /^Checkpoint service returned HTTP (\d{3})$/.exec(firstError.message)
-				: null;
-			if (status && Number(status[1]) < 500 && status[1] !== "408" && status[1] !== "429")
-				throw firstError;
+			const status =
+				firstError instanceof Error ? /^Checkpoint service returned HTTP (\d{3})$/.exec(firstError.message) : null;
+			if (status && Number(status[1]) < 500 && status[1] !== "408" && status[1] !== "429") throw firstError;
 			try {
 				next = await this.#request<CheckpointLease>(path, init);
 			} catch {
@@ -424,15 +426,15 @@ export class CheckpointClient {
 			!lease ||
 			this.#lost.has(sessionId) ||
 			(expected && (lease.ownerNode !== expected.ownerNode || lease.epoch !== expected.epoch))
-		) throw new Error("Checkpoint lease lost");
+		)
+			throw new Error("Checkpoint lease lost");
 		try {
 			const next = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/renew`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
 			});
-			if (!next || next.ownerNode !== lease.ownerNode)
-				throw new Error("Checkpoint authority lease owner mismatch");
+			if (!next || next.ownerNode !== lease.ownerNode) throw new Error("Checkpoint authority lease owner mismatch");
 			// Renewing an existing lease cannot invent or jump a fencing epoch.
 			if (!Number.isSafeInteger(next.epoch) || next.epoch !== lease.epoch)
 				throw new Error("Checkpoint authority lease epoch mismatch");
@@ -440,19 +442,15 @@ export class CheckpointClient {
 			// A late reply from a previous owner must not overwrite the lease
 			// a second guard acquired while the renewal was in flight.
 			const current = this.#leases.get(sessionId);
-			if (
-				this.#lost.has(sessionId) ||
-				current?.ownerNode !== lease.ownerNode ||
-				current?.epoch !== lease.epoch
-			) throw new Error("Checkpoint lease changed during renewal");
+			if (this.#lost.has(sessionId) || current?.ownerNode !== lease.ownerNode || current?.epoch !== lease.epoch)
+				throw new Error("Checkpoint lease changed during renewal");
 			this.#leases.set(sessionId, next);
 			return next;
 		} catch (error) {
 			// Revoke only our original fence. Another owner may have acquired a
 			// later one while this authority response was pending.
 			const current = this.#leases.get(sessionId);
-			if (current?.ownerNode === lease.ownerNode && current.epoch === lease.epoch)
-				this.loseLease(sessionId);
+			if (current?.ownerNode === lease.ownerNode && current.epoch === lease.epoch) this.loseLease(sessionId);
 			throw error;
 		}
 	}
@@ -463,16 +461,17 @@ export class CheckpointClient {
 		const lease = this.#leases.get(sessionId);
 		// A guard that held an earlier fence must never release a newer owner
 		// through this client's session-keyed lease cache.
-		if (
-			!lease ||
-			(expected && (lease.ownerNode !== expected.ownerNode || lease.epoch !== expected.epoch))
-		) return undefined;
+		if (!lease || (expected && (lease.ownerNode !== expected.ownerNode || lease.epoch !== expected.epoch)))
+			return undefined;
 		try {
-			const released = await this.#request<CheckpointLease>(`/v1/sessions/${encodeURIComponent(sessionId)}/release`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
-			});
+			const released = await this.#request<CheckpointLease>(
+				`/v1/sessions/${encodeURIComponent(sessionId)}/release`,
+				{
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ ownerNode: lease.ownerNode, epoch: lease.epoch }),
+				},
+			);
 			// A successful HTTP status cannot authorize an unverified resume-marker
 			// epoch. The authority contract releases the same owner at epoch + 1.
 			if (
@@ -488,8 +487,7 @@ export class CheckpointClient {
 			// this release. A fresh guard can acquire a later epoch while a
 			// successful/failed older release response is still in flight.
 			const active = this.#leases.get(sessionId);
-			if (active?.ownerNode === lease.ownerNode && active.epoch === lease.epoch)
-				this.loseLease(sessionId);
+			if (active?.ownerNode === lease.ownerNode && active.epoch === lease.epoch) this.loseLease(sessionId);
 		}
 	}
 	loseLease(sessionId: string): void {
@@ -570,7 +568,10 @@ export class CheckpointClient {
 					this.#fetch(new URL(`/v1/objects/${hash}`, this.options.baseUrl), {
 						method: "PUT",
 						signal,
-						headers: { authorization: `Bearer ${this.options.token}`, "content-type": "application/octet-stream" },
+						headers: {
+							authorization: `Bearer ${this.options.token}`,
+							"content-type": "application/octet-stream",
+						},
 						body: chunk,
 					}),
 					this.#timeout,

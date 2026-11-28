@@ -52,6 +52,36 @@ async function withPendingGuard<T>(promise: Promise<T>, label: string): Promise<
 	]);
 }
 
+describe("MCP Streamable HTTP cancellation", () => {
+	it.each(["request", "stream"] as const)("does not read a %s body after cancellation", async mode => {
+		const transport = new HttpTransport({ type: "http", url: "http://127.0.0.1/mcp", timeout: 0 });
+		await transport.connect();
+		const controller = new AbortController();
+		const response = Response.json({ jsonrpc: "2.0", id: "unused", result: {} });
+		const getHeader = response.headers.get.bind(response.headers);
+		// Cancel after fetch has delivered the response, but before the transport reads its body.
+		spyOn(response.headers, "get").mockImplementation(name => {
+			if (name.toLowerCase() === "content-type") controller.abort();
+			return getHeader(name);
+		});
+		const fetch = spyOn(globalThis, "fetch").mockResolvedValue(response);
+		try {
+			if (mode === "stream") {
+				await transport.streamRequest("events/stream", {}, () => {}, { signal: controller.signal }).done;
+			} else {
+				await expect(transport.request("events/poll", {}, { signal: controller.signal })).rejects.toMatchObject({
+					name: "AbortError",
+				});
+			}
+			expect(controller.signal.aborted).toBe(true);
+			expect(response.bodyUsed).toBe(false);
+		} finally {
+			fetch.mockRestore();
+			await transport.close();
+		}
+	});
+});
+
 describe("MCP Streamable HTTP transport timeouts", () => {
 	it("keeps the request timeout active until a JSON response body is fully read", async () => {
 		server = Bun.serve({
@@ -129,9 +159,12 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 		const stream = transport.streamRequest("events/subscribe", { eventId: "test" }, notification =>
 			notifications.push(notification),
 		);
-		await expect(withPendingGuard(Promise.resolve().then(() => stream.done), "stream")).rejects.toThrow(
-			`stayed pending past ${GUARD_TIMEOUT_MS}ms`,
-		);
+		await expect(
+			withPendingGuard(
+				Promise.resolve().then(() => stream.done),
+				"stream",
+			),
+		).rejects.toThrow(`stayed pending past ${GUARD_TIMEOUT_MS}ms`);
 		stream.cancel();
 		await withPendingGuard(stream.done, "cancelled stream");
 		expect(requestBody).toMatchObject({

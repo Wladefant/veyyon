@@ -331,21 +331,22 @@ describe("an image attached to a prompt reaches the turn and the transcript", ()
 		}
 	});
 
-	test("every image type the host accepts arrives as an image the model is asked about", async () => {
-		// Swept off the host's own set, with one real image per type: a type
-		// added there that no decoder here can read, or whose picture does not
-		// reach the transcript, turns this red rather than shipping a card for
-		// an attachment the model never sees.
+	test("the image fixtures cover every type the host accepts", () => {
 		expect(new Set(Object.keys(IMAGES))).toEqual(new Set(SUPPORTED_IMAGE_MIME_TYPES));
-		for (const [mediaType, bytes] of Object.entries(IMAGES)) {
+	});
+
+	test.each(Object.entries(IMAGES))(
+		"%s arrives as the same image in the transcript and model request",
+		async (mediaType, bytes) => {
+			// Use a fresh host connection per format. A previous session can still
+			// finish side requests after its stream clears.
 			const session = await createSession(1);
-			contexts = [];
 			const { appended } = await submitAttached(session, mediaType, bytes);
 			const prompt = appended.find(entry => entry.role === "User");
 			const drawn = await imageOf(prompt?.content.at(-1));
 			expect(imagesAskedFor(contexts)).toEqual([drawn]);
-		}
-	});
+		},
+	);
 
 	test("UTF-8 attachment names and contents remain untrusted data in the provider prompt and transcript", async () => {
 		const session = await createSession(1);

@@ -398,14 +398,7 @@ export function formatTimeoutAnnotation(timeoutMs?: number): string {
  * Richer annotation for a kernel-level timeout that distinguishes a killed
  * kernel (state gone, will be recreated) from an interrupted-but-alive kernel.
  */
-export function formatKernelTimeoutAnnotation(
-	timeoutMs: number | undefined,
-	kernelKilled: boolean,
-	cancellationPending = false,
-): string {
-	if (cancellationPending) {
-		return "eval cell cancellation is pending; the request may still be running and may still change kernel state. The kernel remains running.";
-	}
+export function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
 	if (kernelKilled) {
 		return "eval cell timed out and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.";
 	}
@@ -505,11 +498,7 @@ export interface ExecuteWithKernelBaseParams<
 	isJulia?: boolean;
 	cancelledErrorClass: CancelledErrorClass;
 	buildKernelEnvPatch: (options: TOptions) => TEnv;
-	formatKernelTimeoutAnnotation: (
-		executionTimeoutMs: number | undefined,
-		kernelKilled: boolean,
-		cancellationPending?: boolean,
-	) => string;
+	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
 	formatTimeoutAnnotation: (executionTimeoutMs: number | undefined) => string | undefined;
 	/**
 	 * Override how the wall-clock deadline is derived from options. Defaults to
@@ -627,12 +616,12 @@ export async function executeWithKernelBase<
 
 		if (result.cancelled || abortShield.abortRequested) {
 			const timedOut = result.timedOut || abortShield.timedOut;
-			const annotation =
-				timedOut || result.cancellationPending
+			const annotation = result.cancellationPending
+				? `${timedOut ? "eval cell timed out; cancellation" : "eval cell cancellation"} is pending; the request may still be running and may still change kernel state. The kernel remains running.`
+				: timedOut
 					? formatKernelTimeoutAnnotation(
-							timedOut ? (executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
+							executionTimeoutMs ?? options?.idleTimeoutMs,
 							result.kernelKilled ?? false,
-							result.cancellationPending ?? false,
 						)
 					: undefined;
 			const dumped = await sink.dumpWithArtifactStatus(annotation);
@@ -1172,11 +1161,7 @@ export interface KernelExecutionDriverOptions<
 	/** See `buildEvalSessionKey`: what in a cwd selects the default runtime, when anything does. */
 	resolveDefaultRuntimeScope?: (cwd: string) => string;
 	buildKernelEnvPatch?: (options: TOptions) => Record<string, string | null | undefined>;
-	formatKernelTimeoutAnnotation?: (
-		executionTimeoutMs: number | undefined,
-		kernelKilled: boolean,
-		cancellationPending?: boolean,
-	) => string;
+	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
 	formatTimeoutAnnotation?: (executionTimeoutMs: number | undefined) => string | undefined;
 	createCancelledResult?: (timedOut: boolean, timeoutMs?: number) => KernelExecutionResult;
 	resolveDeadlineMs?: (options?: TOptions) => number | undefined;

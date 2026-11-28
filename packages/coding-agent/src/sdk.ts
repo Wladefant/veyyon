@@ -203,7 +203,7 @@ import {
 	projectAdvisorScope,
 	workspaceTreeWithinDeadline,
 } from "./session/factory-extensions";
-import { openSessionMCP, type SessionMCP, wireReactiveMCPManager } from "./session/factory-mcp";
+import { openSessionMCP, type SessionMCP } from "./session/factory-mcp";
 import {
 	buildAsyncResultBatchMessage,
 	buildLateDiagnosticsBatchMessage,
@@ -233,6 +233,7 @@ import {
 	ProjectPromptInputs,
 	promptDiscoverableTools,
 } from "./session/prompt-inputs";
+import { wireReactiveMCPManager } from "./session/reactive-mcp";
 import { deferMemoryStartup, prewarmCodexTransport, startLspServers } from "./session/startup-background";
 import { CredentialDisabledRelay } from "./session/startup-credential-relay";
 import {

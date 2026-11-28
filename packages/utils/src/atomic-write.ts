@@ -28,6 +28,12 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
+import {
+	closeWindowsWriteStage,
+	publishWindowsWriteStage,
+	reserveWindowsWriteStage,
+	writeWindowsWriteStage,
+} from "./windows-file-replace";
 
 export interface AtomicWriteOptions {
 	/**
@@ -493,9 +499,22 @@ async function atomicWriteBytes(
 export async function atomicWriteFilePreservingMode(
 	filePath: string,
 	data: string | NodeJS.ArrayBufferView,
-	options: { fsync?: boolean; defaultMode?: number; requireAtomicReplace?: boolean } = {},
+	options: {
+		fsync?: boolean;
+		defaultMode?: number;
+		requireAtomicReplace?: boolean;
+		/**
+		 * On Windows, stage with the existing destination's security and publish with a single NTFS rename.
+		 * No retry or fallback displaces the old file on failure. This does not compare-and-swap the leaf name.
+		 */
+		preserveWindowsDacl?: boolean;
+	} = {},
 ): Promise<void> {
-	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false } = options;
+	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false, preserveWindowsDacl = false } = options;
+	if (process.platform === "win32" && preserveWindowsDacl) {
+		await writeWindowsFile(filePath, data, defaultMode, fsync);
+		return;
+	}
 	let mode = defaultMode;
 	let existed = true;
 	try {
@@ -505,6 +524,27 @@ export async function atomicWriteFilePreservingMode(
 		existed = false;
 	}
 	await atomicWriteBytes(filePath, data, mode, fsync, existed, requireAtomicReplace);
+}
+
+async function writeWindowsFile(
+	filePath: string,
+	data: string | NodeJS.ArrayBufferView,
+	defaultMode: number,
+	fsync: boolean,
+): Promise<void> {
+	const { target, viaSymlink } = await resolveWriteTarget(filePath);
+	const dir = path.dirname(target);
+	if (!viaSymlink) await fsp.mkdir(dir, { recursive: true });
+	const bytes =
+		typeof data === "string" ? Buffer.from(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+	const stage = reserveWindowsWriteStage(path.resolve(target), { readOnly: (defaultMode & 0o200) === 0 });
+	try {
+		writeWindowsWriteStage(stage, bytes, fsync);
+		publishWindowsWriteStage(stage);
+	} finally {
+		closeWindowsWriteStage(stage);
+	}
+	if (fsync) await fsyncDirEntry(dir);
 }
 
 /**
