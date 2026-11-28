@@ -11,6 +11,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
