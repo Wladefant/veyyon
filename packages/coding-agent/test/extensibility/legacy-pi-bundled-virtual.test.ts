@@ -1,8 +1,44 @@
 import { describe, expect, it } from "bun:test";
+import { writeFile } from "node:fs/promises";
+import * as path from "node:path";
 import {
 	__getLegacyPiBundledModulesGlobal,
 	__synthesizeLegacyPiBundledSourceWithModules,
 } from "@veyyon/coding-agent/extensibility/plugins/legacy-pi-compat";
+import { TempDir } from "@veyyon/utils";
+import { resolveBundledPiExports } from "../../scripts/legacy-pi-virtual-module";
+
+describe("legacy Pi export prepass", () => {
+	it("includes the source position of a duplicate declaration", async () => {
+		using scratch = TempDir.createSync("@veyyon-legacy-prepass-");
+		const file = path.join(scratch.path(), "duplicate.ts");
+		await writeFile(file, "export const repeated = 1;\nexport const repeated = 2;\n");
+
+		await expect(resolveBundledPiExports([{ key: "fixture/duplicate", importSpecifier: file }], [])).rejects.toThrow(
+			/duplicate\.ts:2:\d+: [^\n]*repeated/,
+		);
+	});
+
+	it("keeps entries with overlapping export names separate and retains aliases", async () => {
+		using scratch = TempDir.createSync("@veyyon-legacy-prepass-");
+		const first = path.join(scratch.path(), "first.ts");
+		const second = path.join(scratch.path(), "second.ts");
+		await writeFile(first, "export const shared = 1;\nexport const firstOnly = 2;\n");
+		await writeFile(second, "export const shared = 3;\nexport const secondOnly = 4;\n");
+		const entries = [
+			{ key: "fixture/first", importSpecifier: first },
+			{ key: "fixture/second", importSpecifier: second },
+			{ key: "fixture/alias", importSpecifier: first },
+		];
+
+		const modules = await resolveBundledPiExports(entries, []);
+		expect(modules.map(module => ({ ...module, exports: module.exports?.toSorted() }))).toEqual([
+			{ ...entries[0], exports: ["firstOnly", "shared"] },
+			{ ...entries[1], exports: ["secondOnly", "shared"] },
+			{ ...entries[2], exports: ["firstOnly", "shared"] },
+		]);
+	});
+});
 
 // Regression for issue #3423: Bun 1.3.14 made `--compile` extras unreachable
 // via every filesystem-style API. The compat layer now routes canonical
