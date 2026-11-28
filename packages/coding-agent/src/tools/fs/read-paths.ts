@@ -31,7 +31,8 @@ export function splitReadUrlList(entry: string): string[] | null {
 	while (delimiter !== -1) {
 		READ_TARGET_SEPARATOR.lastIndex = delimiter;
 		if (READ_TARGET_SEPARATOR.test(entry)) {
-			(parts ??= []).push(entry.slice(start, delimiter).trim());
+			parts ??= [];
+			parts.push(entry.slice(start, delimiter).trim());
 			start = delimiter + 1;
 		}
 		delimiter = findTopLevelPathDelimiter(entry, delimiter + 1, "semicolon");

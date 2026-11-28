@@ -106,7 +106,9 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 		const result = await read(`${first}; ${second}`);
 
 		expect(result.details?.displayReadTargets).toEqual([first, second]);
-		expect(toolResultText(result)).toMatch(/First page body[\s\S]*URL: https:\/\/example\.org\/.*[\s\S]*Second page body/);
+		expect(toolResultText(result)).toMatch(
+			/First page body[\s\S]*URL: https:\/\/example\.org\/.*[\s\S]*Second page body/,
+		);
 		expect(scrapers.loadPage).toHaveBeenCalledTimes(2);
 		expect(scrapers.loadPage).toHaveBeenNthCalledWith(1, first, expect.anything());
 		expect(scrapers.loadPage).toHaveBeenNthCalledWith(2, second, expect.anything());

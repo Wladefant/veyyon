@@ -60,8 +60,8 @@ import {
 	type ResolvedReadPath,
 	resolveArchiveReadPath,
 	resolveSqliteReadPath,
-	splitReadUrlList,
 	SuffixSearch,
+	splitReadUrlList,
 	statCandidateWithSuffix,
 } from "./read-paths";
 import { readPdfImageMember, splitPdfImageMemberReadPath } from "./read-pdf-images";
@@ -172,7 +172,7 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		directory: { depth?: number; limit?: number } = {},
 	): Promise<AgentToolResult<ReadToolDetails> | null> {
 		const parts = await splitDelimitedPathEntry(readPath, this.session.cwd, options);
-	return parts ? this.#readDelimitedParts(parts, suffixSearch, signal, directory) : null;
+		return parts ? this.#readDelimitedParts(parts, suffixSearch, signal, directory) : null;
 	}
 
 	async #readDelimitedParts(
