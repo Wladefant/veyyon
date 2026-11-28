@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-28
+
 ### Added
 
 - Set different auto-compaction thresholds by model with `compaction.thresholdByModel` ([#1088](https://github.com/Wladefant/veyyon/issues/1088)).
