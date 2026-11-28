@@ -7,6 +7,7 @@ import {
 	atomicWriteFileWith,
 	getConfigRootDir,
 	isCompiledBinary,
+	isRecord,
 	logTelegramDeliveryTrace,
 	normalizeDeliveryOutcome,
 	parseTelegramTrace,
@@ -17,6 +18,11 @@ import type { SecretRequestMetadata, SecretSubmission } from "../secrets/intake-
 import { getLoadedBuildIdentity } from "./build-info";
 import { createTerminalControlTransport, type TerminalSocket } from "./terminal-control-transport";
 import { TerminalReceipts } from "./terminal-receipts";
+import {
+	MAX_REGISTRY_SNAPSHOT_TEXT,
+	REGISTRY_SNAPSHOT_CAPABILITY,
+	type RegistrySnapshotObservation,
+} from "./terminal-registry-snapshot";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -30,6 +36,8 @@ export interface TerminalOwner {
 	loadedVersion: string;
 	loadedBuildSha: string | null;
 	capabilities: readonly string[];
+	/** Required by registrySnapshot. Changes when this owner switches sessions or rotates its credential. */
+	ownerGeneration?: string;
 }
 
 export interface TerminalDeliveryOptions {
@@ -45,6 +53,7 @@ export interface TerminalControlTarget {
 	shutdown?(): Promise<void>;
 	history(): { entryId: string; text: string }[];
 	subscribe(listener: (event: unknown) => void): () => void;
+	registrySnapshot?(sessionId: string): RegistrySnapshotObservation | undefined;
 	registerSecretIntake?(registration: TerminalSecretRegistration): Promise<TerminalSecretActorContext>;
 	secretIntakeContext?(): TerminalSecretActorContext | undefined;
 	secretRequest?(request: TerminalSecretRequest): Promise<SecretRequestMetadata>;
@@ -71,13 +80,27 @@ export interface TerminalControlOptions {
 	writeOwner?: (recordPath: string, record: TerminalOwner) => Promise<void>;
 }
 
+export interface TerminalControlHandle {
+	(): void;
+	refreshIdentity(): Promise<void> | undefined;
+}
+
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
-export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices", "rotate", "idle-exit"] as const;
+export const TERMINAL_CAPABILITIES = [
+	"deliver-ack",
+	"delivery-readback",
+	"session-notices",
+	"rotate",
+	"idle-exit",
+	REGISTRY_SNAPSHOT_CAPABILITY,
+] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;
 /** Deliveries accepted and not yet settled. Beyond this the terminal answers `busy`: each holds its text. */
 const MAX_PENDING_DELIVERIES = 64;
+const DURABLE_DELIVERY_ID = /^telegram-[a-f0-9]{64}$/;
+const DURABLE_DELIVERY_TAG = /^\[telegram-delivery id=(telegram-[a-f0-9]{64})\]$/;
 const NOT_READY_RETRIES = 20;
 const NOT_READY_RETRY_MS = 100;
 /** A history replay waits while the socket holds more than this unsent, so one slow reader never reaches the 1 MiB send limit. */
@@ -97,8 +120,112 @@ class TerminalSessionChangedError extends Error {}
 
 type DeliveryState =
 	| { state: "pending" }
-	| { state: "delivered"; outcome: string }
+	| { state: "delivered"; outcome: string; consumed?: true }
 	| { state: "failed"; error: string };
+
+interface DeliveryRecord {
+	sessionId: string;
+	messageId: string;
+	status: DeliveryState;
+	watchers: Set<TerminalSocket>;
+	promise: Promise<string>;
+}
+
+/** The daemon writes this tag on the final line of each durable input. Use the same journal receipt rule. */
+function durableReceipt(line: Buffer): string | undefined {
+	if (!line.includes("[telegram-delivery id=")) return;
+	let entry: unknown;
+	try {
+		entry = JSON.parse(line.toString("utf8"));
+	} catch {
+		return;
+	}
+	if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) return;
+	const { role, synthetic, attribution, content } = entry.message;
+	if (role !== "user" || synthetic || attribution === "agent") return;
+	const body = Array.isArray(content)
+		? content.find(block => isRecord(block) && block.type === "text")?.text
+		: content;
+	if (typeof body === "string") return DURABLE_DELIVERY_TAG.exec(body.slice(body.lastIndexOf("\n") + 1))?.[1];
+}
+
+class DurableDeliveryReadback {
+	readonly consumed = new Set<string>();
+	// Terminal dispatch can finish before the journal append. Do not evict that ID with the recent RPC cache.
+	readonly dispatched = new Map<string, string>();
+	#cursor = 0;
+	#incarnation = "";
+	#scan?: { filename: string; promise: Promise<void> };
+
+	async refresh(filename: string): Promise<void> {
+		while (this.#scan) {
+			const scan = this.#scan;
+			await scan.promise;
+			if (scan.filename === filename) return;
+		}
+		const promise = this.#read(filename).finally(() => {
+			this.#scan = undefined;
+		});
+		this.#scan = { filename, promise };
+		await promise;
+	}
+
+	async #read(filename: string): Promise<void> {
+		let handle: fs.FileHandle | undefined;
+		try {
+			if (filename) handle = await fs.open(filename, "r");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (!handle) {
+			this.#incarnation = "";
+			this.#cursor = 0;
+			this.consumed.clear();
+			return;
+		}
+		try {
+			const stat = await handle.stat();
+			const incarnation = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+			if (incarnation !== this.#incarnation || stat.size < this.#cursor) {
+				this.#incarnation = incarnation;
+				this.#cursor = 0;
+				this.consumed.clear();
+			}
+			if (this.#cursor === stat.size) return;
+			const fragments: Buffer[] = [];
+			// Read a fixed snapshot; a partial final record is retried from the last newline.
+			for (let offset = this.#cursor; offset < stat.size; ) {
+				const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, stat.size - offset));
+				const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+				if (bytesRead === 0) break;
+				offset += bytesRead;
+				const chunk = buffer.subarray(0, bytesRead);
+				let start = 0;
+				for (let end = chunk.indexOf(10); end !== -1; end = chunk.indexOf(10, start)) {
+					let line = chunk.subarray(start, end);
+					if (fragments.length) {
+						fragments.push(line);
+						line = Buffer.concat(fragments);
+						fragments.length = 0;
+					}
+					const id = durableReceipt(line);
+					if (id) {
+						this.consumed.add(id);
+						this.dispatched.delete(id);
+					}
+					this.#cursor += line.length + 1;
+					start = end + 1;
+				}
+				if (start < chunk.length) fragments.push(chunk.subarray(start));
+			}
+		} finally {
+			await handle.close();
+		}
+	}
+}
+
+// V1 clients still recognize "delivered". The extra flag means the journal, not the IPC chain, confirmed it.
+const CONSUMED_DELIVERY = { state: "delivered", outcome: "duplicate", consumed: true } as const;
 
 interface StreamingSnapshotEvent {
 	kind: "streaming";
@@ -146,12 +273,12 @@ export function terminalControlEndpoint(directory: string, nonce: string, platfo
 	return platform === "win32" ? `\\\\.\\pipe\\veyyon-terminal-${nonce}` : path.join(directory, `${nonce}.sock`);
 }
 
-/** The socket lives in the CLI process; neither this module nor a client opens a session file. */
+/** The socket lives in the owning CLI process. It reads durable receipts but never writes the journal. */
 export async function serveTerminalControl(
 	target: TerminalControlTarget,
 	root = getConfigRootDir(),
 	options: TerminalControlOptions = {},
-): Promise<() => void> {
+): Promise<TerminalControlHandle> {
 	const startupArgv = isCompiledBinary()
 		? [process.execPath, ...process.argv.slice(2)]
 		: [process.execPath, ...process.argv.slice(1)];
@@ -163,7 +290,9 @@ export async function serveTerminalControl(
 	};
 	const capabilities = (): readonly string[] => {
 		const available = TERMINAL_CAPABILITIES.filter(
-			capability => capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown),
+			capability =>
+				(capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown)) &&
+				(capability !== REGISTRY_SNAPSHOT_CAPABILITY || Boolean(target.registrySnapshot)),
 		);
 		return secretIntakeContext() ? [...available, "secret-intake"] : available;
 	};
@@ -179,21 +308,31 @@ export async function serveTerminalControl(
 	const subscribers = new Set<TerminalSocket>();
 	let closed = false;
 	let publishedSessionId = target.identity().sessionId;
+	let ownerGeneration = nonce;
 	let unsubscribe: (() => void) | undefined;
 	let refresh: NodeJS.Timeout | undefined;
 	let refreshing = false;
 	let publication: Promise<void> = Promise.resolve();
 	// No timer stays armed while no client is connected: a resting terminal wakes for no one. The
 	// owner poll runs only while a socket is open, the journal poll only while one is subscribed.
-	const reconcile = (): void => {
+	const reconcile = (): Promise<void> | undefined => {
 		if (closed || refreshing || publishedSessionId === target.identity().sessionId) return;
 		refreshing = true;
 		for (const socket of sockets) socket.destroy();
-		void publish()
-			.finally(() => {
+		let attemptedSessionId: string | undefined;
+		return publish({ onAttempt: sessionId => (attemptedSessionId = sessionId) }).then(
+			() => {
 				refreshing = false;
-			})
-			.catch(() => close());
+				return reconcile();
+			},
+			() => {
+				// Keep listening. Publish a newer session, but do not retry the failed one here.
+				refreshing = false;
+				if (!closed && attemptedSessionId !== undefined && attemptedSessionId !== target.identity().sessionId) {
+					return reconcile();
+				}
+			},
+		);
 	};
 	const armRefresh = (): void => {
 		if (refresh || closed) return;
@@ -287,25 +426,45 @@ export async function serveTerminalControl(
 		if (chunk.length) chunks.push(chunk);
 		return chunks;
 	};
-	// Acked deliveries, by the daemon's message id, scoped to the session that accepted them. The table
-	// lets a retry after a lost connection find the earlier request instead of enqueueing the message
-	// twice. Insertion order = age. Only settled records are evicted, so a pending id is never forgotten
-	// and re-enqueued.
-	//
-	// Crash window: from the ack until `target.deliver` runs, the message exists only in this process.
-	// A crash or close in that window loses it, although the daemon already holds the ack. The window
-	// is the time the terminal needs to reach the message on the chain.
+	// Admissions are scoped to the session that accepted them. An ack is not a journal write:
+	// a disconnected caller can retry the same ID, but only journal readback proves consumption.
 	const deliveryKey = (sessionId: string, messageId: string): string => `${sessionId}\0${messageId}`;
-	const deliveries = new Map<
-		string,
-		{
-			sessionId: string;
-			messageId: string;
-			status: DeliveryState;
-			watchers: Set<TerminalSocket>;
-			promise?: Promise<string>;
+	const deliveries = new Map<string, DeliveryRecord>();
+	let readback: DurableDeliveryReadback | undefined;
+	const refreshReadback = async (sessionId: string): Promise<DurableDeliveryReadback> => {
+		const identity = target.identity();
+		if (closed || sessionId !== publishedSessionId || sessionId !== identity.sessionId) {
+			throw new TerminalSessionChangedError("Terminal session detached or changed; rediscover its owner");
 		}
-	>();
+		readback ??= new DurableDeliveryReadback();
+		const index = readback;
+		try {
+			await index.refresh(identity.sessionFile);
+		} catch (cause) {
+			throw new TerminalNotReadyError("Terminal delivery journal is not readable; retry later", { cause });
+		}
+		const current = target.identity();
+		if (
+			closed ||
+			sessionId !== publishedSessionId ||
+			sessionId !== current.sessionId ||
+			identity.sessionFile !== current.sessionFile ||
+			index !== readback
+		) {
+			throw new TerminalSessionChangedError("Terminal session detached or changed; rediscover its owner");
+		}
+		return index;
+	};
+	const deliveryStatus = (
+		messageId: string,
+		index: DurableDeliveryReadback | undefined,
+		known: DeliveryRecord | undefined,
+	): DeliveryState | undefined => {
+		if (index?.consumed.has(messageId)) return CONSUMED_DELIVERY;
+		if (known) return known.status;
+		const outcome = index?.dispatched.get(messageId);
+		if (outcome !== undefined) return { state: "delivered", outcome };
+	};
 	const evictOldDeliveries = (): void => {
 		for (const [oldestId, oldest] of deliveries) {
 			if (deliveries.size <= MAX_REMEMBERED_DELIVERIES) break;
@@ -329,12 +488,7 @@ export async function serveTerminalControl(
 			event: { kind: "delivery", sessionId: record.sessionId, messageId: record.messageId, ...record.status },
 		});
 	};
-	const announceDelivery = (record: {
-		sessionId: string;
-		messageId: string;
-		status: DeliveryState;
-		watchers: Set<TerminalSocket>;
-	}): void => {
+	const announceDelivery = (record: DeliveryRecord): void => {
 		for (const socket of record.watchers) {
 			sendDelivery(socket, record);
 		}
@@ -351,12 +505,19 @@ export async function serveTerminalControl(
 		text: string,
 		mode: "auto" | "steer" | "followUp",
 		deliveryOptions?: TerminalDeliveryOptions,
+		durableId?: string,
 	): Promise<string> => {
-		if (pendingDeliveries >= MAX_PENDING_DELIVERIES) {
-			return Promise.reject(new Error("Terminal busy: too many deliveries pending; retry later"));
-		}
+		if (exitReserved) throw new Error("Terminal is exiting; delivery refused");
+		if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
+			throw new Error("Terminal busy: too many deliveries pending; retry later");
+		const trace = deliveryOptions?.telegramTrace;
+		if (trace) logTelegramDeliveryTrace(trace, { stage: "session_acceptance", sessionId });
 		pendingDeliveries++;
 		const run = deliveryChain.then(async () => {
+			// Reserve the slot before any disk read. Cold readback must not create an unbounded second queue.
+			if (durableId && (await refreshReadback(sessionId)).consumed.has(durableId)) {
+				return CONSUMED_DELIVERY.outcome;
+			}
 			for (let attempt = 0; ; attempt++) {
 				// The session may have changed since the message was accepted. Never deliver it to another one.
 				if (closed || sessionId !== target.identity().sessionId) {
@@ -370,90 +531,71 @@ export async function serveTerminalControl(
 				}
 			}
 		});
-		const settle = (): void => {
-			pendingDeliveries--;
-		};
-		run.then(settle, settle);
+		void run.then(
+			outcome => {
+				pendingDeliveries--;
+				if (trace)
+					logTelegramDeliveryTrace(trace, {
+						stage: "delivery_outcome",
+						sessionId,
+						outcome: normalizeDeliveryOutcome(outcome),
+					});
+			},
+			error => {
+				pendingDeliveries--;
+				if (trace)
+					logTelegramDeliveryTrace(trace, {
+						stage: "delivery_outcome",
+						sessionId,
+						outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
+					});
+			},
+		);
 		deliveryChain = run.then(
 			() => {},
 			() => {},
 		);
 		return run;
 	};
-	const acceptDelivery = (
-		socket: TerminalSocket,
+	const trackDelivery = (
 		sessionId: string,
 		messageId: string,
 		text: string,
 		mode: "auto" | "steer" | "followUp",
-		deliveryOptions?: TerminalDeliveryOptions,
-	): { accepted: true; messageId: string; state: DeliveryState["state"]; outcome?: string; error?: string } => {
+		deliveryOptions: TerminalDeliveryOptions | undefined,
+		index: DurableDeliveryReadback | undefined,
+	): DeliveryRecord => {
 		const key = deliveryKey(sessionId, messageId);
-		const known = deliveries.get(key);
-		if (known) {
-			if (known.status.state === "pending") {
-				known.watchers.add(socket);
-				return { accepted: true, messageId, state: "pending" };
-			}
-			sendDelivery(socket, known);
-			return {
-				accepted: true,
-				messageId,
-				state: known.status.state,
-				...(known.status.state === "delivered" ? { outcome: known.status.outcome } : { error: known.status.error }),
-			};
-		}
-		if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
-			throw new Error("Terminal busy: too many deliveries pending; retry later");
-		if (deliveryOptions?.telegramTrace) {
-			logTelegramDeliveryTrace(deliveryOptions.telegramTrace, {
-				stage: "session_acceptance",
-				sessionId,
-			});
-		}
-		const deliveryPromise = runDelivery(sessionId, text, mode, deliveryOptions);
-		const record = {
+		const promise = runDelivery(sessionId, text, mode, deliveryOptions, index ? messageId : undefined);
+		const tagged = index && DURABLE_DELIVERY_TAG.exec(text.slice(text.lastIndexOf("\n") + 1))?.[1] === messageId;
+		const record: DeliveryRecord = {
 			sessionId,
 			messageId,
-			status: { state: "pending" } as DeliveryState,
-			watchers: new Set([socket]),
-			promise: deliveryPromise,
+			status: { state: "pending" },
+			watchers: new Set(),
+			promise,
 		};
 		deliveries.set(key, record);
 		evictOldDeliveries();
-		let retryable = false;
-		void deliveryPromise
-			.then(
-				outcome => {
-					record.status = { state: "delivered", outcome };
-					if (deliveryOptions?.telegramTrace) {
-						logTelegramDeliveryTrace(deliveryOptions.telegramTrace, {
-							stage: "delivery_outcome",
-							sessionId,
-							outcome: normalizeDeliveryOutcome(outcome),
-						});
-					}
-				},
-				error => {
-					record.status = { state: "failed", error: String(error) };
-					if (deliveryOptions?.telegramTrace) {
-						logTelegramDeliveryTrace(deliveryOptions.telegramTrace, {
-							stage: "delivery_outcome",
-							sessionId,
-							outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
-						});
-					}
-					if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
-						retryable = true;
-					}
-				},
-			)
-			.then(() => {
-				announceDelivery(record);
-				record.watchers.clear();
-				if (retryable || record.sessionId !== publishedSessionId) deliveries.delete(key);
-			});
-		return { accepted: true, messageId, state: "pending" };
+		const finish = (status: DeliveryState): void => {
+			record.status = status;
+			announceDelivery(record);
+			record.watchers.clear();
+			if (sessionId !== publishedSessionId) deliveries.delete(key);
+		};
+		void promise.then(
+			outcome => {
+				if (index && tagged && !index.consumed.has(messageId)) index.dispatched.set(messageId, outcome);
+				finish({ state: "delivered", outcome });
+			},
+			error => {
+				finish({ state: "failed", error: String(error) });
+				if (error instanceof TerminalNotReadyError || error instanceof TerminalSessionChangedError) {
+					deliveries.delete(key);
+				}
+			},
+		);
+		return record;
 	};
 	const server = await createTerminalControlTransport(endpoint, socket => {
 		sockets.add(socket);
@@ -485,13 +627,23 @@ export async function serveTerminalControl(
 				if (newline < 0) break;
 				const line = buffer.slice(0, newline);
 				buffer = buffer.slice(newline + 1);
+				let request;
+				try {
+					request = JSON.parse(line);
+				} catch (error) {
+					send(socket, { ok: false, error: String(error) });
+					continue;
+				}
+				const id = request?.id;
 				const handle = async (): Promise<void> => {
-					let id: unknown;
+					if (socket.destroyed) return;
 					let shutdownAfterResponse = false;
 					try {
-						const request = JSON.parse(line);
-						id = request?.id;
 						if (typeof id !== "string" || request.version !== 1 || request.token !== token) {
+							socket.destroy();
+							return;
+						}
+						if (request.op === "registrySnapshot" && id.length > MAX_REGISTRY_SNAPSHOT_TEXT) {
 							socket.destroy();
 							return;
 						}
@@ -505,6 +657,15 @@ export async function serveTerminalControl(
 						}
 						let result: unknown;
 						switch (request.op) {
+							case "registrySnapshot": {
+								if (!target.registrySnapshot) throw new Error("Registry snapshot unsupported");
+								if (request.ownerGeneration !== ownerGeneration)
+									throw new Error("Terminal owner generation changed; rediscover its owner");
+								const observation = target.registrySnapshot(publishedSessionId);
+								if (!observation) throw new Error("Registry snapshot unavailable");
+								result = { version: 1, sessionId: publishedSessionId, ownerGeneration, ...observation };
+								break;
+							}
 							case "subscribe": {
 								if (request.secretIntake !== undefined) {
 									const registration = request.secretIntake;
@@ -640,140 +801,73 @@ export async function serveTerminalControl(
 								const deliveryOptions: TerminalDeliveryOptions | undefined = telegramTrace
 									? { telegramTrace }
 									: undefined;
-								if (request.ack === true) {
-									// The terminal may be blocked for seconds. Accept now, deliver on the chain.
-									if (
-										typeof request.messageId !== "string" ||
-										!request.messageId ||
-										request.messageId.length > 128
-									)
-										throw new Error("Invalid delivery");
-									result = acceptDelivery(
-										socket,
-										request.sessionId,
-										request.messageId,
-										request.text,
-										request.mode,
-										deliveryOptions,
-									);
-									break;
+								const messageId = typeof request.messageId === "string" ? request.messageId : "";
+								if ((request.ack === true && !messageId) || messageId.length > 128) {
+									throw new Error("Invalid delivery");
 								}
-								if (typeof request.messageId === "string" && request.messageId) {
-									if (request.messageId.length > 128) throw new Error("Invalid delivery");
-									const key = deliveryKey(request.sessionId, request.messageId);
-									const known = deliveries.get(key);
-									if (known) {
-										if (known.status.state === "delivered") {
-											result = known.status.outcome;
-											break;
-										}
-										if (known.status.state === "failed") throw new Error(known.status.error);
-										if (known.promise) {
-											result = await known.promise;
-											break;
-										}
-									}
-									if (pendingDeliveries >= MAX_PENDING_DELIVERIES)
-										throw new Error("Terminal busy: too many deliveries pending; retry later");
-									if (telegramTrace) {
-										logTelegramDeliveryTrace(telegramTrace, {
-											stage: "session_acceptance",
-											sessionId: request.sessionId,
-										});
-									}
-									const deliveryPromise = runDelivery(
-										request.sessionId,
-										request.text,
-										request.mode,
-										deliveryOptions,
-									);
-									const record = {
-										sessionId: request.sessionId,
-										messageId: request.messageId,
-										status: { state: "pending" } as DeliveryState,
-										watchers: new Set<TerminalSocket>(),
-										promise: deliveryPromise,
-									};
-									deliveries.set(key, record);
-									evictOldDeliveries();
-									let retryable = false;
-									void deliveryPromise
-										.then(
-											outcome => {
-												record.status = { state: "delivered", outcome };
-												if (telegramTrace) {
-													logTelegramDeliveryTrace(telegramTrace, {
-														stage: "delivery_outcome",
-														sessionId: request.sessionId,
-														outcome: normalizeDeliveryOutcome(outcome),
-													});
-												}
-											},
-											error => {
-												record.status = { state: "failed", error: String(error) };
-												if (telegramTrace) {
-													logTelegramDeliveryTrace(telegramTrace, {
-														stage: "delivery_outcome",
-														sessionId: request.sessionId,
-														outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
-													});
-												}
-												if (
-													error instanceof TerminalNotReadyError ||
-													error instanceof TerminalSessionChangedError
-												) {
-													retryable = true;
-												}
-											},
-										)
-										.then(() => {
-											announceDelivery(record);
-											record.watchers.clear();
-											if (retryable || record.sessionId !== publishedSessionId) deliveries.delete(key);
-										});
-									result = await deliveryPromise;
-									break;
-								}
-								if (telegramTrace) {
-									logTelegramDeliveryTrace(telegramTrace, {
-										stage: "session_acceptance",
-										sessionId: request.sessionId,
-									});
-								}
-								try {
+								if (!messageId) {
 									result = await runDelivery(request.sessionId, request.text, request.mode, deliveryOptions);
-									if (telegramTrace) {
-										logTelegramDeliveryTrace(telegramTrace, {
-											stage: "delivery_outcome",
-											sessionId: request.sessionId,
-											outcome: normalizeDeliveryOutcome(result),
-										});
+									break;
+								}
+								let index: DurableDeliveryReadback | undefined;
+								if (DURABLE_DELIVERY_ID.test(messageId)) {
+									readback ??= new DurableDeliveryReadback();
+									index = readback;
+								}
+								let record = deliveries.get(deliveryKey(request.sessionId, messageId));
+								let status = deliveryStatus(messageId, index, record);
+								if (!status) {
+									record = trackDelivery(
+										request.sessionId,
+										messageId,
+										request.text,
+										request.mode,
+										deliveryOptions,
+										index,
+									);
+									status = record.status;
+								}
+								if (request.ack === true) {
+									if (record && status.state === "pending") {
+										if (!socket.destroyed) record.watchers.add(socket);
+									} else if (record && status === record.status) {
+										sendDelivery(socket, record);
 									}
-								} catch (error) {
-									if (telegramTrace) {
-										logTelegramDeliveryTrace(telegramTrace, {
-											stage: "delivery_outcome",
-											sessionId: request.sessionId,
-											outcome: error instanceof TerminalNotReadyError ? "rejected" : "failed",
-										});
-									}
-									throw error;
+									result = { accepted: true, messageId, ...status };
+								} else if (status.state === "delivered") {
+									result = status.outcome;
+								} else if (status.state === "failed") {
+									throw new Error(status.error);
+								} else {
+									result = await record!.promise;
 								}
 								break;
 							}
+							case "deliveryCapacity":
+								result = {
+									limit: MAX_PENDING_DELIVERIES,
+									available: exitReserved ? 0 : MAX_PENDING_DELIVERIES - pendingDeliveries,
+								};
+								break;
 							case "deliveryStatus": {
-								const known =
-									typeof request.messageId === "string"
-										? deliveries.get(deliveryKey(request.sessionId, request.messageId))
-										: undefined;
-								result = known ? known.status : { state: "unknown" };
+								const messageId = typeof request.messageId === "string" ? request.messageId : "";
+								const index = DURABLE_DELIVERY_ID.test(messageId)
+									? await refreshReadback(request.sessionId)
+									: undefined;
+								if (request.token !== token)
+									throw new Error("Terminal credential changed; rediscover its owner");
+								const known = deliveries.get(deliveryKey(request.sessionId, messageId));
+								result = deliveryStatus(messageId, index, known) ?? { state: "unknown" };
 								break;
 							}
 							case "abort":
 								result = await target.abort();
 								break;
 							case "rotate":
-								await publish(crypto.randomBytes(32).toString("hex"), request.token);
+								await publish({
+									nextToken: crypto.randomBytes(32).toString("hex"),
+									expectedToken: request.token,
+								});
 								for (const peer of sockets) {
 									if (peer !== socket) peer.destroy();
 								}
@@ -851,6 +945,7 @@ export async function serveTerminalControl(
 									...target.identity(),
 									pid: process.pid,
 									capabilities: capabilities(),
+									...(target.registrySnapshot ? { ownerGeneration } : {}),
 									...getLoadedBuildIdentity(),
 									argv: startupArgv,
 								};
@@ -876,9 +971,17 @@ export async function serveTerminalControl(
 						send(socket, { id, ok: false, error: String(error) });
 					}
 				};
-				// An acked delivery only registers the message, so it never waits behind a slower request on this socket.
-				if (/"ack"\s*:\s*true/.test(line) && /"op"\s*:\s*"deliver"/.test(line)) void handle();
-				else queue = queue.then(handle);
+				// Read-only snapshots, readback and ack admission do not wait for a plain delivery.
+				if (
+					request?.op === "registrySnapshot" ||
+					request?.op === "deliveryCapacity" ||
+					request?.op === "deliveryStatus" ||
+					(request?.op === "deliver" && request.ack === true)
+				) {
+					void handle();
+				} else {
+					queue = queue.then(handle);
+				}
 			}
 		});
 	});
@@ -899,14 +1002,23 @@ export async function serveTerminalControl(
 				},
 			);
 		});
-	const publish = (nextToken?: string, expectedToken?: string): Promise<void> => {
+	const publish = ({
+		nextToken,
+		expectedToken,
+		onAttempt,
+	}: { nextToken?: string; expectedToken?: string; onAttempt?: (sessionId: string) => void } = {}): Promise<void> => {
 		const run = publication.then(async () => {
 			if (closed) throw new Error("Terminal control is closed");
 			if (expectedToken !== undefined && expectedToken !== token) {
 				throw new Error("Terminal credential changed; rediscover its owner");
 			}
 			const identity = target.identity();
+			onAttempt?.(identity.sessionId);
 			const credential = nextToken ?? token;
+			const generation =
+				nextToken !== undefined || identity.sessionId !== publishedSessionId
+					? crypto.randomUUID()
+					: ownerGeneration;
 			const build = getLoadedBuildIdentity();
 			const record: TerminalOwner = {
 				version: 1,
@@ -917,6 +1029,7 @@ export async function serveTerminalControl(
 				loadedVersion: build.version,
 				loadedBuildSha: build.buildSha,
 				capabilities: capabilities(),
+				...(target.registrySnapshot ? { ownerGeneration: generation } : {}),
 			};
 			await writeOwner(recordPath, record);
 			if (closed) {
@@ -924,9 +1037,11 @@ export async function serveTerminalControl(
 				throw new Error("Terminal control is closed");
 			}
 			token = credential;
+			ownerGeneration = generation;
 			const previousSessionId = publishedSessionId;
 			publishedSessionId = identity.sessionId;
 			if (previousSessionId !== identity.sessionId) {
+				readback = undefined;
 				currentStreamingEvent = undefined;
 				for (const [key, delivery] of deliveries) {
 					if (delivery.sessionId === previousSessionId && delivery.status.state !== "pending")
@@ -955,5 +1070,5 @@ export async function serveTerminalControl(
 	};
 	const cancelCleanup = postmortem.register(`terminal-control:${nonce}`, close);
 	server.onClose?.(close);
-	return close;
+	return Object.assign(close, { refreshIdentity: reconcile });
 }

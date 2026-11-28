@@ -4,6 +4,7 @@ import {
 	type ProducerSecretOwner,
 	runWithProducerSecretOwner,
 } from "../secrets/producer-owner";
+import type { TaskStartupPhase } from "../task/types";
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;
@@ -72,6 +73,8 @@ export interface AsyncJob {
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
 	 */
 	ownerId?: string;
+	/** Conversation scope at registration, if known. */
+	ownerScope?: string;
 	/**
 	 * Registry id of the agent this job runs (task/tan/vibe jobs). Lets
 	 * job-view code link a job row to its AgentRegistry ref even when the job
@@ -90,6 +93,8 @@ export interface AsyncJob {
 	 * until the caller invokes `markRunning()` from the run context.
 	 */
 	queued?: boolean;
+	/** Detached task setup, independent of execution-slot accounting. */
+	startupPhase?: TaskStartupPhase;
 	/**
 	 * Latest progress / result details reported by the job runner.
 	 */
@@ -126,6 +131,7 @@ export interface AsyncJobRegisterOptions {
 	id?: string;
 	/** Registry id of the agent that owns this job; used to scope cancelAll. */
 	ownerId?: string;
+	ownerScope?: string;
 	/** Registry id of the agent this job runs; see {@link AsyncJob.agentId}. */
 	agentId?: string;
 	/** Tool call that started this job; see {@link AsyncJob.toolCallId}. */
@@ -209,6 +215,7 @@ export class AsyncJobManager {
 			reportProgress: (text: string, details?: Record<string, unknown>) => Promise<void>;
 			/** Clear the queued flag once the job actually starts executing. */
 			markRunning: () => void;
+			setStartupPhase: (phase: TaskStartupPhase) => void;
 		}) => Promise<string>,
 		options?: AsyncJobRegisterOptions,
 	): string {
@@ -242,6 +249,7 @@ export class AsyncJobManager {
 			promise: Promise.resolve(),
 			endsOnItsOwn: options?.endsOnItsOwn ?? JOB_ENDS_ON_ITS_OWN[type],
 			ownerId: options?.ownerId,
+			ownerScope: options?.ownerScope,
 			agentId: options?.agentId,
 			toolCallId: options?.toolCallId,
 			queued: options?.queued === true,
@@ -262,6 +270,9 @@ export class AsyncJobManager {
 				});
 			}
 		};
+		const setStartupPhase = (phase: TaskStartupPhase): void => {
+			if (job.status === "running" && !abortController.signal.aborted) job.startupPhase = phase;
+		};
 		job.promise = (async () => {
 			try {
 				const text = await (producerSecretOwner
@@ -270,6 +281,7 @@ export class AsyncJobManager {
 								jobId: id,
 								signal: abortController.signal,
 								reportProgress,
+								setStartupPhase,
 								markRunning: () => {
 									job.queued = false;
 								},
@@ -279,6 +291,7 @@ export class AsyncJobManager {
 							jobId: id,
 							signal: abortController.signal,
 							reportProgress,
+							setStartupPhase,
 							markRunning: () => {
 								job.queued = false;
 							},
@@ -344,6 +357,22 @@ export class AsyncJobManager {
 
 	getJob(id: string): AsyncJob | undefined {
 		return this.#jobs.get(id);
+	}
+
+	/** Find the latest detached task for this recipient in the caller's own conversation. */
+	findOwnedTask(agentId: string, ownerId: string, ownerScope: string): AsyncJob | undefined {
+		let latest: AsyncJob | undefined;
+		for (const job of this.#jobs.values()) {
+			if (
+				job.type === "task" &&
+				job.agentId === agentId &&
+				job.ownerId === ownerId &&
+				job.ownerScope === ownerScope
+			) {
+				latest = job;
+			}
+		}
+		return latest;
 	}
 
 	getRunningJobs(filter?: AsyncJobFilter): AsyncJob[] {

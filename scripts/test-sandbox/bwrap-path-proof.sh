@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Exercise the WSL inherited-PATH case through the real bwrap boundary.
+# Exercise the WSL inherited-PATH case through the real bwrap boundary. It sets PATH to a Windows-only value, as `wsl --exec` leaves it, then checks that bun, git and sh still resolve inside the sandbox and that the host home stays absent.
+# Usage: bash scripts/test-sandbox/bwrap-path-proof.sh   (Linux or WSL with bubblewrap; prints `bwrap PATH proof: PASS` on success)
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && /bin/pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && /bin/pwd -P)"

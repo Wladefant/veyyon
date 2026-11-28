@@ -155,6 +155,7 @@ Artifacts and side channels:
   - Shares the parent `local://` root and `ArtifactManager` with agents.
 - Background work / cancellation
   - `job cancel` (or parent tool-call abort) cancels background jobs; parent tool-call abort cancels sync runs through the call signal. A hard-aborted run lands `aborted` and is torn down.
+  - An inline batch reports cancelled children separately from failures and keeps the results of children that finished.
   - Missing-`yield` recovery sends up to three internal reminder prompts to the child session.
 
 ## Limits & Caps

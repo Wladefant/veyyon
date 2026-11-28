@@ -1,5 +1,5 @@
 // The rendered handbook (docs/handbook/book) is a gitignored build output, and
-// the docs.yml, site.yml, and ci.yml workflows plus test sandbox guest Dockerfile
+// the docs, site, CI and OVH workflows plus the test sandbox guest Dockerfile
 // build it with a pinned mdbook version. That version is also what deployment.md
 // tells contributors to install — if any drift, a contributor following the docs
 // produces a book the gate rejects (mdbook output differs across versions). Lock
@@ -12,6 +12,7 @@ const ROOT = path.resolve(import.meta.dir, "..");
 const DOCS_WORKFLOW = path.join(ROOT, ".github", "workflows", "docs.yml");
 const SITE_WORKFLOW = path.join(ROOT, ".github", "workflows", "site.yml");
 const CI_WORKFLOW = path.join(ROOT, ".github", "workflows", "ci.yml");
+const OVH_WORKFLOW = path.join(ROOT, ".github", "workflows", "ovh-ci.yml");
 const DOCKERFILE = path.join(ROOT, "scripts", "test-sandbox", "guest", "Dockerfile");
 const DEPLOYMENT_DOC = path.join(ROOT, "docs", "internal", "deployment.md");
 const GITIGNORE = path.join(ROOT, ".gitignore");
@@ -32,16 +33,19 @@ describe("handbook mdbook version pin and build contract", () => {
 		expect(deployment).toContain(`mdbook **v${pinned}**`);
 	});
 
-	it("site.yml and ci.yml pin the same mdbook version as docs.yml", async () => {
+	it("site.yml, ci.yml, and ovh-ci.yml pin the same mdbook version as docs.yml", async () => {
 		const docsWorkflow = await Bun.file(DOCS_WORKFLOW).text();
 		const siteWorkflow = await Bun.file(SITE_WORKFLOW).text();
 		const ciWorkflow = await Bun.file(CI_WORKFLOW).text();
+		const ovhWorkflow = await Bun.file(OVH_WORKFLOW).text();
 		const docsPinned = docsWorkflow.match(/mdbook[- ]v(\d+\.\d+\.\d+)/)?.[1];
 		const sitePinned = siteWorkflow.match(/mdbook[- ]v(\d+\.\d+\.\d+)/)?.[1];
 		const ciPinned = ciWorkflow.match(/mdbook[- ]v(\d+\.\d+\.\d+)/)?.[1];
 		expect(docsPinned).toBeDefined();
 		expect(sitePinned).toBe(docsPinned);
 		expect(ciPinned).toBe(docsPinned);
+		const ovhPins = [...ovhWorkflow.matchAll(/mdbook[- ]v(\d+\.\d+\.\d+)/g)].map(m => m[1]);
+		expect([...new Set(ovhPins)]).toEqual([docsPinned]);
 	});
 
 	it("test sandbox guest Dockerfile pins the same mdbook version", async () => {

@@ -157,21 +157,21 @@ export class CredentialRouting {
 	 * stale one routes the session to somebody else's account.
 	 */
 	getSessionCredentialPin(provider: string, sessionId: string | undefined): ChosenCredential | undefined {
-		if (!sessionId) return this.getSelectedCredential(provider);
+		if (!sessionId) return undefined;
 		let credentialId = this.#sessionPinnedCredential.get(provider)?.get(sessionId);
 		if (credentialId === undefined) {
 			try {
 				const raw = this.#store.getCache(`${SESSION_PIN_CACHE_PREFIX}${provider}:${sessionId}`);
-				if (!raw) return this.getSelectedCredential(provider);
+				if (!raw) return undefined;
 				const parsed = JSON.parse(raw) as { credentialId?: number };
-				if (typeof parsed.credentialId !== "number") return this.getSelectedCredential(provider);
+				if (typeof parsed.credentialId !== "number") return undefined;
 				credentialId = parsed.credentialId;
 				const pinMap = this.#sessionPinnedCredential.get(provider) ?? new Map<string, number>();
 				pinMap.set(sessionId, credentialId);
 				this.#sessionPinnedCredential.set(provider, pinMap);
 			} catch (err) {
 				this.reportStickyCacheFailure("pin-read", provider, err);
-				return this.getSelectedCredential(provider);
+				return undefined;
 			}
 		}
 		const stored = this.#rows(provider);
@@ -180,16 +180,16 @@ export class CredentialRouting {
 			// The pinned account was logged out or replaced. Forget the pin rather than
 			// leave a dangling id that would be re-resolved on every request.
 			this.clearSessionCredentialPin(provider, sessionId);
-			return this.getSelectedCredential(provider);
+			return undefined;
 		}
 		const credential = stored[index]?.credential;
-		if (!credential) return this.getSelectedCredential(provider);
+		if (!credential) return undefined;
 		return { type: credential.type, index, credentialId };
 	}
 
 	/**
-	 * The credential this session prefers: an explicit user pin when one resolves,
-	 * otherwise the last credential routing actually used.
+	 * The credential this session prefers: a session pin, then the provider selection,
+	 * otherwise the last credential routing used.
 	 *
 	 * The pin is checked FIRST and this is the only place that decides it, because every
 	 * consumer of session preference goes through here (OAuth selection, account-identity
@@ -201,7 +201,7 @@ export class CredentialRouting {
 		// No early return on a missing session id: the GLOBAL selection is not session state, and a
 		// caller with no session (a one-shot CLI, an agent role resolving outside a session) must
 		// still route to the account the user picked.
-		const pinned = this.getSessionCredentialPin(provider, sessionId);
+		const pinned = this.getSessionCredentialPin(provider, sessionId) ?? this.getSelectedCredential(provider);
 		if (pinned) return { type: pinned.type, index: pinned.index };
 		return this.getStickySessionCredential(provider, sessionId);
 	}

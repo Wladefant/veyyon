@@ -8,6 +8,7 @@ import {
 	toFireworksPublicModelId,
 	toFireworksWireModelId,
 } from "../src/fireworks-model-id";
+import { getBundledModels } from "../src/models";
 import { buildFireworksFastSeed } from "../src/provider-models/openai-compat";
 
 describe("fireworks wire/public id translation", () => {
@@ -71,11 +72,17 @@ describe("buildFireworksFastSeed", () => {
 	});
 
 	it("inherits limits and modalities from the base model", () => {
-		const kimi = byId.get("kimi-k2.6-fast");
-		expect(kimi?.input).toEqual(["text", "image"]);
-		// Inherited from the base row, whose limits are the models.dev declaration.
-		expect(kimi?.contextWindow).toBe(262000);
-		expect(kimi?.reasoning).toBe(true);
-		expect(byId.get("glm-5.1-fast")?.input).toEqual(["text"]);
+		const bundled = getBundledModels("fireworks");
+		for (const fast of seed) {
+			const baseId = toFireworksBaseModelId(fast.id);
+			const base = bundled.find(model => model.id === baseId);
+			if (!base) {
+				throw new Error(`Missing bundled Fireworks model: ${baseId}`);
+			}
+			expect(fast.input).toEqual(base.input);
+			expect(fast.contextWindow).toBe(base.contextWindow);
+			expect(fast.maxTokens).toBe(base.maxTokens);
+			expect(fast.reasoning).toBe(base.reasoning);
+		}
 	});
 });

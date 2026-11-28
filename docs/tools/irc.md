@@ -38,11 +38,15 @@ Session aliases resolve against live owner-only terminal records, not offline qu
 - Single-shot `AgentToolResult`; no streaming updates.
 - `content` is one text block:
   - `list`: `No other agents.` or `<n> peer(s):` bullets: `id [displayName · kind · status]` plus unread count, parent, and last-activity age; a footer notes that parked agents are revived automatically when messaged.
+    A separate list shows the caller's own same-conversation detached children while they queue or start, and after a pre-ready failure or cancellation while the job is retained. These rows show the setup phase, registration, attachment, and whether IRC can route to the child. They do not add recipients to the live roster.
   - `send`: per-recipient delivery receipts (`injected` / `woken` / `revived` / `failed — <error>`); with `await: true`, the reply body or a clean no-reply timeout note.
     A local send without `await` names any unconfirmed recipients after three seconds. Their delivery may still finish. Do not resend it.
+    A parent can address a detached child by its allocated agent ID before the child joins IRC. If the child is queued, starting, or registered without a session, the send fails immediately, even with `await: true`. The message is not buffered. Check the receipt's `jobId` before trying again.
   - `wait`: the consumed message as `[<msgId>] <from>: <body>` (with a reply-to tag), or `No message within <duration>.`
   - `inbox`: `Inbox empty.` or `<n> message(s):` bullets.
 - `details: IrcDetails`: `{ op, from?, to?, receipts?, waited?, inbox?, peers? }`. `waited` is `null` when a wait timed out; `receipts` carry `{ to, outcome, error? }`.
+  Startup refusals also carry a `code` (`queued_not_yet_on_irc`, `starting_not_yet_on_irc`, `registered_no_live_session`, `recipient_cancelled`, or `recipient_job_failed`), `jobId`, and explicit `accepted: false`, `retained: false`, and `delivered: false` flags. Cancelled and failed jobs are identifiable only while the job manager retains them. Broadcasts do not include unregistered jobs.
+  Detached child rows are in `details.startingChildren`. If known, a startup refusal also includes `phase` and a terminal reason.
 
 ## Flow
 1. `IrcTool.createIf` constructs the tool only when `isIrcEnabled` passes and the session has both an `AgentRegistry` and `getAgentId`. There is no `irc.enabled` setting: availability is derived: true for every agent (`taskDepth > 0`; a parent always exists) and for any session that can still spawn agents through the task tool. Only a top-level session with task spawning unavailable has no peers, hence no irc.

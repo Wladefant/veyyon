@@ -174,6 +174,7 @@ import { formatAdvisorStatus } from "./advisor-stats";
 import { throwIfExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage } from "./agent-session-message-shapes";
+import { compactionModelCandidates } from "./agent-session-model-targets";
 import { isAdvisorCard, isTerminalTextAssistantAnswer, type RestoredQueuedMessage } from "./agent-session-queue";
 import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import { buildGoalTodoContext, createMagicKeywordNotices, magicKeywordEnabled } from "./agent-session-turn-notices";
@@ -634,6 +635,9 @@ export class AgentSession {
 		phaseChanged: () => this.#heartbeat?.update(),
 	});
 
+	/** Set once an automatic expensive-agent handoff has run for this session id, so it runs at most once. */
+	#lastLaneHandoffSessionId: string | undefined;
+
 	/** The end-of-turn context check and the recovery each of its cases runs. */
 	readonly #contextCheck = new TurnContextCheck(this, {
 		promptGeneration: () => this.#promptGeneration,
@@ -662,6 +666,7 @@ export class AgentSession {
 			this.#abortInProgress ||
 			this.#isDisposed ||
 			this.#streamingEdit.abortTriggered,
+		tryRetractRetryDraft: persistenceKey => this.#retryDraftRetraction?.(persistenceKey) === true,
 		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
 		resetCurrentResponsesProviderSession: reason => this.#providerSessions.resetResponses(this.model, reason),
 		maybeAutoRedeemCodexReset: () => this.#usage.maybeAutoRedeemCodexReset(),
@@ -870,7 +875,9 @@ export class AgentSession {
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
 	 * the displayed session is always a top-level one, so a spawned agent's capture has no reader.
 	 */
-	readonly rawSseDebugBuffer: RawSseDebugBuffer | undefined;
+	get rawSseDebugBuffer(): RawSseDebugBuffer | undefined {
+		return this.#transport.rawSse;
+	}
 
 	#resetPromptMaintenanceState(): void {
 		this.#stopRetries.resetForPrompt();
@@ -1658,6 +1665,16 @@ export class AgentSession {
 			}
 			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
+			if (signal?.aborted) return;
+			const automaticHandoffModel = this.#automaticHandoffSummaryModel(context);
+			if (automaticHandoffModel) {
+				if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
+				signal?.throwIfAborted();
+				const switched = await this.#maybeHandoffExpensiveAgent(messages, automaticHandoffModel, signal);
+				// This hook runs between provider calls. Unwind the turn on abort rather than sampling again.
+				signal?.throwIfAborted();
+				if (switched) return;
+			}
 			await this.#contextCheck.betweenProviderCalls(messages, signal, context);
 		});
 		this.yieldQueue = new YieldQueue({
@@ -2162,7 +2179,11 @@ export class AgentSession {
 			effectiveServiceTier: model => this.#tiers.effective(model),
 			clearNextTurnMessages: () => this.#nextTurn.clear(),
 			cancelOwnAsyncJobs: () => this.#ownedJobs.cancelOwn(),
-			endConversation: () => this.#conversation.release(),
+			endConversation: async preserveAgentLineage => {
+				const id = this.#config.agentId;
+				if (preserveAgentLineage && id) AgentRegistry.global().publishSessionFile(id, this, this.sessionFile);
+				await this.#conversation.release({ preserveAgentLineage });
+			},
 			resetMemoryContextForNewTranscript: () => this.#resetMemoryContextForNewTranscript(),
 			resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		});
@@ -2336,6 +2357,19 @@ export class AgentSession {
 
 	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
 		this.#standingResolveHandler = handler ?? undefined;
+	}
+
+	#retryDraftRetraction: ((persistenceKey: string) => boolean) | undefined;
+
+	/**
+	 * Bind a display's synchronous check-and-retract operation. Without
+	 * this proof, leave the draft alone: append-only displays cannot erase it.
+	 */
+	setRetryDraftRetraction(retract: (persistenceKey: string) => boolean): () => void {
+		this.#retryDraftRetraction = retract;
+		return () => {
+			if (this.#retryDraftRetraction === retract) this.#retryDraftRetraction = undefined;
+		};
 	}
 
 	#sessionSwitchReconciler: (() => Promise<void>) | undefined;
@@ -3204,6 +3238,15 @@ export class AgentSession {
 	/** Current model (may be undefined if not yet selected) */
 	get model(): Model | undefined {
 		return this.agent.state.model;
+	}
+
+	/** Stable identity used by the owning runtime's agent registry. */
+	get registryAgentId(): string | undefined {
+		return this.#config.agentId;
+	}
+
+	liveAdvisorStates() {
+		return this.#advisorRoster.liveStates();
 	}
 
 	/** Live per-family service tiers (OpenAI / Anthropic / Google). */
@@ -4445,6 +4488,7 @@ export class AgentSession {
 			}
 			this.agent.steer(message);
 		}
+		this.#queue.scheduleDrain();
 	}
 
 	queueDeferredMessage(message: CustomMessage): void {
@@ -4931,7 +4975,13 @@ export class AgentSession {
 	 * Elide earlier tool results byte-identical to a newer one. Lossless and model-free, so any
 	 * compaction strategy may run it. Zero counts when nothing is redundant.
 	 */
-	dedupeRedundantToolResults(): Promise<{ toolResultsDropped: number; tokensFreed: number; artifactId?: string }> {
+	async dedupeRedundantToolResults(): Promise<{
+		toolResultsDropped: number;
+		tokensFreed: number;
+		artifactId?: string;
+	}> {
+		// A following tool can start before the previous tool result reaches the branch.
+		await this.#persistence.drain();
 		return this.#rewrites.dedupeRedundantToolResults();
 	}
 
@@ -4992,6 +5042,84 @@ export class AgentSession {
 	 */
 	handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
 		return this.#sessionHandoff.run(customInstructions, options);
+	}
+	/**
+	 * The summary model for an automatic expensive-agent handoff at this turn end, or undefined when the turn
+	 * is not eligible. Cheap guards run first; the context count and candidate search run only after them.
+	 */
+	#automaticHandoffSummaryModel(
+		context: { willContinue?: boolean; message: AgentMessage } | undefined,
+	): Model | undefined {
+		const message = context?.message;
+		if (
+			this.#isDisposed ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			!context?.willContinue ||
+			message?.role !== "assistant" ||
+			message.stopReason === "aborted" ||
+			message.stopReason === "error"
+		) {
+			return undefined;
+		}
+		const agentId = this.#config.agentId;
+		const threshold = this.settings.get("compaction.laneHandoffThresholdTokens");
+		const model = this.model;
+		if (
+			!this.#isSpawned ||
+			!agentId ||
+			AgentRegistry.global().get(agentId)?.kind !== "sub" ||
+			this.#lastLaneHandoffSessionId === this.sessionManager.getSessionId() ||
+			threshold <= 0 ||
+			!model ||
+			!/(?:^|[-/:])(?:sol|opus|sonnet|astra)(?:$|[-/:])/i.test(model.id)
+		) {
+			return undefined;
+		}
+		const contextTokens = this.getContextBreakdown()?.usedTokens ?? 0;
+		if (contextTokens < threshold) return undefined;
+		return compactionModelCandidates(this.settings, model, this.modelRegistry.getAvailable()).find(
+			candidate =>
+				candidate.contextWindow !== null &&
+				candidate.maxTokens !== null &&
+				candidate.contextWindow >= contextTokens + 8_000 + candidate.maxTokens &&
+				this.modelRegistry.hasConfiguredAuth(candidate),
+		);
+	}
+	/** Hand a spawned expensive agent's transcript to a fresh successor. False keeps the current transcript. */
+	async #maybeHandoffExpensiveAgent(
+		messages: AgentMessage[],
+		summaryModel: Model,
+		signal?: AbortSignal,
+	): Promise<boolean> {
+		const agentId = this.#config.agentId;
+		const sourceSessionId = this.sessionManager.getSessionId();
+		this.#lastLaneHandoffSessionId = sourceSessionId;
+		try {
+			const result = await this.handoff(undefined, {
+				autoTriggered: true,
+				compactSummary: true,
+				preserveAgentLineage: true,
+				summaryModel,
+				signal,
+			});
+			return result !== undefined;
+		} catch (error) {
+			// Once the session manager has switched, stop the turn on failure.
+			// Continuing would send source messages against the successor's transcript.
+			if (this.sessionManager.getSessionId() !== sourceSessionId) throw error;
+			if (signal?.aborted) return false;
+			logger.warn("Automatic expensive-agent handoff failed; retaining the current transcript", {
+				agentId,
+				error: errorMessage(error),
+			});
+			return false;
+		} finally {
+			if (this.sessionManager.getSessionId() !== sourceSessionId) {
+				if (agentId) AgentRegistry.global().publishSessionFile(agentId, this, this.sessionFile);
+				messages.splice(0, messages.length, ...this.agent.state.messages);
+			}
+		}
 	}
 	/**
 	 * Drop an assistant turn from BOTH the live agent context and the persisted

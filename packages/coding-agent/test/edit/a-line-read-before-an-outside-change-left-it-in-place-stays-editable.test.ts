@@ -1,18 +1,7 @@
 /**
- * WHY: the session snapshot store records displayed lines per version of a
- * file. After the model read part of a file, a formatter or a shell command
- * changed it, and a ranged read of the changed file minted a new tag with only
- * that range displayed. An edit under the new tag on a line the model had read
- * before the change, which the change left at the same line, was rejected as
- * "never displayed".
- *
- * This drives the production read, search and edit tools through that
- * sequence. The store-level class (head, middle and tail of the change,
- * rewritten and moved lines, clipped lines, versions with no record, other
- * paths) is covered in
- * `plugins/hashline/test/a-line-a-change-left-in-place-stays-displayed-under-the-new-tag.test.ts`.
- *
- * Not caught: a version the snapshot store no longer holds.
+ * The edit tool requires a displayed coordinate under the current tag. An
+ * earlier read or search cannot bind an anchor to a new tag, even if the line
+ * stayed in place. A targeted read of the current version can bind the anchor.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -41,7 +30,7 @@ function tagFromOutput(text: string, file: string): string {
 	return match[1];
 }
 
-describe("a line read before an outside change left it in place stays editable", () => {
+describe("displayed coordinates after an outside change", () => {
 	let tmpDir: string;
 	let file: string;
 	let session: ToolSession;
@@ -66,19 +55,29 @@ describe("a line read before an outside change left it in place stays editable",
 		return tagFromOutput(toolResultText(read), file);
 	}
 
-	it("applies an edit under the new tag on a line a read displayed before the change", async () => {
+	it("requires a current read of an unchanged line shown by an earlier read", async () => {
 		await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
 		const tag = await changeAndReadTail(FORMATTED);
 
-		await executeHashlineSingle(hashlineExecOptions(`[probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		const patch = hashlineExecOptions(`[probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session);
+		await expect(executeHashlineSingle(patch)).rejects.toThrow(/never displayed \(it showed/);
+		expect(await fs.readFile(file, "utf8")).toBe(FORMATTED);
+		const read = await new ReadTool(session).execute("r3", { path: `${file}:2-2` });
+		expect(tagFromOutput(toolResultText(read), file)).toBe(tag);
+		await executeHashlineSingle(patch);
 		expect(await fs.readFile(file, "utf8")).toBe(FORMATTED.replace("line 2\n", "EDITED\n"));
 	});
 
-	it("applies an edit under the new tag on a line a search displayed before the change", async () => {
+	it("requires a current read of an unchanged line shown by an earlier search", async () => {
 		await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: file });
 		const tag = await changeAndReadTail(FORMATTED);
 
-		await executeHashlineSingle(hashlineExecOptions(`[probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
+		const patch = hashlineExecOptions(`[probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session);
+		await expect(executeHashlineSingle(patch)).rejects.toThrow(/never displayed \(it showed/);
+		expect(await fs.readFile(file, "utf8")).toBe(FORMATTED);
+		const read = await new ReadTool(session).execute("r3", { path: `${file}:20-20` });
+		expect(tagFromOutput(toolResultText(read), file)).toBe(tag);
+		await executeHashlineSingle(patch);
 		expect(await fs.readFile(file, "utf8")).toBe(FORMATTED.replace("NEEDLE line 20\n", "EDITED\n"));
 	});
 

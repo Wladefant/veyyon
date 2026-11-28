@@ -6,11 +6,11 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as utils from "@veyyon/utils";
 import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import * as utils from "@veyyon/utils";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
-import { startTerminalControl } from "../src/modes/terminal/terminal-control";
+import { startTerminalControl } from "../src/launch/terminal-control-session";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -143,6 +143,7 @@ test("idleExit refuses queued work and reserves delivery before flushing the acc
 		{ shutdown: () => (exited = true) },
 	);
 	const pending = await rpc(owner, "deliver", { text: "working", mode: "auto", ack: true, messageId: "work-1" });
+	expect(pending.response.result).toMatchObject({ accepted: true, messageId: "work-1", state: "pending" });
 	const ping = (await rpc(owner, "ping")).response.result;
 	expect(ping.capabilities).toContain("deliver-ack");
 	expect(ping.capabilities).toContain("idle-exit");
@@ -212,7 +213,6 @@ test("a prompt racing idleExit is delivered or refused, never acknowledged and l
 		expect(exited).toBe(false);
 	}
 });
-
 
 test("an acked delivery is answered within 1 s while the terminal is stuck, then runs once, in order", async () => {
 	const gate = Promise.withResolvers<void>();
@@ -384,14 +384,25 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		id: "cold-tool-result",
 		parentId: null,
 		timestamp: "2026-01-01T00:00:00.000Z",
-		message: { role: "toolResult", toolCallId: "tool-1", toolName: "inspect", details: { output: "z".repeat(16_384) } },
+		message: {
+			role: "toolResult",
+			toolCallId: "tool-1",
+			toolName: "inspect",
+			details: { output: "z".repeat(16_384) },
+		},
 	});
 	const yieldLine = JSON.stringify({
 		type: "message",
 		id: "cold-yield-result",
 		parentId: null,
 		timestamp: "2026-01-01T00:00:00.000Z",
-		message: { role: "toolResult", toolCallId: "yield-1", toolName: "yield", isError: false, details: { output: "q".repeat(16_384) } },
+		message: {
+			role: "toolResult",
+			toolCallId: "yield-1",
+			toolName: "yield",
+			isError: false,
+			details: { output: "q".repeat(16_384) },
+		},
 	});
 	const line = JSON.stringify({
 		type: "message",
@@ -440,7 +451,13 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		},
 		close: () => {},
 	};
-	expect(payloads.pin(reader.identity, () => reader, text => JSON.parse(text) as SessionEntry)).toBe(true);
+	expect(
+		payloads.pin(
+			reader.identity,
+			() => reader,
+			text => JSON.parse(text) as SessionEntry,
+		),
+	).toBe(true);
 	const userEntry = JSON.parse(userLine) as SessionMessageEntry;
 	const toolResultEntry = JSON.parse(toolResultLine) as SessionMessageEntry;
 	const entry = JSON.parse(line) as SessionMessageEntry;
@@ -489,11 +506,27 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	cleanup.push(await startTerminalControl(mockMode as never));
 	const owner = await readOwner(root);
 	const response = await rpc(owner, "subscribe");
-	expect(response.events.filter(event => event.kind === "history").flatMap(event => event.entries)
-		.map(({ entryId, text, turn }) => ({ entryId, text, turn }))).toEqual([
-		{ entryId: warmEntry.id, text: "Warm historical answer", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
-		{ entryId: entry.id, text: "Visible historical answer", turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true } },
-		{ entryId: "cold-after-yield", text: "After successful yield", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
+	expect(
+		response.events
+			.filter(event => event.kind === "history")
+			.flatMap(event => event.entries)
+			.map(({ entryId, text, turn }) => ({ entryId, text, turn })),
+	).toEqual([
+		{
+			entryId: warmEntry.id,
+			text: "Warm historical answer",
+			turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true },
+		},
+		{
+			entryId: entry.id,
+			text: "Visible historical answer",
+			turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true },
+		},
+		{
+			entryId: "cold-after-yield",
+			text: "After successful yield",
+			turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true },
+		},
 	]);
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
@@ -506,7 +539,6 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	expect(reads.get(assistantOffset) ?? 0).toBe(1);
 	expect(reads.get(yieldOffset) ?? 0).toBe(1);
 	expect(reads.get(postYieldOffset) ?? 0).toBe(1);
-
 });
 
 const settle = async () => {
@@ -597,6 +629,105 @@ test("the terminal refuses a delivery with busy when too many are pending", asyn
 	gate.resolve();
 	await client.next(frame => frame.event?.messageId === "m-63" && frame.event?.state === "delivered");
 });
+
+test("capacity replies over a socket whose plain delivery is still running", async () => {
+	const gate = Promise.withResolvers<void>();
+	const started = Promise.withResolvers<void>();
+	const owner = await serve(async () => {
+		started.resolve();
+		await gate.promise;
+		return "started";
+	});
+	try {
+		expect((await rpc(owner, "deliveryCapacity")).response).toMatchObject({
+			ok: true,
+			result: { limit: 64, available: 64 },
+		});
+		expect(owner.capabilities).toContain("delivery-readback");
+		const client = connect(owner);
+		client.send({ id: "slow", op: "deliver", text: "slow", mode: "auto" });
+		await started.promise;
+		client.send({ id: "capacity", op: "deliveryCapacity" });
+		expect(await client.next(frame => frame.id === "capacity")).toMatchObject({
+			ok: true,
+			result: { limit: 64, available: 63 },
+		});
+		expect(client.frames.some(frame => frame.id === "slow")).toBe(false);
+		gate.resolve();
+		await client.next(frame => frame.id === "slow");
+		expect((await rpc(owner, "deliveryCapacity")).response.result).toEqual({ limit: 64, available: 64 });
+	} finally {
+		gate.resolve();
+	}
+}, 10_000);
+
+test("a saturated route recovers in order on reconnect and reads back each durable input once", async () => {
+	const gate = Promise.withResolvers<void>();
+	const queued: string[] = [];
+	const owner = await serve(async text => {
+		await gate.promise;
+		if (text.startsWith("input ")) queued.push(text);
+		return "queued";
+	});
+	const other = await serve(async () => "started", () => "other");
+	const inputs = Array.from({ length: 68 }, (_, index) => {
+		const messageId = `telegram-${index.toString(16).padStart(64, "0")}`;
+		return { messageId, text: `input ${index} reçu\n[telegram-delivery id=${messageId}]`, mode: "auto", ack: true };
+	});
+	const deliver = async (input: (typeof inputs)[number]) => (await rpc(owner, "deliver", input)).response;
+	const status = async (messageId: string) => (await rpc(owner, "deliveryStatus", { messageId })).response.result;
+	const settleRoute = async (input: (typeof inputs)[number]) => {
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if ((await status(input.messageId)).state === "delivered") return;
+		}
+		throw new Error("Delivery did not settle");
+	};
+	const entry = (text: string) => JSON.stringify({ type: "message", message: { role: "user", content: text } });
+	try {
+		// Each RPC closes its connection. The original IDs must survive without those sockets.
+		for (const input of inputs.slice(0, 64)) {
+			expect(await deliver(input)).toMatchObject({ ok: true, result: { state: "pending" } });
+		}
+		expect((await rpc(owner, "deliveryCapacity")).response.result).toEqual({ limit: 64, available: 0 });
+		expect(await status(inputs[0].messageId)).toEqual({ state: "pending" });
+		for (const input of inputs.slice(64)) {
+			expect(await deliver(input)).toMatchObject({ ok: false, error: expect.stringContaining("busy") });
+		}
+		expect((await rpc(other, "deliver", { text: "unaffected", mode: "auto" })).response.result).toBe("started");
+		expect(await deliver(inputs[0])).toMatchObject({ ok: true, result: { state: "pending" } });
+		gate.resolve();
+		await settleRoute(inputs[63]);
+		expect(await status(inputs[0].messageId)).toEqual({ state: "delivered", outcome: "queued" });
+		for (const input of inputs.slice(64)) expect((await deliver(input)).ok).toBe(true);
+		await settleRoute(inputs[67]);
+		expect((await rpc(owner, "deliveryCapacity")).response.result).toEqual({ limit: 64, available: 64 });
+
+		// Unconsumed durable IDs must survive eviction from the terminal's 256 recent RPCs.
+		const churn = connect(owner);
+		for (let index = 0; index < 256; index++) {
+			const id = `churn-${index}`;
+			churn.send({ id, op: "deliver", text: "untracked fixture input", mode: "auto", messageId: id });
+			expect(await churn.next(frame => frame.id === id)).toMatchObject({ ok: true, result: "queued" });
+		}
+		expect(await status(inputs[0].messageId)).toEqual({ state: "delivered", outcome: "queued" });
+		expect(await deliver(inputs[0])).toMatchObject({ ok: true, result: { state: "delivered", outcome: "queued" } });
+		expect(queued).toEqual(inputs.map(input => input.text));
+
+		// The trailing record does not count until its newline is on disk.
+		await fs.writeFile(owner.sessionFile, queued.map(entry).join("\n"));
+		expect(await status(inputs[67].messageId)).toEqual({ state: "delivered", outcome: "queued" });
+		await fs.appendFile(owner.sessionFile, "\n");
+		for (const input of inputs) {
+			expect(await status(input.messageId)).toMatchObject({ state: "delivered", consumed: true });
+			expect(await deliver(input)).toMatchObject({ ok: true, result: { state: "delivered", consumed: true } });
+		}
+		expect(queued).toEqual(inputs.map(input => input.text));
+		const journal = (await fs.readFile(owner.sessionFile, "utf8")).trimEnd().split("\n");
+		expect(journal.map(line => JSON.parse(line).message.content)).toEqual(inputs.map(input => input.text));
+	} finally {
+		gate.resolve();
+	}
+}, 20_000);
 
 test("the ack is written before a delivery that blocks the event loop starts", async () => {
 	const owner = await serve(async () => {

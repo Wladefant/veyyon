@@ -37,10 +37,16 @@ import * as path from "node:path";
 import { fromBinary } from "@bufbuild/protobuf";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildGrpcRequest } from "@veyyon/ai/providers/cursor";
+import { stream } from "@veyyon/ai/stream";
 import type { Context, ImageContent, Model, TextContent } from "@veyyon/ai/types";
 import { AgentClientMessageSchema } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
-import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
-import type { KnownApi } from "@veyyon/catalog/types";
+import {
+	type GeneratedProvider,
+	getBundledChatModels,
+	getBundledModels,
+	getBundledProviders,
+} from "@veyyon/catalog/models";
+import { type KnownApi, modelKind, type RUNNER_APIS } from "@veyyon/catalog/types";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ContextFile } from "@veyyon/coding-agent/discovery/capability/context-file";
@@ -94,6 +100,25 @@ const DELIVERY: Record<KnownApi, DeliveryChannel> = {
 	"cursor-agent": "cursor-user-turn",
 	"gitlab-duo-agent": "system-prompt",
 	"devin-agent": "system-prompt",
+};
+
+type RunnerApi = (typeof RUNNER_APIS)[number];
+
+/**
+ * Non-chat runner protocols carried by catalog models (`modelKind !== "chat"`).
+ *
+ * Exhaustive over `RUNNER_APIS`: sessions exclude these models via `modelKind(model) === "chat"`,
+ * and `@veyyon/ai/stream` rejects them as unhandled chat APIs. They do not carry session
+ * operator instruction files.
+ */
+const NON_CHAT_DISPOSITION: Record<RunnerApi, "non-chat-runner"> = {
+	"local-inference": "non-chat-runner",
+	"web-search": "non-chat-runner",
+	typesafe: "non-chat-runner",
+	"openai-images": "non-chat-runner",
+	"openrouter-images": "non-chat-runner",
+	"xai-tts": "non-chat-runner",
+	"openai-speech": "non-chat-runner",
 };
 
 /**
@@ -263,19 +288,51 @@ async function cursorRequestBytes(
 }
 
 describe("operator instruction delivery, per api", () => {
-	it("records a delivery channel for every api a bundled model can select", () => {
+	it("records a delivery channel or non-chat disposition for every api in the bundled catalog", () => {
 		// Catalog-side closure. The type union is one way an api arrives; the generated catalog
 		// is the other, and a row can carry an api the union never learned about.
 		const inCatalog = new Set<string>();
+		const chatApis = new Set<string>();
 		// `getBundledProviders` declares the wider `KnownProvider`, but its runtime values are the
 		// keys of the generated catalog, which is exactly what `getBundledModels` indexes.
 		for (const provider of getBundledProviders() as GeneratedProvider[]) {
 			for (const model of getBundledModels(provider)) inCatalog.add(model.api);
+			for (const model of getBundledChatModels(provider)) chatApis.add(model.api);
 		}
 		expect(inCatalog.size).toBeGreaterThan(0);
 
-		const undecided = [...inCatalog].filter(api => !(api in DELIVERY)).sort();
+		const undecided = [...inCatalog].filter(api => !(api in DELIVERY) && !(api in NON_CHAT_DISPOSITION)).sort();
 		expect(undecided).toEqual([]);
+
+		const undecidedChat = [...chatApis].filter(api => !(api in DELIVERY)).sort();
+		expect(undecidedChat).toEqual([]);
+	});
+
+	it("excludes non-chat runner apis from chat selection and stream dispatch", () => {
+		const runnerApisInCatalog = new Set<string>();
+		for (const provider of getBundledProviders() as GeneratedProvider[]) {
+			const bundled = getBundledModels(provider);
+			const chatIds = new Set(getBundledChatModels(provider).map(model => model.id));
+			for (const model of bundled) {
+				if (!(model.api in NON_CHAT_DISPOSITION)) continue;
+				runnerApisInCatalog.add(model.api);
+				expect(modelKind(model)).not.toBe("chat");
+				expect(chatIds.has(model.id)).toBe(false);
+			}
+		}
+
+		expect([...runnerApisInCatalog].sort()).toEqual(["local-inference", "web-search"]);
+
+		for (const api of runnerApisInCatalog) {
+			const model = bundledModelFor(api as KnownApi);
+			expect(() =>
+				stream(
+					model,
+					{ messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+					{ apiKey: "test-token", maxInFlightRequests: {} },
+				),
+			).toThrow(`Unhandled API: ${api}`);
+		}
 	});
 
 	it("carries the operator's own two files to the request on every recorded api", async () => {

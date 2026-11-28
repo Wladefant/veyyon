@@ -75,7 +75,8 @@ describe("a provider that goes quiet", () => {
 		sim = await createSimulation({
 			script: scriptTurns(
 				async turn => {
-					turn.text("first attempt");
+					// No visible text before the stall: visible text is replay-unsafe (5d3b3d1d, failed-turn.ts).
+					void turn;
 					await stalled.promise;
 				},
 				turn => {
@@ -98,8 +99,8 @@ describe("a provider that goes quiet", () => {
 		// provider calls may happen and the turn must then end.
 		const stalled = Promise.withResolvers<never>();
 		sim = await createSimulation({
-			script: async turn => {
-				turn.text(`attempt ${turn.call}`);
+			script: async () => {
+				// No visible text before the stall: visible text is replay-unsafe (5d3b3d1d, failed-turn.ts).
 				await stalled.promise;
 			},
 		});

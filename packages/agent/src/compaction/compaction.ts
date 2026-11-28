@@ -535,18 +535,20 @@ export interface CutPointResult {
 
 /**
  * The index of the entry whose tokens, tallied newest first from `endIndex`, bring the tally to
- * `keepRecentTokens`; -1 when the whole range fits. branch_summary and custom_message entries stay in
- * the retained tail, so their tokens count toward the recent budget too.
+ * `keepRecentTokens`; -1 when the whole range fits. Count the same messages as
+ * the budget estimate. A restated block excluded from compaction is not retained history.
+ * Non-excluded branch summaries and custom messages still count.
  */
 function findBudgetCrossing(
 	entries: SessionEntry[],
 	startIndex: number,
 	endIndex: number,
 	keepRecentTokens: number,
+	excludedCustomMessageTypes?: ReadonlySet<string>,
 ): number {
 	let accumulatedTokens = 0;
 	for (let i = endIndex - 1; i >= startIndex; i--) {
-		const message = getMessageFromEntry(entries[i]);
+		const message = getMessageFromEntry(entries[i], excludedCustomMessageTypes);
 		if (!message) continue;
 		accumulatedTokens += estimateTokens(message);
 		if (accumulatedTokens >= keepRecentTokens) return i;
@@ -660,7 +662,7 @@ export function findCutPoint(
 	// boundary. Fall through with `startIndex` rather than returning: the
 	// dead-end guard below turns that into "keep nothing" when the range is over
 	// budget, and leaves it alone when the session is genuinely small.
-	const crossedIndex = findBudgetCrossing(entries, startIndex, endIndex, keepRecentTokens);
+	const crossedIndex = findBudgetCrossing(entries, startIndex, endIndex, keepRecentTokens, excludedCustomMessageTypes);
 	// A range that fits the budget keeps from its first message (not the header).
 	const crossed = crossedIndex !== -1;
 	const budgetCut = crossed

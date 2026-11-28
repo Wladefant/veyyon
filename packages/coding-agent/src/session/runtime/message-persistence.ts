@@ -22,7 +22,14 @@ import type { AgentMessage, AgentTurnEndContext } from "@veyyon/agent-core";
 import { calculatePromptTokens } from "@veyyon/agent-core/compaction";
 import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import { toolResultNeverRan } from "@veyyon/agent-core/tool-result-never-ran";
-import type { AssistantMessage, ImageContent, Message, MessageAttribution, TextContent, VideoContent } from "@veyyon/ai";
+import type {
+	AssistantMessage,
+	ImageContent,
+	Message,
+	MessageAttribution,
+	TextContent,
+	VideoContent,
+} from "@veyyon/ai";
 import {
 	assistantTurnMetricsForPersistence,
 	assistantTurnRequestForPersistence,
@@ -250,6 +257,11 @@ export class MessagePersistence {
 				clear();
 			},
 		};
+	}
+
+	/** Wait for the message ends queued when a branch reader starts. */
+	drain(): Promise<void> {
+		return this.#tail;
 	}
 
 	/** Resolves once the queued write of {@link message} finished, or at once when none is queued. */

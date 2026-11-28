@@ -3,9 +3,9 @@
  *
  * Speaks NDJSON with `runner.py` over stdin/stdout. One subprocess per kernel
  * instance; sessions reuse a single subprocess across executions. Cancellation
- * is `kill("SIGINT")` which raises a real `KeyboardInterrupt` inside user
- * code. Shutdown writes `{"type":"exit"}` and escalates to SIGTERM/SIGKILL on
- * timeout.
+ * sends a request-scoped frame. If the runner does not acknowledge it, the host
+ * reports pending cancellation without stopping the runner. Shutdown writes
+ * `{"type":"exit"}` and escalates to SIGTERM/SIGKILL on timeout.
  */
 import { $flag } from "@veyyon/utils";
 import {
@@ -14,7 +14,6 @@ import {
 	createLanguageAvailabilityChecker,
 	createRunnerScriptPublisher,
 	DEFAULT_KERNEL_STARTUP_TIMEOUT_MS,
-	KERNEL_INTERRUPT_ESCALATION_MS,
 	KERNEL_SHUTDOWN_GRACE_MS,
 	type KernelStartOptions,
 	kernelIpcTraceEnvVar,
@@ -47,6 +46,7 @@ const TRACE_IPC = $flag(kernelIpcTraceEnvVar("PYTHON"));
 const ensureRunnerScript = createRunnerScriptPublisher("python", RUNNER_SCRIPT, "py");
 
 const STARTUP_TIMEOUT_MS = DEFAULT_KERNEL_STARTUP_TIMEOUT_MS;
+const CANCELLATION_ACK_GRACE_MS = 1_000;
 
 export interface PythonKernelAvailability {
 	ok: boolean;
@@ -84,7 +84,7 @@ export class PythonKernel extends BaseKernel {
 		super(id, {
 			languageName: "Python",
 			traceIpc: TRACE_IPC,
-			interruptEscalationMs: KERNEL_INTERRUPT_ESCALATION_MS,
+			interruptEscalationMs: CANCELLATION_ACK_GRACE_MS,
 			shutdownGraceMs: KERNEL_SHUTDOWN_GRACE_MS,
 			buildCancelPayload: msgId => JSON.stringify({ type: "cancel", id: msgId }),
 		});

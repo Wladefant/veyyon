@@ -159,6 +159,7 @@ function mergeInlinePayloads(
 	const usageTotals = emptyUsage();
 	let hasUsage = false;
 	let cancelledBeforeStart = 0;
+	let hasError = false;
 	let projectAgentsDir: string | null = null;
 	for (let position = 0; position < spawns.length; position++) {
 		const payload = payloads[position];
@@ -169,10 +170,15 @@ function mergeInlinePayloads(
 			continue;
 		}
 		projectAgentsDir ??= payload.details?.projectAgentsDir ?? null;
+		const spawnResults = payload.details?.results;
+		// The batch summary classifies child outcomes, including cancellation. A refusal
+		// has no child results to classify, so preserve its error flag separately.
+		if (payload.isError === true && !spawnResults?.length) hasError = true;
 		const text = payload.content.find(part => part.type === "text")?.text;
 		if (text) contentParts.push(text);
-		hasUsage =
-			appendSpawnResults(results, usageTotals, outputPaths, payload.details?.results ?? [], index) || hasUsage;
+		if (spawnResults) {
+			hasUsage = appendSpawnResults(results, usageTotals, outputPaths, spawnResults, index) || hasUsage;
+		}
 	}
 	return {
 		contentParts,
@@ -180,7 +186,7 @@ function mergeInlinePayloads(
 		usage: hasUsage ? usageTotals : undefined,
 		outputPaths: outputPaths.length > 0 ? outputPaths : undefined,
 		projectAgentsDir,
-		hasError: payloads.some(payload => payload?.isError === true),
+		hasError,
 		cancelledBeforeStart,
 	};
 }
@@ -680,10 +686,12 @@ export class SpawnScheduler {
 		params: TaskParams,
 	): string {
 		const { agentId, progress } = spawn;
+		const ownerId = this.#session.getAgentId?.() ?? undefined;
+		const ownerScope = (this.#session.agentRegistry ?? AgentRegistry.global()).scopeOf(ownerId);
 		return options.manager.register(
 			"task", // not-a-tool-name: async job kind
 			agentId,
-			async ({ signal, reportProgress, markRunning }) => {
+			async ({ signal, reportProgress, markRunning, setStartupPhase }) => {
 				const startedAt = Date.now();
 				let admitted = false;
 				let settled = false;
@@ -692,8 +700,9 @@ export class SpawnScheduler {
 					admitted = true;
 					const acquiredAt = Date.now();
 					markRunning();
-					progress.status = "running";
-					await reportProgress(`Running background task ${agentId}...`);
+					setStartupPhase("prepare-spawn");
+					progress.startupPhase = "prepare-spawn";
+					void reportProgress(`Starting background task ${agentId}...`);
 					const result = await runSpawn(this.#session, this.#parentApprovalBypassed, {
 						toolCallId: call.toolCallId,
 						grantRootSessionId: call.grantRootSessionId,
@@ -703,6 +712,17 @@ export class SpawnScheduler {
 						index: spawn.index,
 						detached: true,
 						launchTiming: { invokedAt: startedAt, acquiredAt },
+						onStartupPhase: phase => {
+							if (signal.aborted) return;
+							setStartupPhase(phase);
+							progress.startupPhase = phase;
+							if (phase === "ready") progress.status = "running";
+							void reportProgress(
+								phase === "ready"
+									? `Running background task ${agentId}...`
+									: `Starting background task ${agentId}: ${phase}.`,
+							);
+						},
 					});
 					const single = result.details?.results[0];
 					const failed = settleJobProgress(progress, single, startedAt);
@@ -742,7 +762,8 @@ export class SpawnScheduler {
 				id: agentId,
 				agentId,
 				queued: true,
-				ownerId: this.#session.getAgentId?.() ?? undefined,
+				ownerId,
+				ownerScope,
 				toolCallId: call.toolCallId,
 				onProgress: text => {
 					call.onUpdate?.({ content: [{ type: "text", text }], details: batch.details() });

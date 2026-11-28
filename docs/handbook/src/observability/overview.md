@@ -29,6 +29,40 @@ Prompt text, tokens, and credentials are never included in trace records or seri
 
 `/dump`, `/context`, `/debug`, and standalone tool CLIs such as `veyyon grep` for inspecting what the agent would see.
 
+## Supervised child stderr
+
+The supervisor writes new stderr segments to the profile's
+`logs/session-stderr/retained-v1/`. Each child run has its own files, even when
+another run used the same PID. A segment holds up to 1 MiB. The supervisor seals
+it before the next write would exceed that limit, on the next write after 24
+hours, or when capture ends.
+
+The profile can retain up to 384 segments and 128 MiB of logical stderr data.
+An active segment reserves its full capacity until it seals. When opening a
+new segment, the supervisor removes only managed, sealed segments at least
+seven days old. If the new segment still does not fit, capture stops for that
+child, but stderr forwarding continues. Unexpected-exit reports include the
+capture error and paths to retained segments.
+
+The budget does not cover old PID logs outside `retained-v1/`. The supervisor
+leaves them alone. Unsealed files from interrupted capture and files that
+cannot be deleted remain charged. Save evidence that must outlast the seven-day
+window to the approved evidence store.
+
+## Automatic rejected-request dumps
+
+For provider HTTP 400 and 413 responses, Veyyon can record one JSON file per
+rejected request under the profile's `logs/http-400-requests/retained-v1/`.
+The error message gives the path. Keep these files private: credential headers
+are redacted, but request bodies can contain sensitive data.
+
+Each profile holds up to 256 new dumps and 64 MiB of dump data. On a new
+eligible rejection, Veyyon removes managed dumps at least seven days old.
+If the new dump still does not fit, Veyyon reports that it could not save it.
+It does not evict a dump within its seven-day window, alter the provider error,
+or remove files written outside `retained-v1/`. Save incident evidence you need
+to keep longer to your approved evidence store.
+
 ## Recording raw provider traffic
 
 When a model behaves in a way you cannot explain from the transcript, record the

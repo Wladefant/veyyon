@@ -74,7 +74,9 @@ export const SOURCE_ROOTS = [
 	".github/",
 	"apps/",
 	"assets/",
+	"ci/",
 	"clients/",
+	"cloud/",
 	"contracts/",
 	"crates/",
 	"demo/",
@@ -94,14 +96,21 @@ export const SOURCE_ROOTS = [
 /**
  * Tracked top-level directories that are deliberately not source roots.
  *
- * `.veyyon/` is the only one. In this repo's docs it names files a USER creates in
- * THEIR project -- `.veyyon/mcp.json`, `.veyyon/settings.json`, `.veyyon/RULES.md`
- * -- not the profile fixtures tracked here under the same name. Every page that
- * teaches project configuration writes that kind, so anchoring on the prefix
- * produces a screenful of failures that are all the documentation working
- * correctly, and a gate whose failures are usually wrong is a gate people turn off.
+ * `.veyyon/` names files a USER creates in THEIR project -- `.veyyon/mcp.json`,
+ * `.veyyon/settings.json`, `.veyyon/RULES.md` -- not the profile fixtures tracked
+ * here under the same name. Every page that teaches project configuration writes
+ * that kind, so anchoring on the prefix produces a screenful of failures that are
+ * all the documentation working correctly, and a gate whose failures are usually
+ * wrong is a gate people turn off.
+ *
+ * `tools/` is the repo-root tooling directory (two files today). The docs write
+ * `tools/` for `packages/coding-agent/src/tools/`, the built-in tool modules, in
+ * `tools/fs/read.ts`, `tools/bash` and `tools/`. Anchoring on the prefix would fail
+ * every one of those spans, because the repo-root path they resolve to does not
+ * exist. Docs that name the repo-root `tools/` must spell the full path from the
+ * repo root, and the gate does not check them.
  */
-export const NON_SOURCE_ROOTS: readonly string[] = Object.freeze([".veyyon/"]);
+export const NON_SOURCE_ROOTS: readonly string[] = Object.freeze([".veyyon/", "tools/"]);
 
 /**
  * Extensions that make a code span a FILE reference rather than a prose fragment.

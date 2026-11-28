@@ -13,6 +13,7 @@
  * argument its wire schema declares, the intent field included, into the first string argument, through the
  * hook `sdk.ts` installs; a tool added later is swept the day it lands. A tool whose wire schema stops
  * declaring a string argument cannot host the leak and lands in `noStringArgument`, pinned by exact equality.
+ * A union root such as `secret_request` declares its fields per branch, so the flat sweep skips it; its own test pins it.
  * The recorded shapes are replayed through the real loop, so the split arguments are also what validation
  * accepts, what `execute` receives and, for `i`, the intent the call is shown with.
  *
@@ -171,12 +172,18 @@ describe("an argument leaked into another as parameter markup", () => {
 		const { tools, unconstructable, notRegistered } = await everyTool();
 		const wrong: string[] = [];
 		const noStringArgument: string[] = [];
+		const unionRoots: string[] = [];
 		let checked = 0;
 		for (const real of tools) {
 			const schema = toolWireSchema(real);
 			const properties = isRecord(schema.properties) ? schema.properties : {};
 			const declared = Object.keys(properties).filter(name => name !== INTENT_FIELD);
 			const host = declared.find(name => isStringProperty(properties[name]));
+			// A union root declares its fields branch by branch, so the flat sweep cannot host a leak in it.
+			if (!isRecord(schema.properties) && Array.isArray(schema.anyOf)) {
+				unionRoots.push(real.name);
+				continue;
+			}
 			if (!host) {
 				noStringArgument.push(real.name);
 				continue;
@@ -207,8 +214,32 @@ describe("an argument leaked into another as parameter markup", () => {
 		// These take only arrays, objects, numbers and booleans at the top level; a leak inside a nested string
 		// is not split. A tool joining the list is one the sweep stopped covering.
 		expect(noStringArgument.sort()).toEqual(["ask", "ast_edit", "job", "retain", "yield"]);
+		// The union roots are pinned here and exercised branch by branch in the test below.
+		expect(unionRoots).toEqual(["secret_request"]);
 		// The sweep drove something: an empty one satisfies every assertion above.
 		expect(checked).toBeGreaterThan(100);
+	});
+
+	it("recovers the intent a secret request leaked, and refuses a branch argument it cannot place", async () => {
+		const secret = await tool("secret_request");
+		// `i` is the one name a union root can take, so the leaked intent moves out of the branch's own string.
+		const ran = await dispatch(secret, {
+			action: "get",
+			requestId: `req-1${leak(INTENT_FIELD)}Checking the request`,
+		});
+		expect(ran.executed).toEqual({ action: "get", requestId: "req-1" });
+		expect(ran.intent).toBe("Checking the request");
+
+		// A branch's mandatory field leaked into another string is not a clear leak: the value stays whole,
+		// the union refuses the call, and nothing executes.
+		const sent = {
+			action: "create",
+			purpose: "rotate token",
+			label: `Deploy key${leak("approvedTool")}github`,
+			provider: "github",
+		};
+		expect(repair(secret, call("secret_request", sent))).toEqual({ status: "clean", arguments: sent, hints: [] });
+		expect((await dispatch(secret, sent)).executed).toBeUndefined();
 	});
 
 	it("leaves a value whole when the markup is not a clear leak", async () => {

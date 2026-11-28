@@ -54,6 +54,13 @@ run_bwrap() {
 		fi
 	fi
 
+	# The OVH runner supplies Node here, outside the system mount. Keep it read-only.
+	local sandbox_path=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+	if [ -x /opt/node22/bin/node ]; then
+		extra_mounts+=(--ro-bind /opt/node22 /opt/node22)
+		sandbox_path="${sandbox_path}:/opt/node22/bin"
+	fi
+
 	# bwrap passes the host environment through, so the terminal identity the engine reads to detect
 	# a multiplexer is removed here, for the reason given in rungs/docker.sh.
 	local -a term_args=() name
@@ -71,7 +78,7 @@ run_bwrap() {
 		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
 		--chdir "${REPO_ROOT}" \
-		--setenv PATH /usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin \
+		--setenv PATH "$sandbox_path" \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \
 		--setenv VEYYON_TEST_HOST_HOME "${HOST_HOME}" \
 		--setenv HOME /sandbox/home \

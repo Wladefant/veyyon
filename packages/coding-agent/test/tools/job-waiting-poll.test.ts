@@ -10,12 +10,16 @@ import { isWaitingPollDetails } from "@veyyon/coding-agent/tools/shell/job";
  * takes `unknown`, so it must reject malformed details without throwing.
  */
 describe("isWaitingPollDetails", () => {
-	function job(status: "running" | "completed" | "failed" | "cancelled") {
+	function job(status: "starting" | "running" | "completed" | "failed" | "cancelled") {
 		return { id: "x", type: "bash" as const, status, label: "l", durationMs: 1 };
 	}
 
 	it("is true only when every job is running and nothing is cancelled", () => {
 		expect(isWaitingPollDetails({ jobs: [job("running"), job("running")] })).toBe(true);
+	});
+	it("is true when jobs are starting or mixed with running", () => {
+		expect(isWaitingPollDetails({ jobs: [job("starting")] })).toBe(true);
+		expect(isWaitingPollDetails({ jobs: [job("starting"), job("running")] })).toBe(true);
 	});
 
 	it("is true when a cancelled field is present but empty", () => {

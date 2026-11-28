@@ -429,9 +429,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (this.#resolvedClientId && !existingClientId) {
 			params.set("client_id", this.#resolvedClientId);
 		}
-		if (this.config.scopes?.trim()) {
-			params.set("scope", this.config.scopes.trim());
-		}
+		const scope = this.config.scopes?.trim();
+		if (scope) params.set("scope", scope);
+		else if (!params.get("scope")?.trim()) params.delete("scope");
 		const prompt = this.config.prompt ?? (hasOAuthScope(params.get("scope"), "offline_access") ? "consent" : "");
 		if (prompt && !params.get("prompt")) {
 			params.set("prompt", prompt);

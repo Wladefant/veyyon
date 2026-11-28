@@ -1,17 +1,7 @@
 /**
- * WHY: a tag is a hash of a file's content, but the session snapshot store
- * records displayed lines per path. After the model read a file and copied it
- * (a versioned script copied to its next version, a draft worktree of the same
- * tree), a ranged read of the copy minted the same tag with only that range
- * displayed, and an edit of the copy on a line the model had read in the
- * original was rejected as "never displayed".
- *
- * This drives the production read, search and edit tools through that
- * sequence. The store-level class (held and dropped copies, clipped lines,
- * copies with no record, colliding tags) is covered in
- * `plugins/hashline/test/a-line-displayed-in-a-copy-of-a-file-is-displayed-for-the-copy.test.ts`.
- *
- * Not caught: a copy that differs from the original by any byte.
+ * A byte-identical copy has the same content tag, but the edit tool requires
+ * coordinates displayed for the destination path. An earlier read or search
+ * of the source does not bind an anchor to the copy.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -36,7 +26,7 @@ function tagFromOutput(text: string, file: string): string {
 	return match[1];
 }
 
-describe("a line read in the original of a copied file stays editable in the copy", () => {
+describe("displayed coordinates after copying a file", () => {
 	let tmpDir: string;
 	let original: string;
 	let copy: string;
@@ -65,22 +55,32 @@ describe("a line read in the original of a copied file stays editable in the cop
 		expect(tagFromOutput(toolResultText(read), copy)).toBe(tag);
 	}
 
-	it("applies an edit of the copy on a line a read of the original displayed", async () => {
+	it("requires a read of the copy when an earlier read showed only the original", async () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${original}:1-3` });
 		const tag = tagFromOutput(toolResultText(read), original);
 		await copyAndReadTail(tag);
 
-		await executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		const patch = hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session);
+		await expect(executeHashlineSingle(patch)).rejects.toThrow(/never displayed \(it showed/);
+		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT);
+		const reread = await new ReadTool(session).execute("r3", { path: `${copy}:2-2` });
+		expect(tagFromOutput(toolResultText(reread), copy)).toBe(tag);
+		await executeHashlineSingle(patch);
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 		expect(await fs.readFile(original, "utf8")).toBe(CONTENT);
 	});
 
-	it("applies an edit of the copy on a line a search of the original displayed", async () => {
+	it("requires a read of the copy when an earlier search showed only the original", async () => {
 		const hit = await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: original });
 		const tag = tagFromOutput(toolResultText(hit), original);
 		await copyAndReadTail(tag);
 
-		await executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
+		const patch = hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session);
+		await expect(executeHashlineSingle(patch)).rejects.toThrow(/never displayed \(it showed/);
+		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT);
+		const reread = await new ReadTool(session).execute("r3", { path: `${copy}:20-20` });
+		expect(tagFromOutput(toolResultText(reread), copy)).toBe(tag);
+		await executeHashlineSingle(patch);
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT.replace("NEEDLE line 20\n", "EDITED\n"));
 	});
 

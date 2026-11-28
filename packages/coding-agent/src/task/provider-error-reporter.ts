@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { logger } from "@veyyon/utils";
+import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
 
 export interface ReportProviderErrorOptions {
 	scriptPath?: string;
@@ -39,6 +40,7 @@ export function reportProviderError(model: string, body: string, options: Report
 			[script, "record-error", "--model", model],
 			{ stdio: ["pipe", "ignore", "ignore"], windowsHide: true },
 		);
+		if (child.pid !== undefined) adoptIntoPrimarySessionCpuBudget(child.pid);
 		child.on("error", fail);
 		child.on("close", (code, signal) => {
 			clearTimeout(timer);

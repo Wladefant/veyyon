@@ -30,12 +30,30 @@ import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { ExtensionRunner, SessionBeforeSwitchResult } from "../../extensibility/extensions";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/agent/todo";
-import type { HandoffResult, SessionHandoffOptions } from "../agent-session-types";
 import { configuredCompactionEfforts } from "../agent-session-model-targets";
+import type { HandoffResult, SessionHandoffOptions } from "../agent-session-types";
 import type { CheckpointRuntime } from "./checkpoint-runtime";
 import type { ProviderSessions } from "./provider-sessions";
 import type { SessionSecrets } from "./session-secrets";
 import type { TodoRuntime } from "./todo-runtime";
+
+const COMPACT_HANDOFF_SECTIONS = {
+	"# COMPACT": "",
+	"## Goal": "State the assignment and its intended result.",
+	"## State": "Describe the current work and decisions that affect it.",
+	"## Open steps": "State the remaining work and the immediate next action.",
+	"## Repository": "Name the worktree, branch and observed HEAD.",
+	"## Tests": "Name the last test command and pass/fail counts.",
+	"## Files": "List important paths.",
+};
+const COMPACT_HANDOFF_PROMPT = [
+	"Write a successor brief of at most 3,000 tokens. Output only the brief.",
+	"Never reproduce transcript messages. Do not invent repository metadata or test results. Say unknown when absent.",
+	"Use these headings:",
+	...Object.entries(COMPACT_HANDOFF_SECTIONS).map(([heading, instruction]) =>
+		instruction ? `${heading}\n${instruction}` : heading,
+	),
+].join("\n\n");
 
 /** What {@link SessionHandoff} reads from the session's public surface. */
 export interface SessionHandoffSession {
@@ -68,7 +86,7 @@ export interface SessionHandoffHost {
 	clearNextTurnMessages(): void;
 	cancelOwnAsyncJobs(): void;
 	/** Releases what the conversation being left holds: spawned agents, registry scope, eval kernels. */
-	endConversation(): Promise<void>;
+	endConversation(preserveAgentLineage: boolean): Promise<void>;
 	resetMemoryContextForNewTranscript(): void;
 	resetAllAdvisorRuntimes(): void;
 }
@@ -187,7 +205,12 @@ export class SessionHandoff {
 			// mirror exactly what the live turn populated the cache under.
 			const agent = session.agent;
 			const handoffPromptCacheKey = agent.promptCacheKey ?? agent.sessionId;
-			const handoffPromptText = renderHandoffPrompt(host.secrets.obfuscateTextForProvider(customInstructions));
+			const focus = host.secrets.obfuscateTextForProvider(customInstructions);
+			const handoffPromptText = options?.compactSummary
+				? focus
+					? `${COMPACT_HANDOFF_PROMPT}\n\nAdditional focus: ${focus}`
+					: COMPACT_HANDOFF_PROMPT
+				: renderHandoffPrompt(focus);
 			const handoffSnapshot: AgentMessage[] = [
 				...agent.state.messages,
 				{
@@ -212,6 +235,7 @@ export class SessionHandoff {
 					hideThinkingSummary: agent.hideThinkingSummary,
 					initiatorOverride: "agent",
 					signal: handoffSignal,
+					...(options?.compactSummary && model.maxTokens != null ? { maxTokens: model.maxTokens } : {}),
 				},
 				model.provider,
 			);
@@ -244,16 +268,9 @@ export class SessionHandoff {
 				if (countTokens(handoffText) > 5_000) {
 					throw new Error("COMPACT handoff exceeds the 5,000-token estimate; keeping the original transcript");
 				}
-				for (const heading of [
-					"# COMPACT",
-					"## Goal",
-					"## State",
-					"## Open steps",
-					"## Repository",
-					"## Tests",
-					"## Files",
-				]) {
-					if (!handoffText.split("\n").some(line => line.trim() === heading)) {
+				const headings = new Set(handoffText.split("\n").map(line => line.trim()));
+				for (const heading of Object.keys(COMPACT_HANDOFF_SECTIONS)) {
+					if (!headings.has(heading)) {
 						throw new Error(`COMPACT handoff is missing ${heading}; keeping the original transcript`);
 					}
 				}
@@ -282,6 +299,7 @@ export class SessionHandoff {
 			}
 			const sessionManager = session.sessionManager;
 			await sessionManager.flush();
+			if (handoffSignal.aborted) throw new Error("Handoff cancelled");
 			if (!options?.preserveAgentLineage) {
 				host.cancelOwnAsyncJobs();
 			}
@@ -300,12 +318,6 @@ export class SessionHandoff {
 					maxNestedSpawnDepth: childInit.maxNestedSpawnDepth,
 				});
 			}
-			// A handoff continues the work in a NEW transcript. The pre-handoff
-			// spawned agents wrote into the old one and their jobs were just cancelled;
-			// leaving them registered would list them under the new conversation, and
-			// no cell of the new transcript reaches the old one's eval kernels.
-			await host.endConversation();
-
 			host.checkpoint.clear();
 			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
 			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
@@ -342,17 +354,23 @@ export class SessionHandoff {
 				// same one `/todo` writes, so a reload of the new transcript still finds them.
 				sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: carriedTodoPhases });
 			}
-			await sessionManager.ensureOnDisk();
-			let savedPath: string | undefined;
-			if (options?.autoTriggered && session.settings.get("compaction.handoffSaveToDisk")) {
-				savedPath = await this.#saveDocument(handoffText);
-			}
-
-			// Rebuild agent messages from session
+			// Seed the live successor before persistence, which can fail after the switch.
+			// Its in-memory context must never revert to the source transcript.
 			const sessionContext = session.buildDisplaySessionContext();
 			agent.replaceMessages(sessionContext.messages);
 			host.resetAllAdvisorRuntimes();
 			host.todo.syncFromBranch();
+			try {
+				await sessionManager.ensureOnDisk();
+			} finally {
+				// The transcript has changed even if the write fails. Retire the old
+				// conversation and publish the successor identity before re-scoping.
+				await host.endConversation(options?.preserveAgentLineage === true);
+			}
+			let savedPath: string | undefined;
+			if (options?.autoTriggered && session.settings.get("compaction.handoffSaveToDisk")) {
+				savedPath = await this.#saveDocument(handoffText);
+			}
 			if (extensionRunner) {
 				await extensionRunner.emit({
 					type: "session_switch",

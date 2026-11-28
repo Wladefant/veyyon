@@ -1,3 +1,4 @@
+// Revive reopens the persisted transcript through task/native-transcript (`openNativeTranscript`, then `readNativeReviveInit`). The reviver cases below run that path.
 import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";

@@ -149,11 +149,17 @@ describe("AgentSession threshold compaction input", () => {
 		// `compaction.supersedeReads` is on by default: the first read of src/target.ts was
 		// answered again, so it reaches compaction as the placeholder rather than as 200
 		// lines the summary would have to pay for and then contradict.
-		expect(capturedToolResults.get(STALE_READ_ID)).toBe(compactionModule.SUPERSEDED_NOTICE);
+		const [staleNotice, staleRecovery, ...staleExtra] = capturedToolResults.get(STALE_READ_ID)!.split("\n");
+		expect(staleNotice).toBe(compactionModule.SUPERSEDED_NOTICE);
+		expect(staleRecovery).toMatch(/^\[recover: artifact:\/\/[^\s]+ \(entry [^\s]+\)\]$/);
+		expect(staleExtra).toEqual([]);
 		expect(capturedToolResults.get(NEW_READ_ID)).toBe(NEW_READ_BYTES);
 		// Uneventful-result elision is on for the same reason: a grep that matched nothing
 		// costs 200 lines to say so, and the summary cannot learn anything from them.
-		expect(capturedToolResults.get(USELESS_ID)).toBe(compactionModule.USELESS_NOTICE);
+		const [uselessNotice, uselessRecovery, ...uselessExtra] = capturedToolResults.get(USELESS_ID)!.split("\n");
+		expect(uselessNotice).toBe(compactionModule.USELESS_NOTICE);
+		expect(uselessRecovery).toMatch(/^\[recover: artifact:\/\/[^\s]+ \(entry [^\s]+\)\]$/);
+		expect(uselessExtra).toEqual([]);
 		// Exactly one rewrite, before compaction: the elisions are persisted so the next turn
 		// does not re-send the bytes this pass just decided not to pay for, and they are
 		// flushed together rather than one entry at a time.
