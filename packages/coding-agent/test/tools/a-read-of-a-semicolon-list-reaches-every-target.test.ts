@@ -236,17 +236,12 @@ describe("a read of a semicolon-delimited list", () => {
 			path: "local://read-multi-a.txt; local://read-multi-b.txt:1-3",
 		});
 		const text = toolResultText(result);
-		expect(text).toContain(
-			"Note: interpreted as 2 paths: local://read-multi-a.txt, local://read-multi-b.txt:1-3",
-		);
+		expect(text).toContain("Note: interpreted as 2 paths: local://read-multi-a.txt, local://read-multi-b.txt:1-3");
 		expect(text).toContain("alpha-1");
 		expect(text).toContain("beta-1");
 		expect(text).toContain("beta-3");
 		expect(text).not.toContain("beta-10");
-		expect(result.details?.displayReadTargets).toEqual([
-			"local://read-multi-a.txt",
-			"local://read-multi-b.txt:1-3",
-		]);
+		expect(result.details?.displayReadTargets).toEqual(["local://read-multi-a.txt", "local://read-multi-b.txt:1-3"]);
 
 		const bothSelectors = await new ReadTool(localSession).execute("call", {
 			path: "local://read-multi-a.txt:raw:2-2; local://read-multi-b.txt:raw:4-5",
