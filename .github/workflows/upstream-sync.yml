@@ -19,7 +19,8 @@ permissions:
 jobs:
   check-and-open-sync-pr:
     name: Check upstream drift and open draft sync PR
-    runs-on: ubuntu-latest
+    if: github.repository == 'Wladefant/veyyon' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, ovh, veyyon]
     timeout-minutes: 15
     permissions:
       contents: write
@@ -32,6 +33,7 @@ jobs:
           fetch-depth: 0
 
       - name: Check upstream divergence and open draft PR
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_REPO: "https://github.com/santhreal/veyyon.git"
@@ -41,12 +43,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Add upstream remote and fetch
-          git remote add upstream "$UPSTREAM_REPO"
-          git fetch upstream "$UPSTREAM_BRANCH"
+          # Fetch only the upstream branch. Do not keep an upstream remote in a reused checkout.
+          git fetch --no-tags --no-recurse-submodules "$UPSTREAM_REPO" "refs/heads/$UPSTREAM_BRANCH"
 
           # Compute merge-base and commit counts
-          UPSTREAM_HEAD=$(git rev-parse upstream/"$UPSTREAM_BRANCH")
+          UPSTREAM_HEAD=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
           FORK_HEAD=$(git rev-parse origin/"$TARGET_BRANCH")
           MERGE_BASE=$(git merge-base "$FORK_HEAD" "$UPSTREAM_HEAD")
 
@@ -78,9 +79,9 @@ jobs:
 
           echo "Creating draft sync PR for branch $SYNC_BRANCH with $BEHIND_COUNT commits behind..."
 
-          # Create sync branch from upstream head
-          git checkout -b "$SYNC_BRANCH" upstream/"$UPSTREAM_BRANCH"
-          git push origin "$SYNC_BRANCH"
+          # Publish exactly one candidate ref. Do not check out upstream code on the runner.
+          git -c push.followTags=false push --recurse-submodules=no origin \
+            "$UPSTREAM_HEAD:refs/heads/$SYNC_BRANCH"
 
           PR_TITLE="chore(sync): sync upstream changes (${BEHIND_COUNT} commits behind)"
           PR_BODY=$(printf '%s\n' \
