@@ -219,6 +219,22 @@
         "docs": [
           "docs/handbook/src/context/reads-search.md"
         ]
-      }
+      },
+    "eval-status-sanitization": {
+      "name": "Eval tool status sanitization",
+      "description": "Filter credential data from tool status before publishing live events or retaining results.",
+      "entry_files": [
+        "packages/coding-agent/src/eval/agent-bridge.ts",
+        "packages/coding-agent/src/eval/js/context-manager.ts",
+        "packages/coding-agent/src/eval/js/executor.ts",
+        "packages/coding-agent/src/eval/js/tool-bridge.ts",
+        "packages/coding-agent/src/secrets/producer-output.ts"
+      ],
+      "tests": ["packages/coding-agent/test/eval/an-eval-status-withholds-credential-data.test.ts"],
+      "owning_issue": "https://github.com/Wladefant/veyyon/issues/939",
+      "risk": "medium",
+      "components": ["coding-agent", "eval"],
+      "docs": ["docs/tools/eval.md"]
+    }
   }
 }
