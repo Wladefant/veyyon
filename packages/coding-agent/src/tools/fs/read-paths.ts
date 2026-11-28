@@ -13,9 +13,33 @@ import { isMissingPath, nonRegularKind } from "@veyyon/utils/fs-error";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { parseArchivePathCandidates } from "../../utils/zip";
-import { resolveReadPath } from "../core/path-utils";
+import { findTopLevelPathDelimiter, isReadableUrlPath, resolveReadPath } from "../core/path-utils";
 import { isSqliteFile, parseSqlitePathCandidates } from "../core/sqlite-reader";
 import { ToolError, throwIfAborted } from "../core/tool-errors";
+
+// A new target can start with a relative filename, a rooted path, or a URI
+// scheme. A query/matrix assignment such as `lang=en` is not a path start.
+const READ_TARGET_SEPARATOR = /;\s+(?:[./\\~]|[^\s:;=?&#]+(?=[:;\s]|$))/y;
+
+/** Split an HTTP(S)-led list before parsing any URL selectors. Unspaced semicolons stay in URLs. */
+export function splitReadUrlList(entry: string): string[] | null {
+	if (!isReadableUrlPath(entry) || !entry.includes(";")) return null;
+
+	let parts: string[] | undefined;
+	let start = 0;
+	let delimiter = findTopLevelPathDelimiter(entry, start, "semicolon");
+	while (delimiter !== -1) {
+		READ_TARGET_SEPARATOR.lastIndex = delimiter;
+		if (READ_TARGET_SEPARATOR.test(entry)) {
+			(parts ??= []).push(entry.slice(start, delimiter).trim());
+			start = delimiter + 1;
+		}
+		delimiter = findTopLevelPathDelimiter(entry, delimiter + 1, "semicolon");
+	}
+	if (!parts) return null;
+	parts.push(entry.slice(start).trim());
+	return parts;
+}
 
 // Remote mount path prefix (sshfs mounts) - skip fuzzy matching to avoid
 // hangs. Resolved per call, not frozen at module load: the dirs resolver is

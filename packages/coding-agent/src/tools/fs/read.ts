@@ -27,6 +27,7 @@ import {
 	expandPath,
 	isInternalUrlPath,
 	isRawSelector,
+	isReadableUrlPath,
 	type ParsedSelector,
 	parseSel,
 	pathTargetsSsh,
@@ -59,6 +60,7 @@ import {
 	type ResolvedReadPath,
 	resolveArchiveReadPath,
 	resolveSqliteReadPath,
+	splitReadUrlList,
 	SuffixSearch,
 	statCandidateWithSuffix,
 } from "./read-paths";
@@ -100,8 +102,14 @@ export function readFilesystemTargets(args: unknown, cwd = process.cwd()): strin
 	if (!args || typeof args !== "object" || !("path" in args)) return [];
 	const rawPath = args.path;
 	if (typeof rawPath !== "string") return [];
-	const expanded = expandDelimitedPathEntriesSync([rawPath], cwd, { internalUrls: "split-on-semicolon" });
-	return expanded.filter(entry => entry.length > 0);
+	const parts = splitReadUrlList(rawPath) ?? [rawPath];
+	return parts
+		.flatMap(part =>
+			isReadableUrlPath(part)
+				? [part]
+				: expandDelimitedPathEntriesSync([part], cwd, { internalUrls: "split-on-semicolon" }),
+		)
+		.filter(entry => entry.length > 0);
 }
 
 /**
@@ -164,7 +172,15 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		directory: { depth?: number; limit?: number } = {},
 	): Promise<AgentToolResult<ReadToolDetails> | null> {
 		const parts = await splitDelimitedPathEntry(readPath, this.session.cwd, options);
-		if (!parts) return null;
+	return parts ? this.#readDelimitedParts(parts, suffixSearch, signal, directory) : null;
+	}
+
+	async #readDelimitedParts(
+		parts: string[],
+		suffixSearch: SuffixSearch,
+		signal?: AbortSignal,
+		directory: { depth?: number; limit?: number } = {},
+	): Promise<AgentToolResult<ReadToolDetails>> {
 		const listHasInternalUrl = parts.some(part => isInternalUrlPath(part));
 
 		const notice = `Note: interpreted as ${parts.length} paths: ${parts.join(", ")}`;
@@ -363,6 +379,9 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 		refuseInContext: boolean,
 		suffixSearch: SuffixSearch,
 	): Promise<AgentToolResult<ReadToolDetails>> {
+		const urlParts = splitReadUrlList(params.path);
+		if (urlParts) return this.#readDelimitedParts(urlParts, suffixSearch, signal, params);
+
 		const readPath = params.path.startsWith("file://") ? expandPath(params.path) : params.path;
 		const conflictUri = parseConflictUri(readPath);
 		if (conflictUri) {

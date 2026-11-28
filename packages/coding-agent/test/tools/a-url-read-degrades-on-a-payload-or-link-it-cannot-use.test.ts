@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { cwdEscapingTargets } from "@veyyon/coding-agent/tools/core/cwd-boundary";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import * as scrapeServices from "@veyyon/coding-agent/tools/web/scrape-services";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
@@ -120,6 +121,15 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 		expect(result.details?.displayReadTargets).toEqual([url, "./notes.txt"]);
 		expect(toolResultText(result)).toMatch(/Remote page body[\s\S]*Local file body/);
 		expect(scrapers.loadPage).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps local peers in URL-led lists visible to the cwd boundary", () => {
+		const tool = new ReadTool(makeSession(testDir));
+		const url = "https://example.com/page;lang=en";
+		const outside = path.resolve(testDir, "../neighbor.txt");
+
+		expect(cwdEscapingTargets(tool, { path: `${url}; ../neighbor.txt` }, testDir)).toEqual([outside]);
+		expect(cwdEscapingTargets(tool, { path: `${url};../neighbor.txt` }, testDir)).toEqual([]);
 	});
 
 	it("preserves matrix and query semicolons in a single URL", async () => {

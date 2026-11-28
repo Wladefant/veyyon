@@ -18,6 +18,10 @@ to a budget:
   appended after a colon: `src/foo.ts:50-200` (inclusive range), `src/foo.ts:50` / `:50-` (from line 50
   on), `src/foo.ts:50+150` (150 lines from line 50), or `src/foo.ts:5-16,960-973` (multiple ranges in
   one call). `:raw` reads verbatim with no anchors or line prefixes.
+- **Several targets.** Separate complete paths with `; `, for example
+  `https://example.com/guide; ./notes.md`. In a list that starts with a web URL, a semicolon
+  separates targets only when whitespace and another path or URI follow it. A semicolon in
+  a URL such as `https://example.com/guide;lang=en` stays part of the URL.
 - **Dual budget, whichever is hit first:** a line cap and a byte cap. The line cap is
   `read.defaultLimit` (300) when the call specifies no line count, the requested count when it does,
   and `DEFAULT_MAX_LINES` (3000) at the ceiling. The byte cap is `tools.artifactSpillThreshold`
