@@ -209,10 +209,7 @@ describe("provider context image budgets", () => {
 		const clamped = clampProviderContextImages(context, UMANS_MODEL);
 
 		expect(imageData(clamped)).toEqual(Array.from({ length: 10 }, (_, index) => `kept-${index}`));
-		expect(clamped.messages[0]?.content).toEqual([
-			text("first user"),
-			text("[image omitted: provider image limit]"),
-		]);
+		expect(clamped.messages[0]?.content).toEqual([text("first user"), text("[image omitted: provider image limit]")]);
 		expect(clamped.messages[1]?.content).toEqual([
 			text("dev context"),
 			text("[image omitted: provider image limit]"),
