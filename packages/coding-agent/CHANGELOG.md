@@ -38,6 +38,7 @@
 - Restore the raw SSE debug viewer and tell agents to use verified IRC names ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Restore automatic handoff for expensive child sessions without requiring mid-turn compaction or terminating active descendants ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Retry assistant drafts interrupted by a socket reset when their text can be retracted, without replaying dispatched tool calls ([Refs #1278](https://github.com/Wladefant/veyyon/issues/1278)).
+- Keep Windows release preparation running by leaving Rust checks to release CI ([Refs #728](https://github.com/Wladefant/veyyon/issues/728)).
 
 ## [1.12.3] - 2026-11-21
 

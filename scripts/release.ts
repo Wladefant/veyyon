@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { isReleaseTag, isReleaseVersion, RELEASE_VERSION_BODY } from "@veyyon/utils/semver";
 import { $, Glob, JSONC } from "bun";
 import { hasVersionHeading, unreleasedEntries, veyyonOwnedRegion } from "./changelog-unreleased";
+import { isCI } from "./ci-signal";
 import { runChangelogFixer } from "./fix-changelogs";
 import {
 	assertPreparedReleaseChangelogs,
@@ -734,10 +735,16 @@ export async function prepareReleaseTree(version: string, runChecks = true): Pro
 	console.log("  Updated CHANGELOG.md (repo root)\n");
 
 	if (runChecks) {
-		console.log("Running checks...");
-		await $`bun run check`;
+		const task = releasePreflightTask(process.platform, isCI());
+		if (task === "check:ts") console.log("Leaving Rust checks to release CI on Windows.");
+		console.log(`Running ${task}...`);
+		await $`bun run ${task}`;
 		console.log();
 	}
+}
+
+export function releasePreflightTask(platform: NodeJS.Platform, inCI: boolean): "check" | "check:ts" {
+	return platform === "win32" && !inCI ? "check:ts" : "check";
 }
 
 /**
