@@ -259,8 +259,8 @@ describe("a read of a semicolon-delimited list", () => {
 		expect(toolResultText(literalSemicolon)).toContain("local-semicolon-filename");
 		expect(literalSemicolon.details?.displayReadTargets).toBeUndefined();
 
-		await expect(
-			new ReadTool(localSession).execute("call", { path: "local://missing.txt" }),
-		).rejects.toThrow(/Local file not found: local:\/\/missing\.txt/);
+		await expect(new ReadTool(localSession).execute("call", { path: "local://missing.txt" })).rejects.toThrow(
+			/Local file not found: local:\/\/missing\.txt/,
+		);
 	});
 });
