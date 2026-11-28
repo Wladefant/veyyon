@@ -3245,6 +3245,7 @@ export class AuthStorage {
 				gate.selection.index,
 				resetAtMs ?? Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS,
 				gate.blockScope,
+				"usage-report",
 			);
 			return true;
 		}

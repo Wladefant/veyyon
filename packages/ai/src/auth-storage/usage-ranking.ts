@@ -229,7 +229,10 @@ export interface CredentialRankingRequest<S> {
 }
 
 /** The block reads and writes a ranking pass makes. */
-export type RankingBlocks = Pick<CredentialBlocks, "getCredentialBlockedUntil" | "markCredentialBlocked">;
+export type RankingBlocks = Pick<
+	CredentialBlocks,
+	"getCredentialBlockedUntil" | "markCredentialBlocked" | "predictionProbeCredentialId" | "reconcilePrediction"
+>;
 
 /** The usage fetch a ranking pass makes, and the per-request deadline it is given. */
 export type RankingUsage = Pick<UsageReporting, "reportFor" | "requestTimeoutMs">;
@@ -271,8 +274,8 @@ export class CredentialRanking {
 	}
 
 	/**
-	 * Ranks OAuth accounts by live usage. A blocked `openai-codex` account is still fetched, since its
-	 * report may clear the block; any other blocked account ranks by when its block ends.
+	 * Ranks OAuth accounts by live usage. Codex blocks and old Antigravity predictions can
+	 * request usage before ranking. An Antigravity refusal is never eligible for that check.
 	 */
 	async rankOAuthSelections(
 		request: CredentialRankingRequest<OAuthSelection> & { planRequirement: OpenAICodexPlanRequirement },
@@ -282,9 +285,33 @@ export class CredentialRanking {
 			let blockedUntil = this.#blockedUntil(request, selection.index);
 			let usage: UsageReport | null = null;
 			let usageChecked = false;
-			if (blockedUntil !== undefined && request.provider === "openai-codex") {
+			const predictionId =
+				blockedUntil !== undefined && request.provider === "google-antigravity"
+					? this.#blocks.predictionProbeCredentialId(
+							request.provider,
+							request.providerKey,
+							selection.index,
+							request.blockScope,
+						)
+					: undefined;
+			if (blockedUntil !== undefined && (request.provider === "openai-codex" || predictionId !== undefined)) {
 				usage = await this.#reportFor(request, selection.credential);
 				usageChecked = true;
+				if (predictionId !== undefined && usage?.provider === "google-antigravity") {
+					const counters = usage.metadata?.authoritativeCounters;
+					const counter = request.blockScope?.slice("counter:".length);
+					const limits = getScopedUsageLimits(request.strategy, usage, request.rankingContext);
+					if (
+						usage.metadata?.headersUpdatedAt === undefined &&
+						Array.isArray(counters) &&
+						counters.includes(counter) &&
+						limits.length > 0 &&
+						limits.every(limit => limit.amount.remainingFraction !== undefined) &&
+						!isUsageLimitReached(limits)
+					) {
+						this.#blocks.reconcilePrediction(request.providerKey, request.blockScope, predictionId, usage.fetchedAt);
+					}
+				}
 				blockedUntil = this.#blockedUntil(request, selection.index);
 			}
 			if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
@@ -370,6 +397,7 @@ export class CredentialRanking {
 					selection.index,
 					blockedUntil,
 					request.blockScope,
+					"usage-report",
 				);
 				blocked = true;
 			}

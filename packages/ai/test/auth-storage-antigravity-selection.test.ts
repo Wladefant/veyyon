@@ -408,7 +408,16 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		expect(await storageX.getApiKey(provider, pinnedSessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
 	});
 
-	test("a fresh Gemini quota summary makes a sibling under an old predicted hold eligible again", async () => {
+	test.each([
+		["fresh exact summary", "api-acct-a"],
+		["fallback listing", "api-acct-b"],
+		["header overlay", "api-acct-b"],
+		["different counter", "api-acct-b"],
+		["old summary", "api-acct-b"],
+		["confirmed 429", "api-acct-b"],
+		["legacy block", "api-acct-b"],
+		["unscoped block", "api-acct-b"],
+	])("rechecks an old Antigravity prediction with a %s", async (evidence, expected) => {
 		if (!authStorage || !store) throw new Error("test setup failed");
 		const provider = "google-antigravity";
 		const modelId = "gemini-3.8-flash";
@@ -427,10 +436,38 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		usageByAccount.set("acct-a", report("acct-a", 1));
 		usageByAccount.set("acct-b", report("acct-b", 0));
 		expect(await authStorage.getApiKey(provider, "before-reset", { modelId })).toBe("api-acct-b");
+		const credentialId = authStorage.listStoredCredentials(provider)[0]!.id;
+		if (evidence === "confirmed 429") {
+			await authStorage.markUsageLimitReached(provider, "confirmed-refusal", {
+				credentialId,
+				modelId,
+				retryAfterMs: 8 * HOUR_MS,
+			});
+		}
+		const providerKey = `${provider}:oauth`;
+		const unrelatedScopes = ["counter:claude-gpt", "model-not-in-plan:gemini-test"];
+		if (evidence === "legacy block" || evidence === "unscoped block") {
+			store.upsertCredentialBlock?.({
+				credentialId,
+				providerKey,
+				blockScope: evidence === "legacy block" ? "counter:google" : "",
+				blockedUntilMs: now + HOUR_MS,
+			});
+		}
+		for (const blockScope of unrelatedScopes) {
+			store.upsertCredentialBlock?.({ credentialId, providerKey, blockScope, blockedUntilMs: now + HOUR_MS });
+		}
 
 		now += 10 * 60 * 1000;
 		const healthy = report("acct-a", 0);
-		healthy.metadata = { ...healthy.metadata, authoritativeCounters: ["google"] };
+		if (evidence !== "fallback listing") {
+			healthy.metadata = {
+				...healthy.metadata,
+				authoritativeCounters: [evidence === "different counter" ? "claude-gpt" : "google"],
+				...(evidence === "header overlay" ? { headersUpdatedAt: now } : {}),
+			};
+		}
+		if (evidence === "old summary") healthy.fetchedAt -= 7 * 60 * 1000;
 		usageByAccount.set("acct-a", healthy);
 		usageByAccount.set("acct-b", report("acct-b", 0.4));
 		const peer = new AuthStorage(store, {
@@ -439,7 +476,10 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 			rankingStrategyResolver: p => (p === provider ? antigravityRankingStrategy : undefined),
 		});
 		await peer.reload();
-		expect(await peer.getApiKey(provider, "after-reset", { modelId })).toBe("api-acct-a");
+		expect(await peer.getApiKey(provider, "after-reset", { modelId })).toBe(expected);
+		for (const blockScope of unrelatedScopes) {
+			expect(store.getCredentialBlock?.(credentialId, providerKey, blockScope)).toBeDefined();
+		}
 	});
 
 	test("expired confirmation does not promote a later peer prediction", async () => {

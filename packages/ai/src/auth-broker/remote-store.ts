@@ -264,6 +264,8 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 			...(overlayMetadata.headersUpdatedAt !== undefined
 				? { headersUpdatedAt: overlayMetadata.headersUpdatedAt }
 				: {}),
+			// An overlay may replace a window without providing authoritative quota.
+			...(base.provider === "google-antigravity" ? { authoritativeCounters: undefined } : {}),
 		},
 	};
 }
@@ -751,7 +753,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return out;
 	}
 
-	getCredentialBlock(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+	getCredentialBlock(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+		ignoreWritesBeforeMs?: number,
+	): number | undefined {
 		const nowMs = Date.now();
 		this.cleanExpiredCredentialBlocks(nowMs);
 		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
@@ -765,6 +772,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// stamped ahead of this reader cannot be measured against this clock, so
 		// it is dropped rather than held; see credential-clock.
 		if (isRecordFromFutureClock(block.updatedAtMs, nowMs)) return undefined;
+		if (
+			block.updatedAtMs !== undefined &&
+			ignoreWritesBeforeMs !== undefined &&
+			block.updatedAtMs < ignoreWritesBeforeMs
+		) {
+			return undefined;
+		}
 		return block.blockedUntilMs;
 	}
 
