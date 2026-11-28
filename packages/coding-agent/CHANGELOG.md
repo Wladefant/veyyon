@@ -12,6 +12,7 @@
 ### Fixed
 
 - Do not retry an optional Auto-Learn capture when the provider reports tool use without a tool call or text ([Refs #1026](https://github.com/Wladefant/veyyon/issues/1026)).
+- Tell spawned lanes that a verified direct parent can amend its own assignment without overriding operator instructions or safety rules ([Refs #1020](https://github.com/Wladefant/veyyon/issues/1020)).
 - Sanitize eval tool status, including shell commands and nested summaries, before sending live updates or retaining results ([Refs #939](https://github.com/Wladefant/veyyon/issues/939)).
 - Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
 - Include source file, line, and column in legacy Pi export prepass errors when Bun provides them ([Refs #985](https://github.com/Wladefant/veyyon/issues/985)).
@@ -34,6 +35,7 @@
 - Repair nine headless regression suites for OVH CI without changing runtime behavior ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Bind native worker claims before accepting detached dispatch, retain the previous stage on rejected dispatch, and restore task lifecycle notifications ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
 - Reject all queued ACP prompts when their session closes ([#851](https://github.com/Wladefant/veyyon/issues/851)).
+- Omit non-display custom messages when ACP replays history on `session/load` ([#990](https://github.com/Wladefant/veyyon/issues/990)).
 - Stage Windows WriteTool edits and archive rewrites with the existing file's DACL. Write archive bytes through the staging handle instead of reopening the temp path ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
 - Fence synchronized sessions after an invalid initial lease, and wait for queued message writes before deduplicating results ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).
 - Defer ArkType schema creation for BTW history and the browser extension relay until validation needs it ([Refs #1244](https://github.com/Wladefant/veyyon/issues/1244)).

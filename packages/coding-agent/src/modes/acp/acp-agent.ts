@@ -222,6 +222,7 @@ type BackgroundRecord = {
 type ReplayableMessage = {
 	role: string;
 	content?: unknown;
+	display?: boolean;
 	errorMessage?: string;
 	toolCallId?: string;
 	toolName?: string;
@@ -1866,7 +1867,7 @@ export class AcpAgent implements Agent {
 		if (
 			message.role === "user" ||
 			message.role === "developer" ||
-			message.role === "custom" ||
+			(message.role === "custom" && message.display === true) ||
 			message.role === "hookMessage"
 		) {
 			return wrapReplayContent(

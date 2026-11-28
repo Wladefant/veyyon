@@ -65,6 +65,9 @@ Distinct transcripts with the same ID fail with `ACP session ID is ambiguous` be
 A fork of a loaded session uses that session's own transcript.
 `session/resume` stays scoped to the requested directory.
 
+`session/load` replays the conversation in order, including messages before compaction.
+It sends custom messages only when the session records them with `display: true`.
+
 The session's MCP servers, approval mode and settings come from the active profile's
 `config.yml`, plus any `--config` overlay passed to the server process; see
 [Approval modes](./approval-mode.md#acp-sessions).
