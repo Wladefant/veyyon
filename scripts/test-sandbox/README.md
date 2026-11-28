@@ -52,7 +52,6 @@ with `--rung=microvm`.
 
 Some Linux hosts deny bwrap user namespaces through AppArmor despite the sysctl setting.
 The probe runs bubblewrap because the sysctl alone does not prove that it works.
-WSL on this PC supports the bwrap boundary.
 
 ## The contract
 
@@ -83,38 +82,23 @@ bash scripts/test-sandbox/leak-proof.sh             # the red run, every availab
 Package scripts wrap the common ones: `test:sandbox:probe`, `test:sandbox:build`,
 `test:sandbox:remote:build`, `test:sandbox:proof`.
 
-### Windows through WSL
+### Linux dependencies for the bwrap rung
 
-Use WSL when Windows has no available kernel sandbox. Do not run bare `bun test`.
-The bwrap guest uses Linux system paths, not the Windows PATH inherited by `wsl --exec`.
-Install the manifest's Bun version in `/usr/local/bin/bun`, outside the hidden home.
-Git and sh must also exist in the WSL distro.
+The bwrap rung needs a Linux host with `bwrap`, `git`, `sh`, and the Bun version named in the
+manifest. Install that Bun at `/usr/local/bin/bun`, outside the hidden home.
 
-If a Windows worktree has no Linux dependencies, install them in a separate WSL checkout.
-Use `bun install --frozen-lockfile` there, through a medium build slot.
-Never install through a shared Windows `node_modules` junction.
-Set `VEYYON_SANDBOX_NODE_MODULES` to that checkout's absolute Linux `node_modules` path.
-Bwrap binds that tree read-only over the tested worktree's `node_modules`. It also
-automatically binds the tested worktree's `packages` over the dependency checkout's
-workspace packages, so aliases such as `@veyyon/catalog/models` resolve to the code
-under test.
-Put the command in a shell script to keep `$?` from expanding on Windows:
+Dependencies come from a separate Linux checkout. Never install through a shared `node_modules`
+junction. In that checkout, run `bun install --frozen-lockfile`, then set
+`VEYYON_SANDBOX_NODE_MODULES` to its absolute `node_modules` path.
 
-```sh
-#!/bin/bash
-set -euo pipefail
-cd /mnt/c/Users/wkiri/development/<worktree>
-bash scripts/test-sandbox/run.sh --rung=bwrap bun test <paths>
-```
+The bwrap rung binds that tree read-only over the tested worktree's `node_modules`. It also
+binds the tested worktree's `packages` over the dependency checkout's workspace packages, so
+aliases such as `@veyyon/catalog/models` resolve to the code under test.
 
-Run that script through the PC's medium build slot:
+`bwrap-path-proof.sh` checks that `bun`, `git`, and `sh` still resolve inside the sandbox when
+the launcher passes a Windows-only `PATH`.
 
-```text
-python C:/Users/wkiri/.veyyon/workflows/build_slot.py run <lane>-tests --class medium --timeout 2400 -- wsl.exe --exec /bin/bash /mnt/c/<script-path>
-```
-
-Read the Bun summary. A receipt passes only with `N pass`, `0 fail`, and `N > 0`.
-Exit status alone does not prove that tests ran.
+Focused Linux evidence for pull requests runs on OVH CI. See [OVH CI](../../docs/internal/ovh-ci.md).
 
 
 ### Native Windows AppContainer
