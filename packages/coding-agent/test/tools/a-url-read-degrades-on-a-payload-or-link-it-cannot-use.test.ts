@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { cwdEscapingTargets } from "@veyyon/coding-agent/tools/core/cwd-boundary";
@@ -125,10 +126,11 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 
 	it("keeps local peers in URL-led lists visible to the cwd boundary", () => {
 		const tool = new ReadTool(makeSession(testDir));
-		const url = "https://example.com/page;lang=en";
+		const url = "https://example.com/page;lang=en?q=one;two";
 		const outside = path.resolve(testDir, "../neighbor.txt");
-
-		expect(cwdEscapingTargets(tool, { path: `${url}; ../neighbor.txt` }, testDir)).toEqual([outside]);
+		for (const peer of ["../neighbor.txt", outside, pathToFileURL(outside).href, "; ../neighbor.txt"]) {
+			expect(cwdEscapingTargets(tool, { path: `${url}; ${peer}` }, testDir)).toEqual([outside]);
+		}
 		expect(cwdEscapingTargets(tool, { path: `${url};../neighbor.txt` }, testDir)).toEqual([]);
 	});
 
