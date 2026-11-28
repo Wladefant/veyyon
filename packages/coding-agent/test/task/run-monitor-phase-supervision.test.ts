@@ -261,6 +261,32 @@ describe("run monitor phase supervision", () => {
 		},
 	);
 
+	it("does not charge an inline spawn queue wait to the child no-progress window", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		const toolCallId = "queued-child";
+		const reportQueue = (waitingForSpawnSlot: boolean) =>
+			emit(
+				event("tool_execution_update", {
+					toolName: "task",
+					toolCallId,
+					partialResult: { details: { results: [], totalDurationMs: 0, waitingForSpawnSlot } },
+				}),
+			);
+		emit(event("tool_execution_start", { toolName: "task", toolCallId }));
+		const limit = PHASE_WATCHDOG_LIMITS_MS["waiting-child"];
+		vi.advanceTimersByTime(limit - 10);
+		reportQueue(true);
+		vi.advanceTimersByTime(limit + 1);
+		expect(monitor.abortKind()).toBeUndefined();
+
+		reportQueue(false);
+		vi.advanceTimersByTime(9);
+		expect(monitor.abortKind()).toBeUndefined();
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortKind()).toBe("stalled");
+	});
+
 	it("gives a nested task child the thirty-minute wait window", () => {
 		vi.useFakeTimers();
 		const { monitor, emit } = createMonitor();
