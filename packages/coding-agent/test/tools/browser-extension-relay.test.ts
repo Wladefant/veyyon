@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -27,12 +27,16 @@ class FakeExtension {
 	readonly calls: Recorded[] = [];
 	#nextTab = 100;
 	readonly #failing = new Set<string>();
-	readonly #delayed = new Map<string, Promise<void>>();
+	readonly #delayed = new Map<string, () => Promise<void>>();
 
-	delayNext(cdpMethod: string): () => void {
+	delayNext(cdpMethod: string): { received: Promise<void>; release: () => void } {
+		const received = Promise.withResolvers<void>();
 		const reply = Promise.withResolvers<void>();
-		this.#delayed.set(cdpMethod, reply.promise);
-		return () => reply.resolve();
+		this.#delayed.set(cdpMethod, () => {
+			received.resolve();
+			return reply.promise;
+		});
+		return { received: received.promise, release: () => reply.resolve() };
 	}
 
 	/** Make the next `chrome.debugger.sendCommand` of this CDP method fail once. */
@@ -72,7 +76,7 @@ class FakeExtension {
 		const delayed = this.#delayed.get(target);
 		if (delayed) {
 			this.#delayed.delete(target);
-			await delayed;
+			await delayed();
 			if (!this.open) return;
 		}
 		if (this.#failing.delete(target)) {
@@ -239,7 +243,7 @@ describe("owned connect bootstrap", () => {
 			relay = ExtensionRelay.start({ instance: "test", bootstrap });
 			const r = relay;
 			const ext = await FakeExtension.connect(r.extensionUrl);
-			const release = ext.delayNext("Fetch.enable");
+			const { release } = ext.delayNext("Fetch.enable");
 			const url = buildConnectUrl({ ...bootstrap, relayUrl: r.extensionUrl });
 			ext.emit("chrome.tabs.onCreated", [{ id: 41, url: `${url}&unrelated=1` }]);
 			ext.emit("chrome.tabs.onCreated", [{ id: 42, url }]);
@@ -362,6 +366,28 @@ describe("CDP over the extension RPC", () => {
 			"Runtime.evaluate",
 			{ expression: "1+1" },
 		]);
+	});
+
+	test("accepts a CDP reply after the old 15 s deadline without sending the command again", async () => {
+		const { ext, cdp } = await connected();
+		await cdp.send("Target.createTarget", { url: "about:blank" });
+		const sessionId = String(cdp.events.find(event => event.method === "Target.attachedToTarget")?.params?.sessionId);
+		const { received, release } = ext.delayNext("Runtime.evaluate");
+
+		vi.useFakeTimers();
+		try {
+			const reply = cdp.send("Runtime.evaluate", { expression: "1+1" }, sessionId);
+			await received;
+			vi.advanceTimersByTime(20_000);
+			release();
+			expect(await reply).toMatchObject({ sessionId, result: {} });
+			expect(
+				ext.callsOf("chrome.debugger.sendCommand").filter(call => call.params[1] === "Runtime.evaluate"),
+			).toHaveLength(1);
+		} finally {
+			release();
+			vi.useRealTimers();
+		}
 	});
 
 	test("debugger events reach the session of the tab they came from", async () => {
@@ -1218,7 +1244,7 @@ describe("secrets stay out of logs", () => {
 				);
 				// The extension never answers this call. The 15 s RPC timer is fired at once so the test stays fast.
 				const method = `Runtime.${token}`;
-				const release = ext.delayNext(method);
+				const { release } = ext.delayNext(method);
 				timers = spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number) =>
 					realSetTimeout(handler, ms === 15_000 ? 0 : ms)) as typeof setTimeout);
 				const reply = await cdp.send(method, {}, sessionId).finally(() => {
