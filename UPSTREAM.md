@@ -79,3 +79,9 @@ It is dry-run by default (`--live` posts and pushes), never pushes to an upstrea
 merges, and a rerun adds and posts nothing twice. The watermark moves only after the digest is out.
 A scheduled task runs it daily on the operator's workstation.
 
+The fork's separate [Upstream Sync Check](.github/workflows/upstream-sync.yml) runs on the
+self-hosted OVH Veyyon pool on Mondays at 04:00 UTC when enabled. It compares `main` with
+santhreal, pushes only a `sync/upstream-YYYY-MM-DD` branch, and opens a draft PR into `main`.
+It never pushes `main` or merges a PR. If GitHub refuses PR creation, it reports the candidate
+branch in the tracking issue for a maintainer to use.
+

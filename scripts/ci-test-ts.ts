@@ -563,6 +563,7 @@ export const repoScriptTests = [
 	"scripts/upstream-radar.test.ts",
 	"scripts/upstream-status-reports-only-what-evidence-shows.test.ts",
 	"scripts/upstream-sync-never-records-or-posts-a-commit-twice.test.ts",
+	"scripts/upstream-sync-workflow.test.ts",
 	"scripts/release-sentinel.test.ts",
 	"scripts/release-changelog.test.ts",
 	"scripts/release-bump-subject.test.ts",
