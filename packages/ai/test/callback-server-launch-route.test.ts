@@ -4,7 +4,7 @@ import type { OAuthAuthInfo, OAuthCredentials } from "@veyyon/ai/registry/oauth/
 
 /**
  * Regression harness for #4418 — the `/launch` route the callback server hosts
- * so UIs can advertise a short (~30-char) copy target that survives TUI viewport
+ * so UIs can advertise a short copy target that survives TUI viewport
  * truncation. Without it, the full authorize URL (~260+ chars on Linear/GitHub/…)
  * gets silently truncated mid-parameter and downgrades the flow to plain PKCE.
  */
@@ -69,22 +69,22 @@ afterEach(() => {
 describe("OAuthCallbackFlow /launch route", () => {
 	it("advertises a short launch URL and 302s it to the pending authorization URL", async () => {
 		const { info, abort, login } = await startFlowAndWaitForAuth();
+		try {
+			// Contract 1 — launch URL is a tokenized loopback `/launch` URL that
+			// remains much shorter than the full provider authorization URL.
+			expect(info.launchUrl).toBeDefined();
+			expect(info.launchUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/launch\?token=[A-Za-z0-9_-]{22}$/);
+			expect(info.launchUrl!.length).toBeLessThan(info.url.length);
 
-		// Contract 1 — launch URL is short and shaped like a loopback URL. A
-		// terminal that truncates below ~40 columns is degenerate; anything above
-		// that keeps the launch URL intact regardless of the full URL length.
-		expect(info.launchUrl).toBeDefined();
-		expect(info.launchUrl!.length).toBeLessThan(40);
-		expect(info.launchUrl).toMatch(/^http:\/\/localhost:\d+\/launch$/);
-
-		// Contract 2 — GET /launch returns 302 pointing at the pending authorize URL,
-		// byte-for-byte (the whole point: no truncation surface between UI and provider).
-		const response = await fetch(info.launchUrl!, { redirect: "manual" });
-		expect(response.status).toBe(302);
-		expect(response.headers.get("location")).toBe(info.url);
-
-		abort.abort("test done");
-		await login;
+			// Contract 2 — GET /launch returns 302 pointing at the pending authorize URL,
+			// byte-for-byte (the whole point: no truncation surface between UI and provider).
+			const response = await fetch(info.launchUrl!, { redirect: "manual" });
+			expect(response.status).toBe(302);
+			expect(response.headers.get("location")).toBe(info.url);
+		} finally {
+			abort.abort("test done");
+			await login;
+		}
 	});
 
 	it("stops answering /launch once the flow completes so no stale URL is redirected", async () => {
@@ -94,9 +94,7 @@ describe("OAuthCallbackFlow /launch route", () => {
 		abort.abort("test done");
 		await login;
 
-		// Server has stopped and `#pendingAuthUrl` was cleared — the launch URL
-		// no longer connects. The correct end-state is that the redirect NEVER
-		// points at a stale URL; the loopback socket is gone so `fetch` rejects.
+		// The stopped server can no longer redirect to a stale authorization URL.
 		await expect(fetch(info.launchUrl!)).rejects.toThrow();
 	});
 

@@ -10,6 +10,7 @@
  * - generateAuthUrl(): Build provider-specific authorization URL
  * - exchangeToken(): Exchange authorization code for tokens
  */
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import * as AIError from "../../error";
 import { renderOAuthResultHtml } from "./success-page";
@@ -17,6 +18,7 @@ import type { OAuthController, OAuthCredentials } from "./types";
 
 const DEFAULT_TIMEOUT = 300_000;
 const DEFAULT_HOSTNAME = "localhost";
+const IPV4_LOOPBACK = "127.0.0.1";
 /**
  * The loopback path a provider redirects back to when nothing else is configured.
  *
@@ -37,6 +39,8 @@ export const DEFAULT_CALLBACK_PATH = "/callback";
 const LAUNCH_PATH = "/launch";
 
 export type CallbackResult = { code: string; state: string };
+
+type LaunchAttempt = { token: string; authUrl?: string };
 
 export interface OAuthCallbackFlowOptions {
 	preferredPort: number;
@@ -75,14 +79,6 @@ export abstract class OAuthCallbackFlow {
 	#manualInputOnly: boolean;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
-	/**
-	 * Authorization URL the `/launch` route currently redirects to. Set by
-	 * {@link login} after {@link generateAuthUrl} and before {@link OAuthController.onAuth}
-	 * fires, cleared when the server stops. `undefined` before the flow reaches
-	 * that point and after it finishes, so `/launch` returns 503 rather than
-	 * a stale URL.
-	 */
-	#pendingAuthUrl?: string;
 
 	constructor(
 		ctrl: OAuthController,
@@ -153,9 +149,12 @@ export abstract class OAuthCallbackFlow {
 		// Start callback server first to get actual redirect URI. Manual-only
 		// flows never bind a server — the advertised redirect URI is fixed and
 		// the user pastes the code/redirect URL back instead.
-		const { server, redirectUri, launchUrl } = this.#manualInputOnly
-			? { server: undefined, redirectUri: this.#buildRedirectUri(), launchUrl: undefined }
-			: await this.#startCallbackServer(state);
+		const launch: LaunchAttempt | undefined = this.#manualInputOnly
+			? undefined
+			: { token: randomBytes(16).toString("base64url") };
+		const { server, redirectUri, launchUrl } = launch
+			? await this.#startCallbackServer(state, launch)
+			: { server: undefined, redirectUri: this.#buildRedirectUri(), launchUrl: undefined };
 
 		try {
 			this.#throwIfCancelled();
@@ -167,7 +166,7 @@ export abstract class OAuthCallbackFlow {
 			// callers. `onAuth` immediately renders a UI that advertises the
 			// launch URL as a copy target, so `/launch` must already resolve if
 			// the user clicks/pastes it during the same render pass.
-			this.#pendingAuthUrl = authUrl;
+			if (launch && launchUrl) launch.authUrl = authUrl;
 
 			// Notify controller that auth is ready
 			this.ctrl.onAuth?.({ url: authUrl, launchUrl, instructions });
@@ -178,13 +177,15 @@ export abstract class OAuthCallbackFlow {
 			);
 
 			const { code } = await this.#waitForCallback(state);
+			// The browser has finished authorization; token exchange may still take time.
+			if (launch) launch.authUrl = undefined;
 			this.#throwIfCancelled();
 
 			this.ctrl.onProgress?.("Exchanging authorization code for tokens...");
 
 			return await this.exchangeToken(code, state, redirectUri);
 		} finally {
-			this.#pendingAuthUrl = undefined;
+			if (launch) launch.authUrl = undefined;
 			server?.stop();
 		}
 	}
@@ -202,14 +203,16 @@ export abstract class OAuthCallbackFlow {
 	 */
 	async #startCallbackServer(
 		expectedState: string,
+		launch: LaunchAttempt,
 	): Promise<{ server: Bun.Server<unknown>; redirectUri: string; launchUrl: string | undefined }> {
+		const hostname = this.callbackHostname === DEFAULT_HOSTNAME ? IPV4_LOOPBACK : this.callbackHostname;
 		try {
-			const server = this.#createServer(this.preferredPort, expectedState);
+			const server = this.#createServer(hostname, this.preferredPort, expectedState, launch);
 			// `preferredPort: 0` opts into a random port — read the actual bound
 			// port from the server so both the redirect URI and launch URL point at
 			// a reachable socket, not the sentinel.
 			const actualPort = resolveServerPort(server);
-			const launchUrl = this.#launchUrlIfSafe(actualPort);
+			const launchUrl = this.#launchUrlIfSafe(hostname, actualPort, launch.token);
 			if (this.redirectUri) {
 				return { server, redirectUri: this.redirectUri, launchUrl };
 			}
@@ -228,10 +231,10 @@ export abstract class OAuthCallbackFlow {
 					{ cause },
 				);
 			}
-			const server = this.#createServer(0, expectedState);
+			const server = this.#createServer(hostname, 0, expectedState, launch);
 			const actualPort = resolveServerPort(server);
 			const redirectUri = `http://${this.callbackHostname}:${actualPort}${this.callbackPath}`;
-			const launchUrl = this.#launchUrlIfSafe(actualPort);
+			const launchUrl = this.#launchUrlIfSafe(hostname, actualPort, launch.token);
 			this.ctrl.onProgress?.(`Preferred port ${this.preferredPort} unavailable, using port ${actualPort}`);
 			return { server, redirectUri, launchUrl };
 		}
@@ -248,16 +251,20 @@ export abstract class OAuthCallbackFlow {
 	 *   is required, not just the parse failure path. Advertising a localhost
 	 *   `/launch` target for such flows misrepresents the callback endpoint
 	 *   and hands remote users a URL that resolves nowhere.
-	 * Kept short (~30 chars) so UIs can advertise it as a
-	 * viewport-truncation-safe copy target for the full authorization URL.
+	 * The URL includes a capability that only this login attempt accepts.
 	 */
-	#launchUrlIfSafe(port: number): string | undefined {
+	#launchUrlIfSafe(hostname: string, port: number, token: string): string | undefined {
+		if (hostname !== IPV4_LOOPBACK && hostname !== "[::1]") return undefined;
 		if (this.callbackPath === LAUNCH_PATH) return undefined;
 		if (this.redirectUri) {
 			try {
 				const parsed = new URL(this.redirectUri);
 				if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-				if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "[::1]") {
+				if (
+					parsed.hostname !== DEFAULT_HOSTNAME &&
+					parsed.hostname !== IPV4_LOOPBACK &&
+					parsed.hostname !== "[::1]"
+				) {
 					return undefined;
 				}
 				if (parsed.pathname === LAUNCH_PATH) return undefined;
@@ -267,27 +274,27 @@ export abstract class OAuthCallbackFlow {
 				return undefined;
 			}
 		}
-		return `http://${this.callbackHostname}:${port}${LAUNCH_PATH}`;
+		// Address the bound interface so the browser does not send the token to another localhost listener.
+		return `http://${hostname}:${port}${LAUNCH_PATH}?token=${token}`;
 	}
 
 	/**
 	 * Create HTTP server for OAuth callback.
 	 */
-	#createServer(port: number, expectedState: string): Bun.Server<unknown> {
-		const hostname = this.callbackHostname === DEFAULT_HOSTNAME ? undefined : this.callbackHostname;
+	#createServer(hostname: string, port: number, expectedState: string, launch: LaunchAttempt): Bun.Server<unknown> {
 		return Bun.serve({
-			...(hostname === undefined ? {} : { hostname }),
+			hostname,
 			port,
 			reusePort: false,
-			fetch: req => this.#handleCallback(req, expectedState),
+			fetch: req => this.#handleCallback(req, expectedState, launch),
 		});
 	}
 
 	/**
 	 * Handle OAuth callback HTTP request. Two routes on the same loopback server:
 	 * - `callbackPath` (default `/callback`) — the provider redirect target.
-	 * - {@link LAUNCH_PATH} (`/launch`) — 302 to the pending authorization URL so
-	 *   viewport-safe copy targets can survive TUI truncation.
+	 * - {@link LAUNCH_PATH} (`/launch`) — 302 to the pending authorization URL
+	 *   only for requests carrying this attempt's launch token.
 	 *
 	 * `callbackPath` wins any collision: a Veyyon config that pins the provider
 	 * redirect at `/launch` (via `oauth.callbackPath` or a loopback
@@ -295,22 +302,26 @@ export abstract class OAuthCallbackFlow {
 	 * self-redirect. `#startCallbackServer` also suppresses `launchUrl` in that
 	 * case, so the launch route is never advertised when it would collide.
 	 */
-	#handleCallback(req: Request, expectedState: string): Response {
+	#handleCallback(req: Request, expectedState: string, launch: LaunchAttempt): Response {
 		const url = new URL(req.url);
 
 		if (url.pathname !== this.callbackPath) {
-			if (url.pathname === LAUNCH_PATH) {
-				const pending = this.#pendingAuthUrl;
-				if (!pending) {
-					return new Response("OAuth launch URL is no longer active", { status: 503 });
-				}
-				return Response.redirect(pending, 302);
+			if (
+				launch.authUrl &&
+				url.pathname === LAUNCH_PATH &&
+				matchesToken(url.searchParams.get("token"), launch.token)
+			) {
+				return new Response(null, {
+					status: 302,
+					headers: { Location: launch.authUrl, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+				});
 			}
 			return new Response("Not Found", { status: 404 });
 		}
 
 		const code = url.searchParams.get("code");
 		const state = url.searchParams.get("state") || "";
+		const stateMatches = matchesToken(state, expectedState);
 		const error = url.searchParams.get("error") || "";
 		const errorDescription = url.searchParams.get("error_description") || error;
 
@@ -322,7 +333,7 @@ export abstract class OAuthCallbackFlow {
 			resultState = { ok: false, error: `Authorization failed: ${errorDescription}` };
 		} else if (!code) {
 			resultState = { ok: false, error: "Missing authorization code" };
-		} else if (expectedState && state !== expectedState) {
+		} else if (!stateMatches) {
 			resultState = { ok: false, error: "State mismatch - possible CSRF attack" };
 		} else {
 			resultState = { ok: true, code, state };
@@ -331,10 +342,11 @@ export abstract class OAuthCallbackFlow {
 		// Signal to waitForCallback - capture refs before they could be cleared
 		const resolve = this.#callbackResolve;
 		const reject = this.#callbackReject;
+		// Only a callback carrying this login's state may settle it; any other request is unauthenticated.
 		queueMicrotask(() => {
 			if (resultState.ok) {
 				resolve?.({ code: resultState.code, state: resultState.state });
-			} else {
+			} else if (stateMatches) {
 				reject?.(resultState.error ?? "Unknown error");
 			}
 		});
@@ -387,7 +399,7 @@ export abstract class OAuthCallbackFlow {
 								// login attempt. Skipping the check when it is absent let an
 								// attacker-supplied code through and linked the operator's account
 								// to the attacker's.
-								if (expectedState && parsed.state !== expectedState) return null;
+								if (!matchesToken(parsed.state, expectedState)) return null;
 								return { code: parsed.code, state: parsed.state ?? "" };
 							})
 							.catch((): CallbackResult | null => null),
@@ -401,6 +413,15 @@ export abstract class OAuthCallbackFlow {
 
 		return settled(callbackPromise);
 	}
+}
+
+function matchesToken(actual: string | null | undefined, expected: string): boolean {
+	// UTF-16LE preserves the exact code units and their length, even for an arbitrary pasted string.
+	return (
+		!!actual &&
+		actual.length === expected.length &&
+		timingSafeEqual(Buffer.from(actual, "utf16le"), Buffer.from(expected, "utf16le"))
+	);
 }
 
 /**

@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { OAuthCallbackFlow } from "@veyyon/ai/registry/oauth/callback-server";
 import type { OAuthAuthInfo, OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
 import { parseHTML } from "linkedom";
 
 class CallbackProbeFlow extends OAuthCallbackFlow {
+	beforeExchange?: () => Promise<void>;
+
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string }> {
 		const url = new URL("https://auth.example.test/authorize");
 		url.searchParams.set("state", state);
@@ -12,6 +14,7 @@ class CallbackProbeFlow extends OAuthCallbackFlow {
 	}
 
 	async exchangeToken(code: string): Promise<OAuthCredentials> {
+		await this.beforeExchange?.();
 		return {
 			access: code,
 			refresh: "refresh-token",
@@ -22,7 +25,7 @@ class CallbackProbeFlow extends OAuthCallbackFlow {
 
 const activeAborts: AbortController[] = [];
 
-async function startFlow(): Promise<{
+async function startFlow(beforeExchange?: () => Promise<void>): Promise<{
 	info: OAuthAuthInfo;
 	abort: AbortController;
 	login: Promise<OAuthCredentials>;
@@ -42,6 +45,7 @@ async function startFlow(): Promise<{
 			allowPortFallback: true,
 		},
 	);
+	flow.beforeExchange = beforeExchange;
 	const login = flow.login();
 	const info = await auth.promise;
 	return { info, abort, login };
@@ -110,6 +114,203 @@ describe("OAuthCallbackFlow callback security", () => {
 		} finally {
 			abort.abort("test cleanup");
 			await login.catch(() => undefined);
+		}
+	});
+});
+
+describe("OAuthCallbackFlow listener exposure", () => {
+	it("binds the default callback listener to the IPv4 loopback address only", async () => {
+		const abort = new AbortController();
+		activeAborts.push(abort);
+		const serve = spyOn(Bun, "serve");
+		const auth = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new CallbackProbeFlow(
+			{ signal: abort.signal, onAuth: info => auth.resolve(info) },
+			{ preferredPort: 0 },
+		);
+		const login = flow.login().catch(() => undefined);
+		try {
+			await auth.promise;
+			expect(serve.mock.calls.map(([options]) => options.hostname)).toEqual(["127.0.0.1"]);
+		} finally {
+			serve.mockRestore();
+			abort.abort("test cleanup");
+			await login;
+		}
+	});
+
+	it.each([
+		["an error without state", { error: "access_denied" }],
+		["a code with a forged state", { code: "forged-code", state: "forged-state" }],
+		["a request without code or state", {}],
+	])("does not settle the pending login on %s", async (_label, query) => {
+		const { info, abort, login } = await startFlow();
+		let settled = false;
+		const outcome = login.then(
+			() => (settled = true),
+			() => (settled = true),
+		);
+		const authUrl = new URL(info.url);
+		const redirectUri = authUrl.searchParams.get("redirect_uri");
+		const state = authUrl.searchParams.get("state");
+		if (!redirectUri || !state) throw new Error("OAuth test flow did not advertise its callback parameters");
+
+		try {
+			const forged = new URL(redirectUri);
+			for (const [key, value] of Object.entries(query)) forged.searchParams.set(key, value);
+			await fetch(forged);
+			expect(settled).toBe(false);
+
+			const valid = new URL(redirectUri);
+			valid.searchParams.set("code", "valid-code");
+			valid.searchParams.set("state", state);
+			const response = await fetch(valid);
+			expect(response.status).toBe(200);
+			expect((await login).access).toBe("valid-code");
+		} finally {
+			abort.abort("test cleanup");
+			await outcome;
+		}
+	});
+});
+
+describe("OAuthCallbackFlow launch route security", () => {
+	it("rejects /launch without a token with a generic 404 and no Location or auth secrets", async () => {
+		const { info, abort, login } = await startFlow();
+		const loginSettled = login.catch(() => undefined);
+		try {
+			expect(info.launchUrl).toBeDefined();
+			const launchOrigin = new URL(info.launchUrl!).origin;
+			const state = new URL(info.url).searchParams.get("state");
+			if (!state) throw new Error("OAuth test flow did not advertise a state parameter");
+
+			for (const target of [`${launchOrigin}/launch`, `${launchOrigin}/launch?token=`]) {
+				const response = await fetch(target, { redirect: "manual" });
+				expect(response.status).toBe(404);
+				expect(response.headers.get("location")).toBeNull();
+				const body = await response.text();
+				expect(body).not.toContain(info.url);
+				expect(body).not.toContain("auth.example.test");
+				expect(body).not.toContain(state);
+			}
+		} finally {
+			abort.abort("test cleanup");
+			await loginSettled;
+		}
+	});
+
+	it("rejects an incorrect same-length launch token and callback state used as launch token", async () => {
+		const { info, abort, login } = await startFlow();
+		const loginSettled = login.catch(() => undefined);
+		try {
+			expect(info.launchUrl).toBeDefined();
+			const launchUrl = new URL(info.launchUrl!);
+			const token = launchUrl.searchParams.get("token");
+			expect(token).toMatch(/^[A-Za-z0-9_-]{22}$/);
+
+			const state = new URL(info.url).searchParams.get("state");
+			if (!state) throw new Error("OAuth test flow did not advertise a state parameter");
+			expect(token).not.toBe(state);
+
+			const wrongToken = (token![0] === "A" ? "B" : "A") + token!.slice(1);
+			expect(wrongToken).toHaveLength(token!.length);
+			expect(wrongToken).not.toBe(token);
+
+			for (const badToken of [wrongToken, state]) {
+				const attempt = new URL(launchUrl.origin);
+				attempt.pathname = "/launch";
+				attempt.searchParams.set("token", badToken);
+				const response = await fetch(attempt, { redirect: "manual" });
+				expect(response.status).toBe(404);
+				expect(response.headers.get("location")).toBeNull();
+				const body = await response.text();
+				expect(body).not.toContain(info.url);
+				expect(body).not.toContain("auth.example.test");
+				expect(body).not.toContain(state);
+				expect(body).not.toContain(token!);
+			}
+		} finally {
+			abort.abort("test cleanup");
+			await loginSettled;
+		}
+	});
+
+	it("redirects valid /launch requests with no-store/no-referrer and resolves login via the callback", async () => {
+		const { info, abort, login } = await startFlow();
+		const loginSettled = login.catch(() => undefined);
+		try {
+			expect(info.launchUrl).toBeDefined();
+			const launchUrl = new URL(info.launchUrl!);
+			expect(launchUrl.pathname).toBe("/launch");
+			const token = launchUrl.searchParams.get("token");
+			expect(token).toMatch(/^[A-Za-z0-9_-]{22}$/);
+
+			const state = new URL(info.url).searchParams.get("state");
+			if (!state) throw new Error("OAuth test flow did not advertise a state parameter");
+			expect(token).not.toBe(state);
+
+			const launchResponse = await fetch(launchUrl, { redirect: "manual" });
+			expect(launchResponse.status).toBe(302);
+			expect(launchResponse.headers.get("location")).toBe(info.url);
+			expect(launchResponse.headers.get("cache-control")).toBe("no-store");
+			expect(launchResponse.headers.get("referrer-policy")).toBe("no-referrer");
+
+			const redirectedAuthUrl = new URL(launchResponse.headers.get("location")!);
+			const redirectUri = redirectedAuthUrl.searchParams.get("redirect_uri");
+			const callbackState = redirectedAuthUrl.searchParams.get("state");
+			expect(redirectUri).toBeTruthy();
+			expect(callbackState).toBe(state);
+
+			const callbackUrl = new URL(redirectUri!);
+			callbackUrl.searchParams.set("code", "launch-flow-code");
+			callbackUrl.searchParams.set("state", callbackState!);
+			const callbackResponse = await fetch(callbackUrl, { redirect: "manual" });
+			expect(callbackResponse.status).toBe(200);
+
+			const credentials = await login;
+			expect(credentials.access).toBe("launch-flow-code");
+			expect(credentials.refresh).toBe("refresh-token");
+		} finally {
+			abort.abort("test cleanup");
+			await loginSettled;
+		}
+	});
+
+	it("revokes the launch shortcut when the callback settles while token exchange is pending", async () => {
+		const exchangeStarted = Promise.withResolvers<void>();
+		const releaseExchange = Promise.withResolvers<void>();
+		const { info, abort, login } = await startFlow(() => {
+			exchangeStarted.resolve();
+			return releaseExchange.promise;
+		});
+		const loginSettled = login.catch(() => undefined);
+		try {
+			const authUrl = new URL(info.url);
+			const redirectUri = authUrl.searchParams.get("redirect_uri");
+			const state = authUrl.searchParams.get("state");
+			if (!info.launchUrl || !redirectUri || !state) {
+				throw new Error("OAuth test flow did not advertise its launch and callback parameters");
+			}
+			const launch = await fetch(info.launchUrl, { redirect: "manual" });
+			expect(launch.status).toBe(302);
+
+			const callback = new URL(redirectUri);
+			callback.searchParams.set("code", "deferred-exchange-code");
+			callback.searchParams.set("state", state);
+			expect((await fetch(callback)).status).toBe(200);
+			await exchangeStarted.promise;
+
+			const expiredLaunch = await fetch(info.launchUrl, { redirect: "manual" });
+			expect(expiredLaunch.status).toBe(404);
+			expect(expiredLaunch.headers.get("location")).toBeNull();
+			expect(await expiredLaunch.text()).not.toContain(state);
+
+			releaseExchange.resolve();
+			expect((await login).access).toBe("deferred-exchange-code");
+		} finally {
+			releaseExchange.resolve();
+			abort.abort("test cleanup");
+			await loginSettled;
 		}
 	});
 });

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Require a per-attempt token for loopback OAuth launch shortcuts to protect the pending authorization URL ([#1149](https://github.com/Wladefant/veyyon/issues/1149)).
 - Recheck old Antigravity quota predictions against the same window in a fresh summary. Keep confirmed rate-limit holds in force ([Superboard #2679](https://github.com/Wladefant/superboard/issues/2679)).
 - Keep Gemini 4 tool history valid on Cloud Code Assist after a model switch or compaction ([#1284](https://github.com/Wladefant/veyyon/issues/1284)).
 - Cap new HTTP 400 and 413 request dumps at 256 files or 64 MiB per profile. Keep recent dumps for seven days and leave legacy files untouched ([Superboard #3367](https://github.com/Wladefant/superboard/issues/3367)).
