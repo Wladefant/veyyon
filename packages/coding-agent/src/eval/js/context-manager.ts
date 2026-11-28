@@ -17,7 +17,7 @@ import { JS_EVAL_PROCESS_ARG, JS_EVAL_WORKER_ARG } from "../../worker-args";
 import { attachSessionOwner } from "../executor-base";
 import { shouldDetachKernel } from "../py/spawn-options";
 import { errorFromPayload, toErrorPayload } from "./error-payload";
-import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
+import { callSessionTool, type JsStatusEvent, sanitizeEvalStatus } from "./tool-bridge";
 import { WorkerCore } from "./worker-core";
 import type {
 	EvalWorkerInbound,
@@ -529,7 +529,16 @@ function handleSessionMessage(session: JsSession, msg: EvalWorkerOutbound): void
 		}
 		case "display": {
 			const pending = session.pending.get(msg.runId);
-			pending?.runState.onDisplay?.(msg.output);
+			if (!pending?.runState.onDisplay) return;
+			const { output } = msg;
+			pending.runState.onDisplay(
+				output.type === "status"
+					? {
+							type: "status",
+							event: sanitizeEvalStatus(output.event, pending.toolSession.obfuscateProviderText, "worker"),
+						}
+					: output,
+			);
 			return;
 		}
 		case "tool-call":

@@ -39,10 +39,14 @@ function makeSession(cwd: string): ToolSession {
 it("sanitizes command and full output before the bridge publishes status", async () => {
 	using dir = TempDir.createSync("@veyyon-eval-status-");
 	const events: JsStatusEvent[] = [];
-	await callSessionTool("bash", { command: COMMAND }, {
-		session: makeSession(dir.path()),
-		emitStatus: event => events.push(event),
-	});
+	await callSessionTool(
+		"bash",
+		{ command: COMMAND },
+		{
+			session: makeSession(dir.path()),
+			emitStatus: event => events.push(event),
+		},
+	);
 	expect(events).toEqual([{ op: "run", cmd: BLOCKED, code: 0, output: BLOCKED }]);
 });
 
@@ -51,18 +55,30 @@ it("shares sanitized nested tool status between the live callback and retained d
 	const id = crypto.randomUUID();
 	const events: JsStatusEvent[] = [];
 	try {
-		const result = await executeJs('await tool.search({ input: "sample", path: "." }); void 0;', {
-			sessionId: id,
-			kernelOwnerId: id,
-			session: makeSession(dir.path()),
-			onStatus: event => events.push(event),
-		});
+		const result = await executeJs(
+			'await tool.search({ input: "sample", path: "." }); env("VALUE=fixture-key", "ignored"); void 0;',
+			{
+				sessionId: id,
+				kernelOwnerId: id,
+				session: makeSession(dir.path()),
+				onStatus: event => events.push(event),
+			},
+		);
 		expect(result.exitCode).toBe(0);
 		expect(events).toEqual([
-			{ op: "search", pattern: "sample", path: ".", count: 1, matches: [{ path: "sample.txt", lines: [BLOCKED, 7] }] },
+			{
+				op: "search",
+				pattern: "sample",
+				path: ".",
+				count: 1,
+				matches: [{ path: "sample.txt", lines: [BLOCKED, 7] }],
+			},
+			{ op: "env", key: BLOCKED, value: "<redacted>", action: "set" },
 		]);
-		const status = result.displayOutputs.find(output => output.type === "status");
-		expect(status?.event).toBe(events[0]);
+		const statuses = result.displayOutputs.filter(output => output.type === "status");
+		expect(statuses).toHaveLength(2);
+		expect(statuses[0]?.event).toBe(events[0]);
+		expect(statuses[1]?.event).toBe(events[1]);
 	} finally {
 		await disposeVmContextsByOwner(id);
 	}
