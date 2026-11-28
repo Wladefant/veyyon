@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Tell spawned lanes that a verified direct parent can amend its own assignment without overriding operator instructions or safety rules ([Refs #1020](https://github.com/Wladefant/veyyon/issues/1020)).
 - Give forwarded browser extension CDP commands 30 seconds to receive a reply from Chrome ([Refs #709](https://github.com/Wladefant/veyyon/issues/709)).
 - Include source file, line, and column in legacy Pi export prepass errors when Bun provides them ([Refs #985](https://github.com/Wladefant/veyyon/issues/985)).
 - Report whether a launch broker candidate exited or startup timed out. Keep a missing endpoint separate from the unknown cause ([Refs Wladefant/superboard#2626](https://github.com/Wladefant/superboard/issues/2626)).
