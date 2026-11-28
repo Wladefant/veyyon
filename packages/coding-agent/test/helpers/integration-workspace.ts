@@ -24,6 +24,7 @@
  *  - The workspace is a real temp dir; assert file CONTENT, not just that a tool
  *    was called.
  */
+import "../../../utils/test/helpers/real-data-tripwire";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentEvent } from "@veyyon/agent-core";

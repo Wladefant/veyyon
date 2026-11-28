@@ -20,6 +20,7 @@
  * is a build error at the call site, and a new required member on `ToolSession`
  * is a single failure here rather than 46 silent stubs that no longer match.
  */
+import "../../../utils/test/helpers/real-data-tripwire";
 import * as path from "node:path";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";

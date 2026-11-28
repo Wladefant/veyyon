@@ -7,6 +7,7 @@
  * `search_tool_bm25` needs the three discovery callbacks, `ssh` resolves its hosts from `ssh.json`
  * and `debug` its adapters from `dap.json`, both in the profile directory the caller supplies.
  */
+import "../../../utils/test/helpers/real-data-tripwire";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
