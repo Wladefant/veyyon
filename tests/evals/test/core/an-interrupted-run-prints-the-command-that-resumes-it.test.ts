@@ -36,6 +36,12 @@ const VALUE: Record<string, string> = {
 	"--trial-timeout": "60",
 	"--agent-timeout": "30",
 	"--timeout-multiplier": "1.5",
+	"--skill-experiment": "skill-exp-1",
+	"--skill-candidate": "skill-cand-1",
+	"--skill-phase": "pilot",
+	"--skill-selection": "top-1",
+	"--skill-score-run": "score-run-1",
+	"--skill-split-seed": "42",
 };
 
 /** A harness-declared flag, which the grammar accepts beside its own. */

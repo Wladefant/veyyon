@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import { installSessionSecretIntakeFactory } from "@veyyon/coding-agent/secrets/intake-session";
 import type { BuiltinToolLoadMode, ToolSession } from "@veyyon/coding-agent/tools";
 import {
 	BUILTIN_TOOLS,
@@ -56,8 +57,15 @@ const toolSession: ToolSession = {
  */
 async function getToolMetadata(): Promise<Map<string, { loadMode?: string; summary?: string }>> {
 	const metadata = new Map<string, { loadMode?: string; summary?: string }>();
-	for (const tool of await createTools(toolSession, Object.keys(BUILTIN_TOOLS))) {
-		metadata.set(tool.name, { loadMode: tool.loadMode, summary: tool.summary });
+	const uninstall = installSessionSecretIntakeFactory(toolSession, "test-owner", async () => {
+		throw new Error("Metadata enumeration must not open an intake broker");
+	});
+	try {
+		for (const tool of await createTools(toolSession, Object.keys(BUILTIN_TOOLS))) {
+			metadata.set(tool.name, { loadMode: tool.loadMode, summary: tool.summary });
+		}
+	} finally {
+		uninstall();
 	}
 	for (const tool of [
 		new AskTool({ ...toolSession, hasUI: true }),
@@ -133,6 +141,11 @@ describe("built-in tool loadMode annotations", () => {
 			}
 		}
 		expect(missing).toEqual([]);
+	});
+
+	it("keeps credential requests active when the session supports intake", async () => {
+		const metadata = await getToolMetadata();
+		expect(metadata.get("secret_request")?.loadMode).toBe("essential");
 	});
 
 	it("marks eval essential so it survives tools.discoveryMode 'all'", async () => {

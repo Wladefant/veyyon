@@ -37,6 +37,7 @@ import { dirname, join, relative, resolve } from "node:path";
 // JSON-with-comments parser, and a tsconfig is JSON with comments.
 import { Glob, JSONC } from "bun";
 
+import { runCheckTs } from "./check-ts";
 import { runnerSources } from "./runner-references";
 import { existingOnly, REPO_ROOT, type WorkspacePackage, workspacePackages } from "./workspace-layout";
 
@@ -269,12 +270,23 @@ describe("the typecheck covers scripts/ as well as the workspaces", () => {
 	});
 
 	/** Declaring it is not running it: the gate has to invoke it. */
-	it("runs it from check:ts, so the gate covers scripts/", () => {
+	it("runs it from check:ts, so the gate covers scripts/", async () => {
+		const checkTs: string = rootScripts()["check:ts"] ?? "";
+		const direct = checkTs.includes("bun run check:types");
+		// `check:ts` may delegate to the wrapper, which runs the root check:types as its first step.
+		const viaWrapper = checkTs === "bun scripts/check-ts.ts";
 		expect(
-			rootScripts()["check:ts"],
+			direct || viaWrapper,
 			"check:ts must run the root check:types; --workspaces alone never reaches scripts/",
-		).toContain("check:types");
-		expect(rootScripts()["check:ts"]).toContain("bun run check:types");
+		).toBe(true);
+		if (viaWrapper) {
+			const commands: string[][] = [];
+			await runCheckTs(async command => {
+				commands.push(command);
+				return 0;
+			});
+			expect(commands[0]).toEqual(["bun", "run", "check:types"]);
+		}
 	});
 
 	/**
@@ -337,21 +349,6 @@ describe("every repo-level test suite is actually run by something", () => {
 		expect(missing, "these are listed in repoScriptTests but do not exist; bun ignores them silently").toEqual([]);
 	});
 
-	/**
-	 * Suites deliberately not wired yet, each with the reason it is not.
-	 *
-	 * An exception belongs here, in the open, rather than as an absence nobody can
-	 * see. That is the whole point of the check: silence was the defect.
-	 */
-	// Empty, and that is the intended resting state. The one entry that lived here
-	// was `scripts/sync-root-changelog.test.ts`, held back while the root sync's
-	// scope was an open question: the generator read only
-	// `packages/coding-agent/CHANGELOG.md`, so entries recorded in any other
-	// package vanished on regeneration. The generator now aggregates every package
-	// and cuts inherited history at the fork point, so the suite is wired into
-	// `repoScriptTests` like any other.
-	const KNOWN_UNRUN = new Map<string, string>([]);
-
 	/** Outward drift. A suite referenced by nothing runs nowhere, and its green
 	 * assertions are decoration. */
 	it("leaves no scripts/*.test.ts unreferenced by any runner", () => {
@@ -359,7 +356,7 @@ describe("every repo-level test suite is actually run by something", () => {
 		const unreferenced = readdirSync(join(REPO_ROOT, "scripts"))
 			.filter(name => name.endsWith(".test.ts"))
 			.map(name => `scripts/${name}`)
-			.filter(rel => !REPO_SCRIPT_TESTS.includes(rel) && !others.includes(rel) && !KNOWN_UNRUN.has(rel));
+			.filter(rel => !REPO_SCRIPT_TESTS.includes(rel) && !others.includes(rel));
 		expect(
 			unreferenced,
 			"these suites are run by nothing: not repoScriptTests, not a workflow, not a root script. " +
