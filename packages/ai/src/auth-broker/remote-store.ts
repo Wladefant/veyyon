@@ -265,7 +265,7 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 				? { headersUpdatedAt: overlayMetadata.headersUpdatedAt }
 				: {}),
 			// An overlay may replace a window without providing authoritative quota.
-			...(base.provider === "google-antigravity" ? { authoritativeCounters: undefined } : {}),
+			...(base.provider === "google-antigravity" ? { authoritativeLimitIds: undefined } : {}),
 		},
 	};
 }
@@ -396,8 +396,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		for (const block of previous.blocks ?? []) {
 			const key = credentialBlockKey(incoming.id, block.providerKey, block.blockScope);
 			const authoritative = merged.get(key);
-			if (!authoritative || block.blockedUntilMs > authoritative.blockedUntilMs) {
+			if (!authoritative) {
 				merged.set(key, block);
+			} else if (
+				block.blockedUntilMs > authoritative.blockedUntilMs ||
+				(block.updatedAtMs ?? 0) > (authoritative.updatedAtMs ?? 0)
+			) {
+				merged.set(key, {
+					...authoritative,
+					blockedUntilMs: Math.max(block.blockedUntilMs, authoritative.blockedUntilMs),
+					updatedAtMs: Math.max(block.updatedAtMs ?? 0, authoritative.updatedAtMs ?? 0) || undefined,
+				});
 			}
 		}
 		const blocks = [...merged.values()].sort(compareCredentialBlockSnapshots);

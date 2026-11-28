@@ -13,11 +13,13 @@ import type { AuthCredentialStore } from "./types";
 
 /** How long a credential stays blocked when the provider names no reset time. */
 export const DEFAULT_CREDENTIAL_BACKOFF_MS = 60_000;
+const ANTIGRAVITY_PREDICTION_WINDOWS = ["5h", "weekly", "daily"];
 
 /** Old untagged counter blocks may be provider refusals and must not be reconciled. */
 function predictionScope(providerKey: string, blockScope: string | undefined): string | undefined {
 	if (providerKey !== "google-antigravity:oauth") return undefined;
 	if (blockScope === "counter:google" || blockScope === "counter:claude-gpt") return `predicted:${blockScope}`;
+	return undefined;
 }
 
 /** One in-memory rate-limit block: its deadline plus the clock reading that set it. */
@@ -171,23 +173,28 @@ export class CredentialBlocks {
 				blockedUntil = persistedScopedBlockedUntil;
 			}
 		}
-		const predictedScope = includePredictions && predictionScope(providerKey, blockScope);
-		if (blockedUntil === undefined && predictedScope) {
-			const cutoff = this.#predictionCutoff.get(`${credentialId}\0${predictedScope}`);
-			const validCutoff = cutoff !== undefined && cutoff <= nowMs - USAGE_REPORT_TTL_MS ? cutoff : undefined;
-			const local = this.#getCredentialBlockedUntilForKey(
-				toScopedBackoffKey(providerKey, predictedScope),
-				credentialIndex,
-				nowMs,
-				validCutoff,
-			);
-			const persisted = this.#readPersistedCredentialBlock(credentialId, providerKey, predictedScope, validCutoff);
-			return local === undefined ? persisted : Math.max(local, persisted ?? 0);
+		const predictedPrefix = includePredictions && predictionScope(providerKey, blockScope);
+		if (blockedUntil === undefined && predictedPrefix) {
+			for (const window of ANTIGRAVITY_PREDICTION_WINDOWS) {
+				const scope = `${predictedPrefix}:${window}`;
+				const cutoff = this.#predictionCutoff.get(`${credentialId}\0${scope}`);
+				// Do not use a proof from before a backward clock jump.
+				const validCutoff = cutoff !== undefined && cutoff <= nowMs - USAGE_REPORT_TTL_MS ? cutoff : undefined;
+				const local = this.#getCredentialBlockedUntilForKey(
+					toScopedBackoffKey(providerKey, scope),
+					credentialIndex,
+					nowMs,
+					validCutoff,
+				);
+				const persisted = this.#readPersistedCredentialBlock(credentialId, providerKey, scope, validCutoff);
+				const prediction = Math.max(local ?? 0, persisted ?? 0);
+				if (prediction > (blockedUntil ?? 0)) blockedUntil = prediction;
+			}
 		}
 		return blockedUntil;
 	}
 
-	/** A prediction may trigger a cached usage check only after its initial hold. */
+	/** Predictions may recheck usage through its cache. Refusals never trigger a probe. */
 	predictionProbeCredentialId(
 		provider: string,
 		providerKey: string,
@@ -200,18 +207,23 @@ export class CredentialBlocks {
 		if (this.getCredentialBlockedUntil(provider, providerKey, credentialIndex, blockScope, false) !== undefined) {
 			return undefined;
 		}
-		const local = this.reconcileAfterMs(providerKey, scope, credentialIndex);
-		const persisted = this.#store.getCredentialBlockReconcileAfter?.(credentialId, providerKey, scope) ?? 0;
-		return Math.max(local, persisted) <= Date.now() ? credentialId : undefined;
+		return credentialId;
 	}
 
 	/** Apply the report's evidence on read, without mutating shared block rows. */
-	reconcilePrediction(providerKey: string, blockScope: string | undefined, credentialId: number, fetchedAt: number): void {
+	reconcilePrediction(
+		providerKey: string,
+		blockScope: string | undefined,
+		window: string | undefined,
+		credentialId: number,
+		fetchedAt: number,
+	): void {
 		const scope = predictionScope(providerKey, blockScope);
 		const now = Date.now();
-		if (!scope || !Number.isFinite(fetchedAt) || fetchedAt > now || fetchedAt < now - USAGE_REPORT_TTL_MS) return;
+		if (!scope || !window || !ANTIGRAVITY_PREDICTION_WINDOWS.includes(window)) return;
+		if (!Number.isFinite(fetchedAt) || fetchedAt > now || fetchedAt < now - USAGE_REPORT_TTL_MS) return;
 		const cutoff = fetchedAt - USAGE_REPORT_TTL_MS;
-		const key = `${credentialId}\0${scope}`;
+		const key = `${credentialId}\0${scope}:${window}`;
 		this.#predictionCutoff.set(key, Math.max(this.#predictionCutoff.get(key) ?? 0, cutoff));
 	}
 
@@ -264,9 +276,13 @@ export class CredentialBlocks {
 		credentialIndex: number,
 		blockedUntilMs: number,
 		blockScope: string | undefined = undefined,
-		source?: "usage-report",
+		predictedWindow?: string,
 	): void {
-		const predictedScope = source === "usage-report" ? predictionScope(providerKey, blockScope) : undefined;
+		const prefix = predictionScope(providerKey, blockScope);
+		const predictedScope =
+			prefix && predictedWindow && ANTIGRAVITY_PREDICTION_WINDOWS.includes(predictedWindow)
+				? `${prefix}:${predictedWindow}`
+				: undefined;
 		blockScope = predictedScope ?? blockScope;
 		const backoffKey = toScopedBackoffKey(providerKey, blockScope);
 		const nowMs = Date.now();

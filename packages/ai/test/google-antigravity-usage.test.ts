@@ -378,7 +378,7 @@ describe("antigravity usage provider", () => {
 
 		expect(report).not.toBeNull();
 		expect(report!.limits).toHaveLength(4);
-		expect(report!.metadata?.authoritativeCounters).toEqual(["google", "claude-gpt"]);
+		expect(report!.metadata?.authoritativeLimitIds).toEqual(report!.limits.map(limit => limit.id));
 
 		const geminiWeekly = report!.limits.find(l => l.id.includes(":google:") && l.scope.windowId === "weekly");
 		const gemini5h = report!.limits.find(l => l.id.includes(":google:") && l.scope.windowId === "5h");
@@ -437,7 +437,7 @@ describe("antigravity usage provider", () => {
 		expect(report?.limits.some(limit => limit.id.includes(":google:"))).toBe(true);
 		expect(report?.limits.some(limit => limit.id.includes(":claude-gpt:"))).toBe(true);
 		expect(report?.limits[0]?.amount.remainingFraction).toBe(0.6);
-		expect(report?.metadata?.authoritativeCounters).toEqual(["claude-gpt"]);
+		expect(report?.metadata?.authoritativeLimitIds).toEqual(["google-antigravity:claude-gpt:default:5h"]);
 	});
 
 	it("keeps summary windows authoritative when supplementing a counter", async () => {

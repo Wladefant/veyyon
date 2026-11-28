@@ -286,15 +286,12 @@ function buildReportFromQuotaSummary(
 	// Most-pressured first: `antigravityRankingStrategy` reads index 0 as the
 	// bottleneck when it picks between two accounts of this provider.
 	limits.sort((a, b) => (a.amount.remainingFraction ?? 1) - (b.amount.remainingFraction ?? 1));
-	const authoritativeCounters = [GEMINI_COUNTER.key, CLAUDE_AND_GPT_COUNTER.key].filter(counter =>
-		limits.some(limit => limit.id.startsWith(`${params.provider}:${counter}:`)),
-	);
 
 	return {
 		provider: params.provider,
 		fetchedAt: nowMs,
 		limits,
-		metadata: { ...reportMetadata(endpoint, credential), authoritativeCounters },
+		metadata: { ...reportMetadata(endpoint, credential), authoritativeLimitIds: limits.map(limit => limit.id) },
 		raw: data,
 	};
 }

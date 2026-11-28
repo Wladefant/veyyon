@@ -12,7 +12,7 @@ import type { OpenAICodexPlanRequirement } from "./openai-codex-plan";
 import { getOpenAICodexPlanPriority } from "./openai-codex-plan";
 import type { ApiKeyCredential, AuthCredential, OAuthCredential } from "./types";
 import type { UsageReporting } from "./usage-reporting";
-import { getScopedUsageLimits, getUsageResetAtMs, isUsageLimitReached } from "./usage-reports";
+import { getScopedUsageLimits, getUsagePredictionWindow, getUsageResetAtMs, isUsageLimitReached } from "./usage-reports";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
 /**
@@ -298,18 +298,30 @@ export class CredentialRanking {
 				usage = await this.#reportFor(request, selection.credential);
 				usageChecked = true;
 				if (predictionId !== undefined && usage?.provider === "google-antigravity") {
-					const counters = usage.metadata?.authoritativeCounters;
+					const authoritativeIds = usage.metadata?.authoritativeLimitIds;
 					const counter = request.blockScope?.slice("counter:".length);
 					const limits = getScopedUsageLimits(request.strategy, usage, request.rankingContext);
 					if (
 						usage.metadata?.headersUpdatedAt === undefined &&
-						Array.isArray(counters) &&
-						counters.includes(counter) &&
+						Array.isArray(authoritativeIds) &&
 						limits.length > 0 &&
-						limits.every(limit => limit.amount.remainingFraction !== undefined) &&
 						!isUsageLimitReached(limits)
 					) {
-						this.#blocks.reconcilePrediction(request.providerKey, request.blockScope, predictionId, usage.fetchedAt);
+						for (const limit of limits) {
+							if (
+								limit.id.startsWith(`${usage.provider}:${counter}:`) &&
+								authoritativeIds.includes(limit.id) &&
+								(limit.amount.remainingFraction ?? 0) > 0
+							) {
+								this.#blocks.reconcilePrediction(
+									request.providerKey,
+									request.blockScope,
+									limit.scope.windowId,
+									predictionId,
+									usage.fetchedAt,
+								);
+							}
+						}
 					}
 				}
 				blockedUntil = this.#blockedUntil(request, selection.index);
@@ -397,7 +409,7 @@ export class CredentialRanking {
 					selection.index,
 					blockedUntil,
 					request.blockScope,
-					"usage-report",
+					request.provider === "google-antigravity" ? getUsagePredictionWindow(scopedLimits) : undefined,
 				);
 				blocked = true;
 			}
