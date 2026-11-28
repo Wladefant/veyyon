@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { resolveContextLimit } from "@veyyon/coding-agent/config/compaction-strategy";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -22,6 +23,26 @@ import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { e2eApiKey } from "./helpers/e2e-session";
+
+describe("per-model compaction thresholds", () => {
+	const window = 100_000;
+	const model = { provider: "anthropic", id: "claude-sonnet-4-5" };
+	const settings = Settings.isolated({
+		"compaction.threshold": "70%",
+		"compaction.thresholdByModel": { "anthropic/claude-sonnet-4-5": "40%" },
+	});
+
+	it("uses the active model's override for the context limit", () => {
+		const compaction = settings.getGroup("compaction");
+		expect(resolveContextLimit(window, compaction, model)).toEqual({ tokens: 40_000, kind: "compaction" });
+	});
+
+	it("preserves the base threshold when the active model has no override", () => {
+		const compaction = settings.getGroup("compaction");
+		const otherModel = { ...model, provider: "openrouter" };
+		expect(resolveContextLimit(window, compaction, otherModel)).toEqual({ tokens: 70_000, kind: "compaction" });
+	});
+});
 
 describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", () => {
 	let session: AgentSession;
