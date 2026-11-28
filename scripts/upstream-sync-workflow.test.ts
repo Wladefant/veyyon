@@ -14,8 +14,7 @@ test("upstream sync is admitted only on the trusted OVH pool from main", () => {
 	expect(job.if).toContain("github.ref == 'refs/heads/main'");
 	expect(job.if).toContain("github.repository == 'Wladefant/veyyon'");
 });
-
-test("drift pushes only the upstream-tip candidate and opens a draft into unchanged main", () => {
+test("drift pushes only the upstream-tip candidate and opens a draft into unchanged main", async () => {
 	const root = mkdtempSync(join(tmpdir(), "upstream-sync-"));
 	try {
 		const origin = join(root, "origin");
