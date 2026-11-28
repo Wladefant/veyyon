@@ -536,6 +536,7 @@ class OpenAIResponsesStreamRun {
 	#rawRequestDump: RawHttpRequestDump | undefined;
 	/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
 	#wireBodyJson: string | undefined;
+	#wireModelId: string | undefined;
 	#chainState: OpenAIResponsesChainState | undefined;
 	#sentPreviousResponseId: string | undefined;
 	/** Set once a rejection dropped strict tools; every later rebuild of this call keeps them off. */
@@ -842,6 +843,7 @@ class OpenAIResponsesStreamRun {
 		cached.wireBodyJson = wireBodyJson;
 		plan.effortFallbacks.sent(cached.wireParams);
 		this.#wireBodyJson = wireBodyJson;
+		this.#wireModelId = cached.wireParams.model;
 		return { body: wireBodyJson };
 	}
 
@@ -975,6 +977,8 @@ class OpenAIResponsesStreamRun {
 				sawTerminalResponseEvent = true;
 			},
 			requestServiceTier: options?.serviceTier,
+			// Compatibility gateways and Azure deployments can report an unrelated alias.
+			requestModelId: model.provider === "openai" ? this.#wireModelId : undefined,
 		});
 		const localAbortReason = abortTracker.getLocalAbortReason();
 		if (localAbortReason) throw localAbortReason;

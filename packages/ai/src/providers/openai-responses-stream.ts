@@ -380,9 +380,11 @@ export function finalizeCustomToolCallInputDone(block: ResponsesToolCallBlock, i
 	block.arguments = { input };
 }
 
-type OpenAIResponsesTerminalStreamEvent =
-	| Extract<ResponseStreamEvent, { type: "response.completed" | "response.incomplete" }>
-	| { type: "response.done"; response?: Partial<OpenAIResponse> };
+interface OpenAIResponsesTerminalStreamEvent {
+	type: "response.completed" | "response.incomplete" | "response.done";
+	response?: Partial<OpenAIResponse> & { incomplete?: boolean };
+	incomplete?: boolean;
+}
 
 /**
  * Some Responses-compatible backends (Azure deployments among them) report
@@ -417,6 +419,8 @@ export interface ProcessResponsesStreamOptions {
 	 * response omits the `service_tier` echo. Only applied for `provider: "openai"`.
 	 */
 	requestServiceTier?: ServiceTier;
+	/** Model sent on a route whose response model IDs are comparable to the requested ID. */
+	requestModelId?: string;
 }
 
 type StreamingToolCallBlock = ToolCall & {
@@ -723,6 +727,7 @@ class ResponsesStreamDecoder<TApi extends Api> {
 	readonly #options: ProcessResponsesStreamOptions | undefined;
 	readonly #deltaShape: ToolCallArgumentsDeltaShape;
 	#sawFirstToken = false;
+	#reportedModel: string | undefined;
 
 	constructor(
 		output: AssistantMessage,
@@ -741,6 +746,7 @@ class ResponsesStreamDecoder<TApi extends Api> {
 	apply(event: ResponseStreamEvent): boolean {
 		switch (event.type) {
 			case "response.created":
+				this.#checkModel(event.response.model);
 				this.#output.responseId = event.response.id;
 				return false;
 			case "response.output_item.added":
@@ -787,7 +793,7 @@ class ResponsesStreamDecoder<TApi extends Api> {
 			default: {
 				const terminalEvent = getOpenAIResponsesTerminalEvent(event);
 				if (!terminalEvent) return false;
-				this.#complete(terminalEvent.response);
+				this.#complete(terminalEvent);
 				return true;
 			}
 		}
@@ -1106,7 +1112,21 @@ class ResponsesStreamDecoder<TApi extends Api> {
 		this.#stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: this.#output });
 	}
 
-	#complete(response: OpenAIResponsesTerminalStreamEvent["response"]): void {
+	#checkModel(reported: string | undefined): void {
+		const requested = this.#options?.requestModelId;
+		if (!requested || !reported) return;
+		const isSnapshotOfAlias =
+			reported.startsWith(`${requested}-`) && /^\d{4}-\d{2}-\d{2}$/.test(reported.slice(requested.length + 1));
+		if ((reported !== requested && !isSnapshotOfAlias) || (this.#reportedModel && reported !== this.#reportedModel)) {
+			throw new AIError.ProviderResponseError("Responses stream reported a mismatched model", {
+				provider: this.#model.provider,
+				kind: "output",
+			});
+		}
+		this.#reportedModel = reported;
+	}
+
+	#complete({ response, incomplete }: OpenAIResponsesTerminalStreamEvent): void {
 		const output = this.#output;
 		const model = this.#model;
 		finalizePendingResponsesToolCalls(output);
@@ -1121,6 +1141,13 @@ class ResponsesStreamDecoder<TApi extends Api> {
 			(response as { service_tier?: unknown } | undefined)?.service_tier,
 			this.#options?.requestServiceTier,
 		);
+		this.#checkModel(response?.model);
+		if (incomplete === true || response?.incomplete === true) {
+			throw new AIError.ProviderResponseError("Responses terminal event marked the stream incomplete", {
+				provider: model.provider,
+				kind: "output",
+			});
+		}
 		output.stopReason = mapOpenAIResponsesStopReason(response?.status);
 		if (response?.status === "failed" || response?.status === "cancelled") {
 			const statusDetails = (response as ResponsesStatusDetailsView).status_details;

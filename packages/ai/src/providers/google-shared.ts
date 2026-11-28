@@ -737,23 +737,38 @@ export function applyGoogleUsage(model: Model<Api>, output: AssistantMessage, us
 	calculateCost(model, output.usage);
 }
 
-/**
- * Settle a response body that ended without a `finishReason`.
- *
- * That is a transport-clean EOF, not a dropped connection, and several Gemini-compatible
- * servers never send the marker at all; `stopReasonForTerminallessEof` holds the judgement
- * for every dialect. Google delivers a function call whole in one part, with `args` already
- * parsed and an id minted, so a name is the only field a partial call can be missing.
- */
-export function settleGoogleTerminallessEof(output: AssistantMessage, provider: string, surface: string): void {
+export function throwGoogleIncompleteStream(provider: string, surface: string): never {
+	throw new AIError.ProviderResponseError(
+		`${surface} stream ended without a finish reason (connection dropped or response truncated)`,
+		{ provider, kind: "incomplete-stream" },
+	);
+}
+
+/** Check reported identities without treating a missing modelVersion as an identity claim. */
+export function observeGoogleModelVersion(
+	reported: string | undefined,
+	previous: string | undefined,
+	requested: string,
+	provider: string,
+): string | undefined {
+	if (!reported) return previous;
+	const id = reported.replace(/^models\//, "");
+	const expected = requested.replace(/^models\//, "");
+	const isVersionOfAlias = id.startsWith(`${expected}-`) && /^\d{3}$/.test(id.slice(expected.length + 1));
+	if ((previous && id !== previous) || (id !== expected && !isVersionOfAlias && !expected.endsWith("-latest"))) {
+		throw new AIError.ProviderResponseError("Google stream reported a mismatched model", {
+			provider,
+			kind: "output",
+		});
+	}
+	return id;
+}
+
+/** Retain the marker-less EOF policy for Vertex-compatible endpoints. */
+function settleGoogleVertexTerminallessEof(output: AssistantMessage, provider: string): void {
 	const toolBatchIsComplete = output.content.every(block => block.type !== "toolCall" || block.name.length > 0);
 	const stopReason = stopReasonForTerminallessEof(output.content, toolBatchIsComplete);
-	if (stopReason === undefined) {
-		throw new AIError.ProviderResponseError(
-			`${surface} stream ended without a finish reason (connection dropped or response truncated)`,
-			{ provider, kind: "incomplete-stream" },
-		);
-	}
+	if (stopReason === undefined) throwGoogleIncompleteStream(provider, "Google API");
 	output.stopReason = stopReason;
 }
 
@@ -797,6 +812,7 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 	const blocks = new GoogleResponseBlocks(output, stream, args.retainTextSignature === true);
 	let firstTokenSeen = false;
 	let sawFinishReason = false;
+	let reportedModel: string | undefined;
 
 	for await (const chunk of googleStream) {
 		if (chunk.error) {
@@ -807,6 +823,9 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 				: new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 		}
 		throwIfGooglePromptBlocked(chunk, model.provider);
+		if (model.api === "google-generative-ai") {
+			reportedModel = observeGoogleModelVersion(chunk.modelVersion, reportedModel, model.id, model.provider);
+		}
 		const candidate = chunk.candidates?.[0];
 		const parts = candidate?.content?.parts;
 		if (parts) {
@@ -835,7 +854,10 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 	if (options?.signal?.aborted) {
 		throw new AIError.RequestAbortError();
 	}
-	if (!sawFinishReason) settleGoogleTerminallessEof(output, model.provider, "Google API");
+	if (!sawFinishReason) {
+		if (model.api === "google-generative-ai") throwGoogleIncompleteStream(model.provider, "Google API");
+		settleGoogleVertexTerminallessEof(output, model.provider);
+	}
 	googleDoneReason(output, model.provider);
 }
 
