@@ -35,6 +35,7 @@ import { contextCompaction } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { ShakeMode, ShakeResult } from "@veyyon/kernel/session/shake-types";
 import { errorMessage, formatCount, logger } from "@veyyon/utils";
+import { resolveModelCompactionSettings } from "../../config/compaction-strategy";
 import type { Settings } from "../../config/settings";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { ScheduledAgentContinueOptions } from "../agent-session-types";
@@ -140,7 +141,10 @@ export class CompactionRecovery {
 	#compactionBudget(bar: CompactionBar): CompactionBudget | undefined {
 		const contextWindow = this.#session.model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = resolveModelCompactionSettings(
+			this.#session.settings.getGroup("compaction"),
+			this.#session.model,
+		);
 		const residualTokens = this.#residualContextTokens(contextWindow);
 		if (bar === "fit") {
 			const reserve = resolveBudgetReserveTokens(contextWindow, compactionSettings);

@@ -48,6 +48,7 @@ import { errorMessage, isAbortError, logger } from "@veyyon/utils";
 import {
 	type CompactionEngineAction,
 	resolveCompactionEngineAction,
+	resolveModelCompactionSettings,
 	toAgentCompactionSettings,
 } from "../../config/compaction-strategy";
 import type { SessionBeforeCompactResult } from "../../extensibility/extensions";
@@ -216,7 +217,10 @@ export class CompactionRuntime {
 				);
 			}
 
-			const compactionSettings = this.#session.settings.getGroup("compaction");
+			const compactionSettings = resolveModelCompactionSettings(
+				this.#session.settings.getGroup("compaction"),
+				this.#session.model,
+			);
 			// The optional `/compact summary` token resolves before this point and
 			// pins the sole strategy for this invocation.
 			const effectiveSettings = compactMode
@@ -457,9 +461,15 @@ export class CompactionRuntime {
 		this.#compactionClampNoticeWindow = contextWindow;
 
 		if (resolved.invalidRaw !== undefined) {
+			const setting =
+				compactionSettings.modelThreshold === undefined ? "compaction.threshold" : "compaction.thresholdByModel";
+			const hint =
+				compactionSettings.modelThreshold === undefined
+					? "Set a valid value in /settings -> Model -> Auto-Compaction Threshold."
+					: "Set a valid value for this model in config.yml.";
 			this.#session.emitNotice(
 				"warning",
-				`compaction.threshold is set to "${resolved.invalidRaw}", which is not auto, a percent (85%), or a token amount (170000); compacting at ${formatCompactionThreshold(resolved, contextWindow)} instead. Set a valid value in /settings -> Model -> Auto-Compaction Threshold.`,
+				`${setting} is set to "${resolved.invalidRaw}", which is not auto, a percent (85%), or a token amount (170000); compacting at ${formatCompactionThreshold(resolved, contextWindow)} instead. ${hint}`,
 				"compaction",
 			);
 			return;
@@ -571,7 +581,10 @@ export class CompactionRuntime {
 			phase?: CodexCompactionContext["phase"];
 		} = {},
 	): Promise<CompactionCheckResult> {
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = resolveModelCompactionSettings(
+			this.#session.settings.getGroup("compaction"),
+			this.#session.model,
+		);
 		// Idle compaction has its own gate; `compaction.enabled` governs the rest.
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		if (this.isAutoCompactionSuppressed()) {
@@ -980,7 +993,7 @@ export class CompactionRuntime {
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
 
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = resolveModelCompactionSettings(this.#session.settings.getGroup("compaction"), model);
 		const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
 		const splits = this.#getContextSplits(contextWindow);
 

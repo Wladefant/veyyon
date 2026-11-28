@@ -112,6 +112,8 @@ export function parseCompactionThreshold(raw: string | number | undefined | null
 /** Inputs the migration needs: the current key plus the two retired ones. */
 export interface LegacyThresholdInputs {
 	threshold?: string | number;
+	/** A threshold selected for the active model, before falling back to profile settings. */
+	modelThreshold?: string | number;
 	thresholdTokens?: number;
 	thresholdPercent?: number;
 }
@@ -127,6 +129,8 @@ export function withLegacyCompactionThreshold(inputs: LegacyThresholdInputs): {
 	spec: CompactionThresholdSpec;
 	legacyKey?: "thresholdTokens" | "thresholdPercent";
 } {
+	if (inputs.modelThreshold !== undefined) return { spec: parseCompactionThreshold(inputs.modelThreshold) };
+
 	const current = parseCompactionThreshold(inputs.threshold);
 	if (current.kind !== "auto" || current.invalidRaw !== undefined) return { spec: current };
 
@@ -252,6 +256,10 @@ export interface CompactionSettings {
 	 * threshold surface — see {@link resolveCompactionThreshold}.
 	 */
 	threshold?: string;
+	/** Overrides keyed by the exact `provider/model-id` of the active model. */
+	thresholdByModel?: Readonly<Record<string, string | number>>;
+	/** Selected override for this model. Omit to preserve the base threshold and legacy fallback. */
+	modelThreshold?: string | number;
 	/** Retired; read only by the migration in {@link withLegacyCompactionThreshold}. */
 	thresholdPercent?: number;
 	/** Retired; read only by the migration in {@link withLegacyCompactionThreshold}. */

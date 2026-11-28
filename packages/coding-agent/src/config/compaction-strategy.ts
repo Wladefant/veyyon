@@ -47,6 +47,19 @@ export interface ResolvedContextLimit {
 	readonly kind: ContextLimitKind;
 }
 
+type CompactionModel = { provider: string; id: string };
+
+/** Select the active model's threshold without mutating the shared profile settings. */
+export function resolveModelCompactionSettings<T extends CoreCompactionSettings>(
+	settings: T,
+	model?: CompactionModel,
+): T {
+	const override = model && settings.thresholdByModel?.[`${model.provider}/${model.id}`];
+	return typeof override === "string" || typeof override === "number"
+		? { ...settings, modelThreshold: override }
+		: settings;
+}
+
 /**
  * When the context runs out: the auto-compaction fire point, or the model window
  * when nothing will fire. The ONE owner of that question.
@@ -64,12 +77,16 @@ export interface ResolvedContextLimit {
  * `isThresholdTokensClampedForWindow` so an operator whose model-independent amount
  * was capped for a smaller model hears about it.
  */
-export function resolveContextLimit(contextWindow: number, settings: CoreCompactionSettings): ResolvedContextLimit {
+export function resolveContextLimit(
+	contextWindow: number,
+	settings: CoreCompactionSettings,
+	model?: CompactionModel,
+): ResolvedContextLimit {
 	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return { tokens: 0, kind: "window" };
 	if (!settings.enabled) {
 		return { tokens: contextWindow, kind: "window" };
 	}
-	const threshold = resolveThresholdTokens(contextWindow, settings);
+	const threshold = resolveThresholdTokens(contextWindow, resolveModelCompactionSettings(settings, model));
 	// A non-positive threshold means no usable fire point was configured.
 	if (!(threshold > 0)) return { tokens: contextWindow, kind: "window" };
 	return { tokens: Math.min(threshold, contextWindow), kind: "compaction" };
@@ -83,11 +100,12 @@ export function measureContextGauge(
 	usedTokens: number | null,
 	contextWindow: number,
 	compaction: CoreCompactionSettings | undefined,
+	model?: CompactionModel,
 ): StatusContextBreakdown {
 	let contextLimit = contextWindow;
 	let contextLimitKind: ContextLimitKind = "window";
 	if (compaction) {
-		const limit = resolveContextLimit(contextWindow, compaction);
+		const limit = resolveContextLimit(contextWindow, compaction, model);
 		contextLimit = limit.tokens;
 		contextLimitKind = limit.kind;
 	}
