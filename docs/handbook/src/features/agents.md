@@ -97,6 +97,11 @@ agent shares that agent's lane.
 Veyyon does not coordinate this limit across processes or with external workers.
 It ignores old lane ledgers on disk.
 
+A supervised agent's no-progress clock pauses when all its active tools are
+`task` calls waiting only for a spawn slot. The clock resumes when capacity
+becomes available. A continuous queue wait times out after one hour, and a
+configured run limit can still expire sooner.
+
 A separate owner marker protects each native agent's transcript until that
 session closes. A second process cannot open the same native transcript for a
 turn. Sessions that use different transcripts do not share an owner marker.

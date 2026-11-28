@@ -159,6 +159,41 @@ function recordRuns(): string[] {
 	return ran;
 }
 
+describe("inline spawn queue observations", () => {
+	it.each(["grant", "cancel"])("reports queue exit on %s", async exit => {
+		const semaphore = await treeSemaphore();
+		await semaphore.acquire();
+		const ran = recordRuns();
+		const updates: TaskToolDetails[] = [];
+		const cancel = new AbortController();
+		const run = createScheduler().runInline(
+			{ ...callFor(updates), signal: cancel.signal },
+			[{ agent: "task", name: "InlineChild", task: "Work." }],
+		);
+		const queueStates = () => updates.flatMap(update => update.waitingForSpawnSlot ?? []);
+		try {
+			expect(queueStates()).toEqual([true]);
+			expect(ran).toEqual([]);
+			if (exit === "cancel") {
+				cancel.abort(new Error("Test cancelled while queued"));
+				await expect(run).rejects.toThrow("Test cancelled while queued");
+				expect(ran).toEqual([]);
+				expect(await slotIsFree(semaphore)).toBe(false);
+			} else {
+				semaphore.release();
+				await run;
+				expect(ran).toEqual(["InlineChild"]);
+				expect(await slotIsFree(semaphore)).toBe(true);
+			}
+			expect(queueStates()).toEqual([true, false]);
+		} finally {
+			cancel.abort();
+			if (exit === "cancel") semaphore.release();
+			await run.catch(() => {});
+		}
+	});
+});
+
 describe("a background spawn and its session tree's spawn slot", () => {
 	it.each([
 		{ queued: true, awaitReply: false, code: "queued_not_yet_on_irc" },
