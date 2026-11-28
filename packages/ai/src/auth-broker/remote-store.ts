@@ -1242,6 +1242,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			const existing = blocks[blockIndex]!;
 			blocks[blockIndex] = {
 				...existing,
+				...incoming,
 				blockedUntilMs: Math.max(existing.blockedUntilMs, incoming.blockedUntilMs),
 			};
 		}

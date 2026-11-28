@@ -678,6 +678,32 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(authoritative.snapshot.credentials).toEqual([]);
 	});
 
+	test("an old quota proof cannot hide a newer pending prediction", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected broker snapshot");
+		const entry = initial.snapshot.credentials[0]!;
+		const now = Date.now();
+		const block = {
+			providerKey: "google-antigravity:oauth",
+			blockScope: "predicted:counter:google",
+			blockedUntilMs: now + 60_000,
+			updatedAtMs: now - 600_000,
+		};
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: { ...initial.snapshot, credentials: [{ ...entry, blocks: [block] }] },
+		});
+		spyOn(client, "upsertCredentialBlock").mockResolvedValue({ ok: true });
+		const { providerKey, blockScope, blockedUntilMs } = block;
+		const cutoff = now - 300_000;
+		expect(remote.getCredentialBlock(entry.id, providerKey, blockScope, cutoff)).toBeUndefined();
+		expect(remote.getCredentialBlock(entry.id, providerKey, blockScope)).toBe(blockedUntilMs);
+
+		remote.upsertCredentialBlock({ ...block, credentialId: entry.id, updatedAtMs: now });
+		expect(remote.getCredentialBlock(entry.id, providerKey, blockScope, cutoff)).toBe(blockedUntilMs);
+	});
+
 	test("retains a known safety block through an idle SSE GET failure, then adopts a peer block", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });

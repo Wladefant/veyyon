@@ -266,7 +266,8 @@ export class CredentialBlocks {
 		blockScope: string | undefined = undefined,
 		source?: "usage-report",
 	): void {
-		if (source === "usage-report") blockScope = predictionScope(providerKey, blockScope) ?? blockScope;
+		const predictedScope = source === "usage-report" ? predictionScope(providerKey, blockScope) : undefined;
+		blockScope = predictedScope ?? blockScope;
 		const backoffKey = toScopedBackoffKey(providerKey, blockScope);
 		const nowMs = Date.now();
 		const backoffMap = this.#credentialBackoff.get(backoffKey) ?? new Map<number, InMemoryCredentialBlock>();
@@ -293,6 +294,7 @@ export class CredentialBlocks {
 				providerKey,
 				blockScope: blockScope ?? "",
 				blockedUntilMs: nextBlockedUntil,
+				...(predictedScope ? { updatedAtMs: nowMs } : {}),
 			});
 		} catch (err) {
 			logger.debug("Failed to persist credential block", {
