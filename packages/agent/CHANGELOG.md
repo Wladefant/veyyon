@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-28
+
 ### Added
 
 - Resolve a model-specific compaction threshold before the profile threshold.

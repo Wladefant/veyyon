@@ -678,7 +678,11 @@ function appendBoundedTail(existing: string, addition: string, maxChars: number)
 }
 
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
-export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard, maxChars = MAX_RECORD_CHARS): unknown {
+export function sanitizeProducerJson(
+	value: unknown,
+	guard: Pick<ProducerOutputGuard, "sanitize">,
+	maxChars = MAX_RECORD_CHARS,
+): unknown {
 	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
 		cycles: "mark",
 		transformValue: (nested, key) => {

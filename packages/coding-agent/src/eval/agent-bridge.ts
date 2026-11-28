@@ -318,7 +318,6 @@ function plainIsolationSummary(summary: string): string {
 
 function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undefined, progress: AgentProgress): void {
 	if (!emitStatus) return;
-	const preview = (progress.assignment ?? progress.task ?? "").split("\n")[0]?.slice(0, 120);
 	emitStatus({
 		op: "agent",
 		id: progress.id,
@@ -327,7 +326,7 @@ function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undef
 		lastIntent: progress.lastIntent,
 		currentTool: progress.currentTool,
 		currentToolArgs: progress.currentToolArgs,
-		taskPreview: preview || undefined,
+		taskPreview: progress.assignment ?? progress.task,
 		toolCount: progress.toolCount,
 		tokens: progress.tokens,
 		contextTokens: progress.contextTokens,

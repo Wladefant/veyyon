@@ -283,6 +283,41 @@ for (const target of changedSet) {
   addPathForm(noExt, target);
 }
 const refReverse = new Map();
+const tracked = new Set(allTracked);
+
+function pathJoinBindings(ast) {
+  const namespaces = new Set();
+  const functions = new Set();
+  for (const statement of ast.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) ||
+        !['node:path', 'path'].includes(statement.moduleSpecifier.text)) continue;
+    const clause = statement.importClause;
+    if (!clause || clause.isTypeOnly) continue;
+    if (clause.name) namespaces.add(clause.name.text);
+    const bindings = clause.namedBindings;
+    if (!bindings) continue;
+    if (ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+    else for (const element of bindings.elements) {
+      if (!element.isTypeOnly && (element.propertyName ?? element.name).text === 'join') functions.add(element.name.text);
+    }
+  }
+  return { namespaces, functions };
+}
+
+function splitFixturePath(node, consumer, joins) {
+  const [dir] = node.arguments;
+  if (node.arguments.length < 3 || !ts.isPropertyAccessExpression(dir) || dir.name.text !== 'dir' ||
+      !ts.isMetaProperty(dir.expression) || dir.expression.keywordToken !== ts.SyntaxKind.ImportKeyword) return null;
+  const call = node.expression;
+  const isJoin = ts.isIdentifier(call) ? joins.functions.has(call.text) :
+    ts.isPropertyAccessExpression(call) && call.name.text === 'join' &&
+    ts.isIdentifier(call.expression) && joins.namespaces.has(call.expression.text);
+  if (!isJoin) return null;
+  const parts = node.arguments.slice(1);
+  if (!parts.every(part => ts.isStringLiteral(part) || ts.isNoSubstitutionTemplateLiteral(part))) return null;
+  return path.posix.join(path.posix.dirname(consumer), ...parts.map(part => part.text));
+}
+
 const quotedPath = /(['"])([^'"\r\n]{1,512})\1/g;
 for (const consumer of allTracked) {
   if (!fs.existsSync(consumer) || fs.statSync(consumer).size > 2_000_000) continue;
@@ -292,11 +327,17 @@ for (const consumer of allTracked) {
   const moduleRanges = [];
   if (jsTsRx.test(consumer)) {
     const { ast } = astFor(consumer);
+    const joins = pathJoinBindings(ast);
     for (const statement of ast.statements) {
       if ((ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) && statement.moduleSpecifier) moduleRanges.push([statement.moduleSpecifier.getStart(ast), statement.moduleSpecifier.getEnd()]);
     }
     const visit = node => {
       if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literalsFound.push({ value: node.text, start: node.getStart(ast) });
+      // Follow only exact tracked paths, not basename matches across packages.
+      if (ts.isCallExpression(node) && (joins.namespaces.size || joins.functions.size)) {
+        const target = splitFixturePath(node, consumer, joins);
+        if (target && target !== consumer && (tracked.has(target) || deletedChanged.has(target))) edge(refReverse, target, consumer);
+      }
       if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
         const arg = node.arguments[0];
         if (arg && ts.isStringLiteral(arg)) moduleRanges.push([arg.getStart(ast), arg.getEnd()]);

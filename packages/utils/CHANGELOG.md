@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-11-28
+
 ### Added
 
 - Allow async file locks to prepare the owner record before entering a caller's publication guard ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).

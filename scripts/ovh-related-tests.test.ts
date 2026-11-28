@@ -128,6 +128,10 @@ describe("OVH related-test selector", () => {
 				"packages/pkg-a/test/doc-reference-consumer.test.ts":
 					'import { paths } from "../src/doc-references.js";\nexport const references = paths;\n',
 				"packages/pkg-a/package.json": JSON.stringify({ name: "@fixture/pkg-a", version: "1.0.0" }),
+				"packages/pkg-a/test/fixtures/server.ts": "export const fixture = true;\n",
+				"packages/pkg-b/test/fixtures/server.ts": "export const fixture = false;\n",
+				"packages/pkg-a/test/server-consumer.test.ts":
+					'import * as path from "node:path";\nexport const fixture = path.join(import.meta.dir, "fixtures", "server.ts");\n',
 				"packages/pkg-a/src/mod-a.ts": 'export const a = "alpha";\n',
 				"packages/pkg-a/src/mod-b.ts": 'console.log("barrel side effect");\nexport const b = "beta";\n',
 				"packages/pkg-a/src/types.ts": "export type SharedType = { value: string };\n",
@@ -164,6 +168,16 @@ describe("OVH related-test selector", () => {
 		it("keeps ordinary changelog readers when a sibling only looks like a package manifest", () => {
 			const output = runSelector(["docs/CHANGELOG.md"], { cwd: fixtureDir });
 			expect(parseSelectedTests(output)).toEqual(["scripts/docs-history.test.ts"]);
+		});
+
+		it("selects the consumer of a split fixture path relative to its test file", () => {
+			const output = runSelector(["packages/pkg-a/test/fixtures/server.ts"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual(["packages/pkg-a/test/server-consumer.test.ts"]);
+		});
+
+		it("does not select the consumer for an equally named fixture in another package", () => {
+			const output = runSelector(["packages/pkg-b/test/fixtures/server.ts"], { cwd: fixtureDir });
+			expect(parseSelectedTests(output)).toEqual([]);
 		});
 
 		it("retains consumer when importing a value re-exported by a barrel from changed module", () => {
