@@ -735,14 +735,16 @@ export async function prepareReleaseTree(version: string, runChecks = true): Pro
 	console.log("  Updated CHANGELOG.md (repo root)\n");
 
 	if (runChecks) {
-		console.log("Running checks...");
-		await $`bun run ${releasePreflightTask(process.platform, isCI())}`;
+		const task = releasePreflightTask(process.platform, isCI());
+		if (task === "check:ts") console.log("Leaving Rust checks to release CI on Windows.");
+		console.log(`Running ${task}...`);
+		await $`bun run ${task}`;
 		console.log();
 	}
 }
 
-export function releasePreflightTask(_platform: NodeJS.Platform, _inCI: boolean): "check" | "check:ts" {
-	return "check";
+export function releasePreflightTask(platform: NodeJS.Platform, inCI: boolean): "check" | "check:ts" {
+	return platform === "win32" && !inCI ? "check:ts" : "check";
 }
 
 /**

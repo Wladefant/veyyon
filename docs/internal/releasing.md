@@ -110,9 +110,11 @@ still a commit `main` tested.
    Regenerate the repo-root `CHANGELOG.md` from every package changelog. Then
    require the version's own section to exist and no package to still hold
    bullets under `## [Unreleased]`.
-5. **Check.** Run `bun run check`, then require every version authority — the
-   public manifests, the root catalog, both lockfiles, the Cargo workspace and
-   the native sentinel — to agree on one version tuple.
+5. **Check.** Run `bun run check`. Outside CI on Windows, run `bun run check:ts`
+   and leave Rust checks to the release CI gate because workspace `cargo fmt`
+   can exceed the Windows command-line limit. Then require the public manifests,
+   root catalog, both lockfiles, Cargo workspace and native sentinel to agree
+   on one version tuple.
 6. **Commit.** Stage exactly the paths the preparation touched and commit
    `chore: bump version to vX.Y.Z`. The subject is a contract, not a message:
    `checks.yml` keys its changelog exemption off the `chore: bump version to `
@@ -312,7 +314,7 @@ dirty tree, the wrong branch, a version that already exists as a tag, or
 an undocumented package. Fix it and run it again — the tree is untouched.
 
 If it failed part-way — an unreconcilable natives sentinel, a changelog the
-prepared-release assertion rejects, or `bun run check` going red — it had already
+prepared-release assertion rejects, or a local check fails — it had already
 rewritten every package version, and by the later failures both lockfiles and
 every changelog as well. It rolls those back before exiting and reports how many
 paths it restored, so the tree is clean and the retry is not blocked by its own

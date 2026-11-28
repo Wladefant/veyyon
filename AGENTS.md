@@ -469,7 +469,7 @@ Gate scripts (defined in the root `package.json`; run the narrowest one that cov
 
 |Command|What it does|
 |---|---|
-|`bun run check`|Type check TS **and** Rust in parallel (`check:ts` + `check:rs`). The release preflight runs this.|
+|`bun run check`|Type check TS **and** Rust in parallel (`check:ts` + `check:rs`). Release preflight runs this except on Windows outside CI, where it runs `check:ts` and leaves Rust checks to release CI.|
 |`bun run check:rs` / `lint:rs`|`cargo fmt --check` and `cargo clippy --workspace --all-targets -D warnings`. `--all-targets` makes these compile tests and benches too; without it a test file that does not build passes both gates and fails later in `test:rs`.|
 |`bun run check:ts`|Workspace `tsc --noEmit` across every package. Runs no Biome despite the name.|
 |`bun run check:tools`|`biome check`: formatting, import order, and error-level lint rules. CI gate.|
