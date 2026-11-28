@@ -202,12 +202,10 @@ describe("task launch grants", () => {
 			const reply = children[0]?.messages.find(
 				message => message.role === "toolResult" && message.toolName === "eval",
 			);
-			if (!reply) throw new Error("The builder did not run the eval probe");
+			if (reply?.role !== "toolResult") throw new Error("The builder did not run the eval probe");
 			expect(reply.isError).not.toBe(true);
 			const output = reply.content.find(block => block.type === "text");
-			expect(output?.text).toContain(
-				`[${JSON.stringify(receipt.agentId)}, ${JSON.stringify(receipt.sessionFile)}]`,
-			);
+			expect(output?.text).toContain(`[${JSON.stringify(receipt.agentId)}, ${JSON.stringify(receipt.sessionFile)}]`);
 		} finally {
 			for (const child of children) await child.dispose();
 			await parent.dispose();
